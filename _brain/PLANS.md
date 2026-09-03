@@ -8,4 +8,4 @@ FBP003 | DEFERRED | Edge-gated "no viable output" fallback (design doc §7) — 
 FBP004 | DEFERRED | Buffer drainPolicy on-idle variant (design doc §4.2) — deferred on top of continuous-only v1 drain behavior
 FBP005 | DEFERRED | Isometric mode (design doc §3, roadmap Milestone 6, stretch) — camera projection toggle, mode-specific skin assets, depth-sorted draw order. App ships without it if not reached.
 FBP006 | DONE | USER_GUIDE.md written — see _brain/USER_GUIDE.md (SES002)
-FBP007 | DEFERRED | Canva-style hosted web build — separate future variant, reuses src/core + src/floor + src/skin unchanged, only swaps the platform adapter for browser storage instead of Tauri SQL plugin. Not started; desktop (Tauri) build is primary for now.
+FBP007 | DEFERRED | FluxBoard Web — Canva-style hosted web build, separate future variant, reuses src/core + src/floor + src/skin unchanged, only swaps the platform adapter for browser storage instead of Tauri SQL plugin. Not started; FluxBoard PC (Tauri) is primary for now.

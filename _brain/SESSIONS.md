@@ -32,3 +32,11 @@ Bugs found       : none.
 Fixes applied    : none.
 Lessons recorded : Two consecutive supersessions in one day (SES003 then SES004) on the same decision — worth deciding app-shell distribution strategy before more build work happens on top of it, not mid-stream.
 Carried forward  : FBT001 (Milestone 1 core loop) still unaffected either way — it's pure src/core, no shell involved.
+
+## SES005 — 2026-09-03 — Named the two variants: FluxBoard PC / FluxBoard Web
+Progress made    : Falcon named the two build variants — **FluxBoard PC** (the Tauri desktop build, primary/current) and **FluxBoard Web** (the Canva-style hosted web build, FBP007, future). FLUXBOARD.md PROJECT section and DECISIONS (FBD009 rev.2), PLANS.md (FBP007) updated to use these names.
+Items moved      : none (naming only).
+Bugs found       : none.
+Fixes applied    : none.
+Lessons recorded : n/a.
+Carried forward  : FBT001 (Milestone 1) still next — applies to both variants equally since it's src/core only.

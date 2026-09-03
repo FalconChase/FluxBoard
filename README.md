@@ -20,7 +20,7 @@ doc §2 for the full ownership table):
   geometry, item positions. No style.
 - **`src/skin/`** — Skin layer: icons, colors, textures, z-order. No
   simulation state.
-- **`src/app/`** — Tauri + React shell tying the above together, desktop/single-user. Tauri-specific calls stay isolated behind one adapter so a future Canva-style web variant can swap it out later without touching core/floor/skin (see `_brain/FLUXBOARD.md` FBD009 rev.2).
+- **`src/app/`** — Tauri + React shell for **FluxBoard PC** (desktop, single-user, current build). Tauri-specific calls stay isolated behind one adapter so a future **FluxBoard Web** variant can swap it out later without touching core/floor/skin (see `_brain/FLUXBOARD.md` FBD009 rev.2).
 
 ## Status
 

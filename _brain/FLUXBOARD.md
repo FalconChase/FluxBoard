@@ -7,6 +7,7 @@ NAME        : FluxBoard
 DESCRIPTION : Free-canvas, infinite node-graph app — nodes are functional units connected by paths that carry items between them. Inspired by PCB layer construction and factory-building games (Factorio, Shapez.io). Strict three-layer separation: Logic / Floor / Skin.
 ONBOARDED   : 2026-09-03 (brain system adopted at project start — design phase complete, pre-code)
 NORTH STAR  : Milestone 1 (headless core loop) first — GraphModel + SimEngine proving item conservation/no-deadlock with one source, one sink, before any rendering work.
+VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current build) and **FluxBoard Web** (Canva-style hosted web build, FBP007, future/deferred) — both share src/core+floor+skin unchanged, differ only in the src/app platform adapter.
 
 ---
 ## STACK
@@ -63,7 +64,7 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | FBD007 | LOCKED | Counter is a badge overlaid on the icon (not exclusive), genuinely unbounded — no digit cap (§4.5) |
 | FBD008 | LOCKED | No backend/Supabase — local-first, zero recurring hosting cost. Revisit only if cloud sync/collab is scoped in. |
 | FBD009 | SUPERSEDED by rev.2 | Was: plain browser web app, no Tauri, for now. |
-| FBD009 rev.2 | LOCKED | Tauri desktop app is the primary build — single-user, Falcon's own machine, free to use Tauri APIs (SQL plugin, native dialogs) normally. A Canva-style hosted web version is a separate future variant (FBP007), not a portability constraint on this build — kept cheap only by isolating Tauri-specific calls behind one adapter in src/app (never scattered through UI/core code), since src/core + src/floor + src/skin are already 100% platform-agnostic TypeScript either way. |
+| FBD009 rev.2 | LOCKED | Tauri desktop app (**FluxBoard PC**) is the primary build — single-user, Falcon's own machine, free to use Tauri APIs (SQL plugin, native dialogs) normally. A Canva-style hosted web version (**FluxBoard Web**, FBP007) is a separate future variant, not a portability constraint on this build — kept cheap only by isolating Tauri-specific calls behind one adapter in src/app (never scattered through UI/core code), since src/core + src/floor + src/skin are already 100% platform-agnostic TypeScript either way. |
 | FBD010 | SUPERSEDED by rev.2 | Was: no SQL, browser-native storage only. |
 | FBD010 rev.2 | LOCKED | Local data: SQLite via Tauri SQL plugin (or plain JSON) — fine to decide freely, since this is the desktop-only build. A future web variant would use its own browser-storage adapter instead, not force this build's choice. |
 
@@ -80,4 +81,4 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 83 / 120 — Budget remaining: 37
+# Lines: 84 / 120 — Budget remaining: 36
