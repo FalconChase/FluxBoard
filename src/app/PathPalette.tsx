@@ -16,13 +16,21 @@ interface PathPaletteProps {
    * chrome). */
   armedStyle: EdgeStyle | null;
   onArm: (style: EdgeStyle | null) => void;
+
+  /** Planning sketches (Falcon, 2026-09-03): pure visual scratch
+   * lines with no simulation meaning, not tied to any node — lets a
+   * user rough out where paths will go before the actual nodes
+   * exist. Mutually exclusive with armedStyle/armedKind (App.tsx's
+   * handleArmSketch clears both). */
+  sketchArmed: boolean;
+  onArmSketch: (armed: boolean) => void;
 }
 
 /** Left-panel PATHS tab: a flat list of the 3 edge styles that exist
  * today. 'pipe'/'wire' from Falcon's future object-type → path-style
  * taxonomy aren't real EdgeStyle values yet (see claude/build-log.md)
  * — this only offers what pathSkin.ts actually renders. */
-export function PathPalette({ armedStyle, onArm }: PathPaletteProps) {
+export function PathPalette({ armedStyle, onArm, sketchArmed, onArmSketch }: PathPaletteProps) {
   return (
     <div
       style={{
@@ -60,6 +68,28 @@ export function PathPalette({ armedStyle, onArm }: PathPaletteProps) {
       ))}
       <div style={{ fontSize: 11, color: '#8a8a93', padding: '4px', lineHeight: 1.45 }}>
         Click a style, then click an existing path on the canvas to apply it.
+      </div>
+      <div style={{ borderTop: '1px solid #e5e4e7', margin: '4px 0' }} />
+      <button
+        type="button"
+        onClick={() => onArmSketch(!sketchArmed)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 6px',
+          borderRadius: 8,
+          border: sketchArmed ? '2px solid #7c3aed' : '1px solid #e5e4e7',
+          background: sketchArmed ? '#f2ecfd' : '#ffffff',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ fontSize: 16, lineHeight: 1 }}>✏️</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#2c2c33' }}>Sketch a path</span>
+      </button>
+      <div style={{ fontSize: 11, color: '#8a8a93', padding: '4px', lineHeight: 1.45 }}>
+        Planning only — a dashed guide line, no simulation meaning. Drag anywhere on the canvas.
       </div>
     </div>
   );

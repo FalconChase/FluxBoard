@@ -6,12 +6,14 @@ import type { FloorLayout } from '../floor/floorLayout';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
 import type { Selection } from './selection';
+import type { SketchLayer } from './sketchLayer';
 
 interface PropertiesPanelProps {
   selection: Selection | null;
   graph: GraphModel;
   skinConfig: SkinConfig;
   floorLayout: FloorLayout;
+  sketchLayer: SketchLayer;
   /** Deletes whatever is currently selected (node — cascading to its
    * edges — or edge). App.tsx owns the actual GraphModel/FloorLayout/
    * SkinConfig cleanup and the Delete/Backspace shortcut; this panel
@@ -66,6 +68,7 @@ export function PropertiesPanel({
   graph,
   skinConfig,
   floorLayout,
+  sketchLayer,
   onDelete,
   gridSpacing,
   onGridSpacingChange,
@@ -114,6 +117,9 @@ export function PropertiesPanel({
         )}
         {selection?.type === 'edge' && (
           <EdgeProperties edgeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
+        )}
+        {selection?.type === 'sketch' && (
+          <SketchProperties sketchId={selection.id} sketchLayer={sketchLayer} onDelete={onDelete} />
         )}
       </div>
 
@@ -673,6 +679,41 @@ function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
         />
       </div>
     </>
+  );
+}
+
+/** Sketches are pure planning scratch, not GraphModel data (see
+ * sketchLayer.ts) — no logic/skin fields to edit, just a note and a
+ * delete button. */
+function SketchProperties({
+  sketchId,
+  sketchLayer,
+  onDelete,
+}: {
+  sketchId: string;
+  sketchLayer: SketchLayer;
+  onDelete: () => void;
+}) {
+  const sketch = sketchLayer.get(sketchId);
+  if (!sketch) return <p style={{ fontSize: 12, color: '#c0392b' }}>Sketch no longer exists.</p>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Sketch</div>
+      <p style={{ fontSize: 12, color: '#8a8a93', lineHeight: 1.5 }}>
+        A planning guide only — no simulation meaning, not connected to any node. Replace it with a real path once
+        the nodes it connects exist.
+      </p>
+
+      <div style={sectionTitleStyle}>Danger zone</div>
+      <button
+        type="button"
+        onClick={onDelete}
+        style={{ ...smallButtonStyle, width: '100%', color: '#c0392b', borderColor: '#e3b0aa' }}
+      >
+        Delete sketch
+      </button>
+    </div>
   );
 }
 

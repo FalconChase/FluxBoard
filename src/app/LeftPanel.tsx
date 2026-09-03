@@ -15,6 +15,9 @@ interface LeftPanelProps {
 
   armedEdgeStyle: EdgeStyle | null;
   onArmEdgeStyle: (style: EdgeStyle | null) => void;
+
+  sketchArmed: boolean;
+  onArmSketch: (armed: boolean) => void;
 }
 
 const TABS: { tab: LeftPanelTab; label: string }[] = [
@@ -40,6 +43,8 @@ export function LeftPanel({
   onArmKind,
   armedEdgeStyle,
   onArmEdgeStyle,
+  sketchArmed,
+  onArmSketch,
 }: LeftPanelProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%' }}>
@@ -62,7 +67,14 @@ export function LeftPanel({
           this column container, that has to be explicit instead. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         {activeTab === 'nodes' && <NodePalette armedKind={armedKind} onArm={onArmKind} />}
-        {activeTab === 'paths' && <PathPalette armedStyle={armedEdgeStyle} onArm={onArmEdgeStyle} />}
+        {activeTab === 'paths' && (
+          <PathPalette
+            armedStyle={armedEdgeStyle}
+            onArm={onArmEdgeStyle}
+            sketchArmed={sketchArmed}
+            onArmSketch={onArmSketch}
+          />
+        )}
         {activeTab === 'objects' && <ObjectsComingSoon />}
       </div>
     </div>

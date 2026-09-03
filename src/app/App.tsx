@@ -10,6 +10,7 @@ import type { EdgeStyle } from '../skin/pathSkin';
 import { LeftPanel, type LeftPanelTab } from './LeftPanel';
 import { PropertiesPanel } from './PropertiesPanel';
 import type { Selection } from './selection';
+import { SketchLayer } from './sketchLayer';
 
 /**
  * Milestone 4 demo graph (design doc §9 step 4): source -> distributor
@@ -145,6 +146,7 @@ export function App() {
   const graph = useMemo(() => buildDemoGraph(), []);
   const floorLayout = useMemo(() => buildDemoFloorLayout(), []);
   const skinConfig = useMemo(() => buildDemoSkinConfig(), []);
+  const sketchLayer = useMemo(() => new SketchLayer(), []);
 
   // Milestone 5 (minimal-chrome scope, FBP008 resolved): selection +
   // node placement + body-to-body wiring. graph/floorLayout/skinConfig
@@ -167,6 +169,11 @@ export function App() {
   // inside FluxCanvas's own effect.
   const [leftTab, setLeftTab] = useState<LeftPanelTab>('nodes');
   const [armedEdgeStyle, setArmedEdgeStyle] = useState<EdgeStyle | null>(null);
+  // Planning sketches (Falcon, 2026-09-03): pure visual scratch lines,
+  // no simulation meaning, not tied to any node — sketchArmed mirrors
+  // placementKind/armedEdgeStyle's arm-then-act flow but the "act" is
+  // just a drag anywhere on the canvas (see FluxCanvas's onCreateSketch).
+  const [sketchArmed, setSketchArmed] = useState(false);
   const [gridSpacing, setGridSpacing] = useState(64);
   const [tickIntervalMs, setTickIntervalMs] = useState(400);
   const [isRunning, setIsRunning] = useState(true);
@@ -216,6 +223,8 @@ export function App() {
         floorLayout.removeEdgeCurve(edgeId);
         skinConfig.removeEdge(edgeId);
       }
+    } else if (selection.type === 'sketch') {
+      sketchLayer.remove(selection.id);
     } else {
       graph.removeEdge(selection.id);
       floorLayout.removeEdgeCurve(selection.id);
@@ -275,17 +284,32 @@ export function App() {
   // decide which one wins.
   function handleArmNodeKind(kind: NodeKind | null): void {
     setArmedEdgeStyle(null);
+    setSketchArmed(false);
     setPlacementKind(kind);
   }
 
   function handleArmEdgeStyle(style: EdgeStyle | null): void {
     setPlacementKind(null);
+    setSketchArmed(false);
     setArmedEdgeStyle(style);
+  }
+
+  function handleArmSketch(armed: boolean): void {
+    setPlacementKind(null);
+    setArmedEdgeStyle(null);
+    setSketchArmed(armed);
   }
 
   function handleApplyEdgeStyle(edgeId: EdgeId, style: EdgeStyle): void {
     skinConfig.setEdgeSkin(edgeId, { style });
     setArmedEdgeStyle(null);
+  }
+
+  function handleCreateSketch(from: Point, to: Point): void {
+    const id = `sketch-${nextIdRef.current++}`;
+    sketchLayer.add({ id, from, to });
+    setSelection({ type: 'sketch', id });
+    setSketchArmed(false);
   }
 
   function handlePlayPauseClick(): void {
@@ -296,11 +320,15 @@ export function App() {
     ? `Click the canvas to place a ${placementKind}.`
     : armedEdgeStyle
       ? `Click an existing path to apply the ${armedEdgeStyle} style.`
-      : selection?.type === 'node'
-        ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
-        : selection?.type === 'edge'
-          ? 'Path selected — edit it in the properties panel, Delete to remove.'
-          : 'Click a node or path to select it, choose something from the left panel to add, or Shift+drag from one node to another to connect them.';
+      : sketchArmed
+        ? 'Drag anywhere on the canvas to sketch a planning path (no simulation meaning).'
+        : selection?.type === 'node'
+          ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
+          : selection?.type === 'edge'
+            ? 'Path selected — edit it in the properties panel, Delete to remove.'
+            : selection?.type === 'sketch'
+              ? 'Sketch selected — Delete to remove. Planning guide only, no simulation meaning.'
+              : 'Click a node or path to select it, choose something from the left panel to add, or Shift+drag from one node to another to connect them.';
 
   return (
     <div
@@ -355,6 +383,8 @@ export function App() {
           onArmKind={handleArmNodeKind}
           armedEdgeStyle={armedEdgeStyle}
           onArmEdgeStyle={handleArmEdgeStyle}
+          sketchArmed={sketchArmed}
+          onArmSketch={handleArmSketch}
         />
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
           <FluxCanvas
@@ -373,6 +403,9 @@ export function App() {
             armedEdgeStyle={armedEdgeStyle}
             onApplyEdgeStyle={handleApplyEdgeStyle}
             onRunningChange={setIsRunning}
+            sketchLayer={sketchLayer}
+            sketchArmed={sketchArmed}
+            onCreateSketch={handleCreateSketch}
           />
         </div>
         <PropertiesPanel
@@ -380,6 +413,7 @@ export function App() {
           graph={graph}
           skinConfig={skinConfig}
           floorLayout={floorLayout}
+          sketchLayer={sketchLayer}
           onDelete={handleDeleteSelection}
           gridSpacing={gridSpacing}
           onGridSpacingChange={setGridSpacing}

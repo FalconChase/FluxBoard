@@ -19,6 +19,7 @@ import {
 } from '../skin/pathSkin';
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import type { Selection } from './selection';
+import { SketchLayer } from './sketchLayer';
 
 interface FluxCanvasProps {
   graph: GraphModel;
@@ -60,6 +61,19 @@ interface FluxCanvasProps {
    * FluxCanvasHandle (an imperative ref), since the driver instance is
    * only created inside this component's own effect. */
   onRunningChange?: (isRunning: boolean) => void;
+
+  /** Planning sketches (Falcon, 2026-09-03: "draw paths without
+   * really needing node... give freedom to users to plan the paths")
+   * — pure visual scratch lines, not real GraphModel edges. Mutated
+   * directly like graph/floorLayout/skinConfig, so adding one doesn't
+   * need to re-run this component's setup effect. */
+  sketchLayer: SketchLayer;
+  /** When true, the next drag ANYWHERE on the canvas (node or empty
+   * space, doesn't matter — a sketch has no real endpoints) draws a
+   * new sketch instead of doing anything else (armed by PathPalette,
+   * mirrors placementKind/armedEdgeStyle's arm-then-act flow). */
+  sketchArmed: boolean;
+  onCreateSketch: (from: Point, to: Point) => void;
 }
 
 /** Imperative handle (App.tsx's Play/Pause button lives in the bottom
@@ -102,6 +116,9 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     armedEdgeStyle,
     onApplyEdgeStyle,
     onRunningChange,
+    sketchLayer,
+    sketchArmed,
+    onCreateSketch,
   },
   ref,
 ) {
@@ -132,6 +149,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   onApplyEdgeStyleRef.current = onApplyEdgeStyle;
   const onRunningChangeRef = useRef(onRunningChange);
   onRunningChangeRef.current = onRunningChange;
+  const sketchArmedRef = useRef(sketchArmed);
+  sketchArmedRef.current = sketchArmed;
+  const onCreateSketchRef = useRef(onCreateSketch);
+  onCreateSketchRef.current = onCreateSketch;
 
   function toggleRunning(): void {
     const driver = driverRef.current;
@@ -248,6 +269,24 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       return undefined;
     }
 
+    /** Closest-point-on-segment distance test — sketches are plain
+     * straight lines (no bezier machinery needed, unlike hitTestEdge
+     * above). */
+    function hitTestSketch(worldPoint: Point): string | undefined {
+      const toleranceWorld = EDGE_HIT_TOLERANCE_PX / camera.zoom;
+      for (const sketch of sketchLayer.getAll()) {
+        const dx = sketch.to.x - sketch.from.x;
+        const dy = sketch.to.y - sketch.from.y;
+        const lengthSq = dx * dx + dy * dy;
+        let t = lengthSq === 0 ? 0 : ((worldPoint.x - sketch.from.x) * dx + (worldPoint.y - sketch.from.y) * dy) / lengthSq;
+        t = Math.max(0, Math.min(1, t));
+        const closest = { x: sketch.from.x + t * dx, y: sketch.from.y + t * dy };
+        const dist = Math.hypot(closest.x - worldPoint.x, closest.y - worldPoint.y);
+        if (dist <= toleranceWorld) return sketch.id;
+      }
+      return undefined;
+    }
+
     function resize(): void {
       const parent = canvas!.parentElement;
       const width = parent ? parent.clientWidth : window.innerWidth;
@@ -272,7 +311,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       lastFrameMs = nowMs;
       const elapsedMs = animElapsedMs;
 
-      canvas!.style.cursor = placementKindRef.current || armedEdgeStyleRef.current
+      canvas!.style.cursor = placementKindRef.current || armedEdgeStyleRef.current || sketchArmedRef.current
         ? 'crosshair'
         : pointerMode === 'move'
           ? 'grabbing'
@@ -291,6 +330,37 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       // visible world rect (design doc §3 — virtualization).
       const bounds = camera.getVisibleWorldBounds(viewport, NODE_RADIUS * 4);
       const sel = selectionRef.current;
+
+      // --- Planning sketches (Falcon, 2026-09-03) — drawn first, so
+      // real nodes/paths always read on top of a draft guide. Purely
+      // visual: dashed, muted, no simulation meaning at all. ---
+      for (const sketch of sketchLayer.getAll()) {
+        const a = camera.worldToScreen(sketch.from, viewport);
+        const b = camera.worldToScreen(sketch.to, viewport);
+        const isSelected = sel?.type === 'sketch' && sel.id === sketch.id;
+        ctx!.save();
+        ctx!.setLineDash([7, 5]);
+        ctx!.strokeStyle = isSelected ? 'rgba(124, 58, 237, 0.9)' : 'rgba(124, 58, 237, 0.45)';
+        ctx!.lineWidth = isSelected ? Math.max(2, 3 * camera.zoom) : Math.max(1.5, 2 * camera.zoom);
+        ctx!.beginPath();
+        ctx!.moveTo(a.x, a.y);
+        ctx!.lineTo(b.x, b.y);
+        ctx!.stroke();
+        ctx!.restore();
+      }
+      if (pointerMode === 'sketch-draw' && sketchDrawOrigin && sketchDrawCurrent) {
+        const a = camera.worldToScreen(sketchDrawOrigin, viewport);
+        const b = camera.worldToScreen(sketchDrawCurrent, viewport);
+        ctx!.save();
+        ctx!.setLineDash([7, 5]);
+        ctx!.strokeStyle = 'rgba(124, 58, 237, 0.7)';
+        ctx!.lineWidth = Math.max(1.5, 2 * camera.zoom);
+        ctx!.beginPath();
+        ctx!.moveTo(a.x, a.y);
+        ctx!.lineTo(b.x, b.y);
+        ctx!.stroke();
+        ctx!.restore();
+      }
 
       // --- Three-pass path render stack (design doc §5.2) ---
       const edges = graph.getAllEdges();
@@ -384,14 +454,27 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     // (a no-op if it's locked); Shift+drag instead drags out a new
     // edge, same as Milestone 5. From empty space, a drag pans the
     // camera.
-    type PointerMode = 'idle' | 'pan' | 'node-down' | 'edge-down' | 'wire' | 'move' | 'placement' | 'apply-style';
+    type PointerMode =
+      | 'idle'
+      | 'pan'
+      | 'node-down'
+      | 'edge-down'
+      | 'sketch-down'
+      | 'wire'
+      | 'move'
+      | 'placement'
+      | 'apply-style'
+      | 'sketch-draw';
     let pointerMode: PointerMode = 'idle';
     let dragOriginScreen: { x: number; y: number } | null = null;
     let dragLastScreen: { x: number; y: number } | null = null;
     let pendingNodeHitId: NodeId | undefined;
     let pendingEdgeHitId: string | undefined;
+    let pendingSketchHitId: string | undefined;
     let wireFromNodeId: NodeId | undefined;
     let wireCurrentWorld: Point | undefined;
+    let sketchDrawOrigin: Point | undefined;
+    let sketchDrawCurrent: Point | undefined;
     // Latched at pointerdown (not re-read live) so a gesture commits
     // to one interpretation for its whole drag, rather than switching
     // mid-drag if a modifier key state changes.
@@ -419,6 +502,13 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         return;
       }
 
+      if (sketchArmedRef.current) {
+        pointerMode = 'sketch-draw';
+        sketchDrawOrigin = worldPoint;
+        sketchDrawCurrent = worldPoint;
+        return;
+      }
+
       const nodeId = hitTestNode(worldPoint);
       if (nodeId) {
         pointerMode = 'node-down';
@@ -434,6 +524,13 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       if (edgeId) {
         pointerMode = 'edge-down';
         pendingEdgeHitId = edgeId;
+        return;
+      }
+
+      const sketchId = hitTestSketch(worldPoint);
+      if (sketchId) {
+        pointerMode = 'sketch-down';
+        pendingSketchHitId = sketchId;
         return;
       }
 
@@ -468,6 +565,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         wireCurrentWorld = toWorld(e.clientX, e.clientY);
       }
 
+      if (pointerMode === 'sketch-draw') {
+        sketchDrawCurrent = toWorld(e.clientX, e.clientY);
+      }
+
       if (pointerMode === 'move' && pendingNodeHitId && moveGrabOffset) {
         const currentWorld = toWorld(e.clientX, e.clientY);
         const rawPos = { x: currentWorld.x - moveGrabOffset.x, y: currentWorld.y - moveGrabOffset.y };
@@ -499,6 +600,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         if (targetNodeId && targetNodeId !== wireFromNodeId) {
           onCreateEdgeRef.current(wireFromNodeId, targetNodeId);
         }
+      } else if (pointerMode === 'sketch-draw' && sketchDrawOrigin) {
+        // A real drag only — a plain click while armed draws nothing,
+        // same spirit as requiring an actual gesture for wiring.
+        if (!isClick) {
+          onCreateSketchRef.current(sketchDrawOrigin, worldPoint);
+        }
+      } else if (pointerMode === 'sketch-down' && isClick && pendingSketchHitId) {
+        onSelectRef.current({ type: 'sketch', id: pendingSketchHitId });
       } else if (pointerMode === 'move' && pendingNodeHitId) {
         // The drag itself already committed the position on every
         // pointermove — this just leaves the moved node selected, so
@@ -517,8 +626,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       dragLastScreen = null;
       pendingNodeHitId = undefined;
       pendingEdgeHitId = undefined;
+      pendingSketchHitId = undefined;
       wireFromNodeId = undefined;
       wireCurrentWorld = undefined;
+      sketchDrawOrigin = undefined;
+      sketchDrawCurrent = undefined;
       wireGesture = false;
       moveLocked = false;
       moveGrabOffset = null;
