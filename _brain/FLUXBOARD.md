@@ -72,6 +72,7 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | FIXES.md | /FLUXBOARD/_brain/FIXES.md |
 | PLANS.md | /FLUXBOARD/_brain/PLANS.md |
 | TEMPORARIES.md | /FLUXBOARD/_brain/TEMPORARIES.md |
+| USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 77 / 120 — Budget remaining: 43
+# Lines: 78 / 120 — Budget remaining: 42
