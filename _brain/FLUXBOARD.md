@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestone 1 (headless core loop) DONE: `GraphModel` + `SimEngine` implemented and passing (6 vitest cases incl. long-run item conservation, no-deadlock, edge-gate hold/resume) plus a console harness (`npm run sim:harness`, 200-tick conservation report). Milestone 2 (flat canvas, one path) not yet started.
+Milestone 1 (headless core loop) DONE. Milestone 2 (flat canvas, one path) DONE: `src/floor/{bezier,camera,floorLayout,interpolatedSim}.ts` + `src/app/` (Vite+React dev shell — `FluxCanvas.tsx`, `App.tsx`, `main.tsx`) implemented, 20 vitest cases total passing, `npm run build`/`typecheck` clean, visually verified via headless-Chromium screenshot (staged to a cloud session since this device VM's network blocks the Playwright browser download). `npm run dev` now shows a real infinite pan/zoom canvas with an item gliding source->sink, not a placeholder. Tauri wrapping (src-tauri/) not yet scaffolded — needs a Rust toolchain this bridge VM doesn't have; deferred until Falcon can verify it on the actual machine. Milestone 3 (full node registry) not yet started.
 
 ---
 ## STATE
@@ -44,13 +44,15 @@ Milestone 1 (headless core loop) DONE: `GraphModel` + `SimEngine` implemented an
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| FBT002 | HIGH | Milestone 2 — flat canvas, one path: infinite canvas (pan/zoom/culling) rendering one transparent-style path with a gliding item. Validates floor-layer geometry + camera together (§9). | — |
+| FBT003 | HIGH | Milestone 3 — full node registry: distributor, sorter, mixer, buffer/overflow node kinds against the shared onItemArrival contract, still schematic rendering only (§9). | — |
+| FBT004 | MED | Scaffold src-tauri/ (Tauri desktop wrapper, FBD009 rev.2) — needs verifying with a real Rust toolchain, which the cloud bridge VM used so far doesn't have. | Falcon has Rust available to test with |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
 |----|----------|------|---------|
 | FBT000 | — | Repo + brain scaffold: git init, remote, `src/{core,floor,skin,app}` structure, stubbed brains files, vitest placeholder test, `_brain/` adopted from PATHWORK PRO's pattern | SES001 |
 | FBT001 | — | Milestone 1 — `GraphModel` + `SimEngine` implemented (source/sink node kinds, sourceTrySpawn, sink onItemArrival), verified via vitest (item conservation, no deadlock, edge-gate hold/resume) and `scripts/simHarness.ts` console harness | SES006 |
+| FBT002 | — | Milestone 2 — flat canvas, one path: floor-layer curve/camera math + Vite/React canvas renderer (pan/zoom/culling, item gliding on transparent-style path), 20 vitest cases, visually verified | SES007 |
 
 ---
 ## DECISIONS
@@ -82,4 +84,4 @@ Milestone 1 (headless core loop) DONE: `GraphModel` + `SimEngine` implemented an
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 85 / 120 — Budget remaining: 35
+# Lines: 87 / 120 — Budget remaining: 33

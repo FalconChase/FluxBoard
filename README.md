@@ -24,19 +24,26 @@ doc §2 for the full ownership table):
 
 ## Status
 
-Milestone 1 (design doc §9) done: a headless `GraphModel` + `SimEngine`
-with one source and one sink, verified via vitest (item conservation,
-no deadlock) and a console harness (`npm run sim:harness`). No
-rendering yet — that's Milestone 2 (flat canvas, one path), next up.
+Milestones 1 and 2 (design doc §9) done. Milestone 1: a headless
+`GraphModel` + `SimEngine` with one source and one sink, verified via
+vitest and a console harness (`npm run sim:harness`). Milestone 2: an
+infinite pan/zoom canvas (`npm run dev`) rendering the item gliding
+along a curved path, floor-layer geometry (arc-length bezier + camera)
+verified via vitest and visually. Milestone 3 (full node registry)
+next. The desktop (Tauri) wrapper isn't scaffolded yet — the current
+`src/app/` runs as a plain Vite web app; wrapping it in Tauri needs a
+Rust toolchain to verify against.
 
 ## Dev setup
 
 ```
 npm install
-npm test          # run once
+npm run dev          # canvas dev server (http://localhost:5173)
+npm run build         # typecheck + production build
+npm test              # run once
 npm run test:watch
 npm run typecheck
-npm run sim:harness  # console conservation report (Milestone 1 exit criteria)
+npm run sim:harness   # console conservation report (Milestone 1 exit criteria)
 ```
 
 (The Tauri/React app shell is added in a later milestone once there's a

@@ -5,14 +5,25 @@
   "description": "Free-canvas, infinite node-graph app inspired by PCB layering and factory-building games.",
   "type": "module",
   "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "sim:harness": "tsx scripts/simHarness.ts"
   },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
   "devDependencies": {
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
     "tsx": "^4.23.13",
     "typescript": "^5.6.2",
+    "vite": "^5.4.21",
     "vitest": "^2.1.4"
   }
 }

@@ -10,4 +10,14 @@ keeps a future FluxBoard Web variant (PLANS.md FBP007) a swap-the-
 adapter job instead of a rewrite. Not required for this build to work;
 just don't paint it out of reach for free.
 
-Not started.
+## Status
+
+Milestone 2 done as a plain Vite + React web app (`npm run dev`):
+`main.tsx` (entry), `App.tsx` (demo graph + floor layout), and
+`FluxCanvas.tsx` (the Canvas2D renderer — pan/zoom camera, culling,
+schematic node markers, item tokens on a transparent-style path).
+
+The `src-tauri/` desktop wrapper is not scaffolded yet — that needs a
+real Rust toolchain to verify against (`FBT004`, parked). Nothing in
+this folder currently calls any Tauri API, so wrapping it later is a
+config/packaging step, not a rewrite.
