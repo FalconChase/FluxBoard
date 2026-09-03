@@ -40,3 +40,11 @@ Bugs found       : none.
 Fixes applied    : none.
 Lessons recorded : n/a.
 Carried forward  : FBT001 (Milestone 1) still next — applies to both variants equally since it's src/core only.
+
+## SES006 — 2026-09-03 — Milestone 1 implemented (headless core loop)
+Progress made    : Implemented `GraphModel` (addNode/addEdge/getNode/getEdge/getAllNodes/outputEdges/setEdgeActive), `NodeRuntimeStateStore` (get/set/reset), the `nodeHandlers` registry with a `sink` handler (consume, no actions) and a `sourceTrySpawn` function (cooldown-based spawn, called directly by SimEngine per tick rather than via onItemArrival since a source has 0 inputs), and `SimEngine.tick(dt)` (advance item progress -> deliver arrivals -> run spawns, in that order so conservation is easy to reason about). Filled in `src/core/__tests__/SimEngine.test.ts` with 6 real cases: spawn timing, progress advancement + delivery, long-run conservation (spawned == consumed + inFlight over 500 ticks), no-deadlock, and edge-gate hold/resume. Added `scripts/simHarness.ts` + `npm run sim:harness` (the standalone console harness the design doc's Milestone 1 exit criteria call for) — 200-tick run confirms conservation. `npm test` and `npm run typecheck` both clean. This work was done from a linked Claude session in the cloud, granted access to this folder mid-session after an earlier cloud-only build (a separate, throwaway `~/fluxboard` scaffold, not part of this repo) turned out to duplicate work already scaffolded here — this repo (with its GitHub remote and `_brain` history) is the canonical one going forward.
+Items moved      : FBT001 → DONE.
+Bugs found       : none.
+Fixes applied    : none.
+Lessons recorded : Two parallel Claude sessions (one local, one cloud) had independently scaffolded/built the same project under different conventions (`src/core` vs `src/sim`, `kind` vs `type`, dt-based tick vs discrete tick) before this was noticed. This repo's already-committed scaffold (with its real git remote) was treated as authoritative and the cloud-only duplicate was abandoned rather than merged — worth checking `_brain/` (or asking) at the start of a new session on a named project, before assuming a fresh scaffold is needed.
+Carried forward  : FBT002 (Milestone 2 — flat canvas, one path) now next. Not yet pushed to GitHub — Falcon pushes manually per INFRA note.

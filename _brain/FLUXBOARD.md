@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo scaffolded this session: three-layer folder structure (`src/core` = Logic/"the brains", `src/floor`, `src/skin`, `src/app`), vitest harness, stubbed `GraphModel`/`SimEngine`/node-handler registry that throw `not implemented` (SES001). Milestone 1 not yet started.
+Milestone 1 (headless core loop) DONE: `GraphModel` + `SimEngine` implemented and passing (6 vitest cases incl. long-run item conservation, no-deadlock, edge-gate hold/resume) plus a console harness (`npm run sim:harness`, 200-tick conservation report). Milestone 2 (flat canvas, one path) not yet started.
 
 ---
 ## STATE
@@ -44,12 +44,13 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| FBT001 | HIGH | Milestone 1 — implement `GraphModel` (topology) + `SimEngine` (tick loop) for one source + one sink, item `progress` as a plain number, verified via vitest (item conservation, no deadlock). No rendering. | — |
+| FBT002 | HIGH | Milestone 2 — flat canvas, one path: infinite canvas (pan/zoom/culling) rendering one transparent-style path with a gliding item. Validates floor-layer geometry + camera together (§9). | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
 |----|----------|------|---------|
 | FBT000 | — | Repo + brain scaffold: git init, remote, `src/{core,floor,skin,app}` structure, stubbed brains files, vitest placeholder test, `_brain/` adopted from PATHWORK PRO's pattern | SES001 |
+| FBT001 | — | Milestone 1 — `GraphModel` + `SimEngine` implemented (source/sink node kinds, sourceTrySpawn, sink onItemArrival), verified via vitest (item conservation, no deadlock, edge-gate hold/resume) and `scripts/simHarness.ts` console harness | SES006 |
 
 ---
 ## DECISIONS
@@ -81,4 +82,4 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 84 / 120 — Budget remaining: 36
+# Lines: 85 / 120 — Budget remaining: 35

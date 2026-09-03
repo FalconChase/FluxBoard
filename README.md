@@ -24,17 +24,19 @@ doc §2 for the full ownership table):
 
 ## Status
 
-Pre-code, design phase complete. Building Milestone 1 (design doc §9):
-a headless `GraphModel` + `SimEngine` with one source and one sink,
-verified in a console/vitest test harness — no rendering yet.
+Milestone 1 (design doc §9) done: a headless `GraphModel` + `SimEngine`
+with one source and one sink, verified via vitest (item conservation,
+no deadlock) and a console harness (`npm run sim:harness`). No
+rendering yet — that's Milestone 2 (flat canvas, one path), next up.
 
 ## Dev setup
 
 ```
 npm install
-npm test        # run once
+npm test          # run once
 npm run test:watch
 npm run typecheck
+npm run sim:harness  # console conservation report (Milestone 1 exit criteria)
 ```
 
 (The Tauri/React app shell is added in a later milestone once there's a

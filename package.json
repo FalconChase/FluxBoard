@@ -7,9 +7,11 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sim:harness": "tsx scripts/simHarness.ts"
   },
   "devDependencies": {
+    "tsx": "^4.23.13",
     "typescript": "^5.6.2",
     "vitest": "^2.1.4"
   }
