@@ -6,7 +6,6 @@ dist-ssr/
 
 # Tauri
 src-tauri/target/
-src-tauri/Cargo.lock
 
 # Editors / OS
 .vscode/*
@@ -23,3 +22,6 @@ npm-debug.log*
 .env
 .env.*
 vitest.config.ts.timestamp-*.mjs
+
+# Claude desktop app output folder
+Claude outputs/
