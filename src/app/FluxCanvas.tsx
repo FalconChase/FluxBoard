@@ -75,7 +75,13 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
     }
 
     let raf = 0;
-    let startMs: number | null = null;
+    let lastFrameMs: number | null = null;
+    // Animation-only clock (belt scroll phase, circling item spin) —
+    // deliberately separate from the sim driver's own clock and from
+    // raw wall time: it only advances while the driver is actually
+    // running, so RUN/HOLD freezes every visual, not just item
+    // progress along the path.
+    let animElapsedMs = 0;
 
     function resize(): void {
       const parent = canvas!.parentElement;
@@ -93,8 +99,13 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
 
     function frame(nowMs: number): void {
       driver.update(nowMs);
-      if (startMs === null) startMs = nowMs;
-      const elapsedMs = nowMs - startMs;
+
+      if (lastFrameMs !== null) {
+        const frameDeltaMs = Math.max(0, nowMs - lastFrameMs);
+        if (driver.isRunning()) animElapsedMs += frameDeltaMs;
+      }
+      lastFrameMs = nowMs;
+      const elapsedMs = animElapsedMs;
 
       const viewport: Viewport = { width: canvas!.clientWidth, height: canvas!.clientHeight };
       ctx!.clearRect(0, 0, viewport.width, viewport.height);
