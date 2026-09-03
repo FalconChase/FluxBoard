@@ -175,7 +175,10 @@ export function App() {
   // re-render on those.
   const [selection, setSelection] = useState<Selection | null>(null);
   const [placementKind, setPlacementKind] = useState<NodeKind | null>(null);
-  const [snapToGrid, setSnapToGrid] = useState(false);
+  // Falcon, 2026-09-03: wants an 8-unit grid, on by default (was
+  // 64/off) — snap-to-grid is still an F8/header toggle, just starts
+  // enabled instead of needing a manual first press.
+  const [snapToGrid, setSnapToGrid] = useState(true);
   const nextIdRef = useRef(1);
 
   // UI chrome (Falcon's wireframe, claude/build-log.md): left-panel
@@ -192,7 +195,7 @@ export function App() {
   // placementKind/armedEdgeStyle's arm-then-act flow but the "act" is
   // just a drag anywhere on the canvas (see FluxCanvas's onCreateSketch).
   const [sketchArmed, setSketchArmed] = useState(false);
-  const [gridSpacing, setGridSpacing] = useState(64);
+  const [gridSpacing, setGridSpacing] = useState(8);
   const [tickIntervalMs, setTickIntervalMs] = useState(400);
   const [isRunning, setIsRunning] = useState(true);
   const fluxCanvasRef = useRef<FluxCanvasHandle | null>(null);
