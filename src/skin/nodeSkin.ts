@@ -20,6 +20,7 @@ export const nodeSkinDefaults: Record<NodeKind, NodeSkinDefaults> = {
   source: { fill: '#3d7fff', stroke: '#2a5fd0', icon: nodeIcons.source },
   sink: { fill: '#ff5d5d', stroke: '#d8393f', icon: nodeIcons.sink },
   distributor: { fill: '#f2a93c', stroke: '#c9821e', icon: nodeIcons.distributor },
+  merger: { fill: '#c026d3', stroke: '#9d1ba9', icon: nodeIcons.merger },
   sorter: { fill: '#8a5cf6', stroke: '#6a3fd1', icon: nodeIcons.sorter },
   mixer: { fill: '#17b3a3', stroke: '#128f83', icon: nodeIcons.mixer },
   buffer: { fill: '#6b7280', stroke: '#4b5158', icon: nodeIcons.buffer },

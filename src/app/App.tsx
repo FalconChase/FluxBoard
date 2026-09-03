@@ -129,6 +129,8 @@ function defaultConfigFor(kind: NodeKind): Record<string, unknown> {
       return { cooldown: 2, itemType: 'widget' };
     case 'distributor':
       return { mode: 'roundRobin' };
+    case 'merger':
+      return {};
     case 'sorter':
       return { rules: [], defaultPort: 0, unmatchedPolicy: 'hold' };
     case 'mixer':

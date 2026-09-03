@@ -3,7 +3,7 @@ import type { NodeKind } from '../core/types';
 import { nodeSkinDefaults } from '../skin/nodeSkin';
 import { octagonVertices, traceClosedPath } from '../skin/octagon';
 
-const KINDS: NodeKind[] = ['source', 'distributor', 'sorter', 'mixer', 'buffer', 'sink'];
+const KINDS: NodeKind[] = ['source', 'distributor', 'merger', 'sorter', 'mixer', 'buffer', 'sink'];
 
 interface NodePaletteProps {
   /** null = nothing armed. Set to a kind to make the next canvas
@@ -13,7 +13,7 @@ interface NodePaletteProps {
   onArm: (kind: NodeKind | null) => void;
 }
 
-/** Left-docked node palette. Deliberately just a flat list of the 6
+/** Left-docked node palette. Deliberately just a flat list of the 7
  * kinds, no grouping/ribbon — nothing here yet justifies more chrome
  * than that (design doc §9 roadmap step 5; FBP008). */
 export function NodePalette({ armedKind, onArm }: NodePaletteProps) {

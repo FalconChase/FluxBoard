@@ -20,6 +20,7 @@ export interface Item {
 export type NodeKind =
   | 'source'
   | 'distributor'
+  | 'merger'
   | 'sorter'
   | 'mixer'
   | 'buffer'

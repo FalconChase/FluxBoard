@@ -29,6 +29,10 @@ import type { NodeKind } from '../types';
  *    stream across MANY output edges — no kind-specific cap on either
  *    side beyond the general 8-connections-per-node structural limit
  *    (FloorLayout's anchor system).
+ *  - merger (Falcon, 2026-09-03: "the opposite of distributor"): the
+ *    mirror image — MANY input edges merge into exactly ONE output
+ *    edge (`merger.ts`'s `onItemArrival` looks up a single active
+ *    output edge, same as source/mixer). 1 output, inputs uncapped.
  *
  * `undefined` = no kind-specific cap; only the general 8-socket
  * structural limit applies.
@@ -42,6 +46,7 @@ export const NATURAL_PORT_CAPACITY: Record<NodeKind, PortCapacity> = {
   source: { maxInputs: 0, maxOutputs: 1 },
   sink: { maxOutputs: 0 },
   distributor: {},
+  merger: { maxOutputs: 1 },
   sorter: {},
   mixer: { maxOutputs: 1 },
   buffer: { maxOutputs: 2 },

@@ -85,6 +85,35 @@ describe('distributor', () => {
   });
 });
 
+describe('merger', () => {
+  const handler = nodeHandlers.merger!.onItemArrival!;
+
+  it('forwards an item arriving on ANY input edge straight out the single active output edge', () => {
+    const n = node('merge', 'merger');
+    const eOut = edge('eOut', 'merge', 'snk', { sourcePort: 0 });
+    const arrivalA = edge('eA', 'srcA', 'merge');
+    const arrivalB = edge('eB', 'srcB', 'merge');
+
+    const r1 = handler(item('i1'), n, {}, [eOut], arrivalA, makeItemId);
+    expect(r1.actions).toEqual([{ type: 'forward', edgeId: 'eOut', item: item('i1') }]);
+    expect(r1.newState.mergedCount).toBe(1); // skin badge policy: not surfaced (only buffer shows a count), but still tracked
+
+    const r2 = handler(item('i2'), n, r1.newState, [eOut], arrivalB, makeItemId);
+    expect(r2.actions).toEqual([{ type: 'forward', edgeId: 'eOut', item: item('i2') }]);
+    expect(r2.newState.mergedCount).toBe(2);
+  });
+
+  it('refuses the item (accepted: false) when the output edge is inactive — never dropped', () => {
+    const n = node('merge', 'merger');
+    const eOut = edge('eOut', 'merge', 'snk', { active: false });
+    const arrival = edge('eA', 'srcA', 'merge');
+
+    const result = handler(item('i1'), n, {}, [eOut], arrival, makeItemId);
+    expect(result.accepted).toBe(false);
+    expect(result.actions).toHaveLength(0);
+  });
+});
+
 describe('sorter', () => {
   const handler = nodeHandlers.sorter!.onItemArrival!;
 
@@ -295,5 +324,37 @@ describe('distributor + sorter SimEngine integration', () => {
     expect(a).toBeGreaterThan(0);
     expect(b).toBeGreaterThan(0);
     expect(Math.abs(a - b)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('merger SimEngine integration', () => {
+  it('two sources merge into one sink with items conserved end-to-end (the mirror of the distributor test above)', () => {
+    const graph = new GraphModel();
+    graph.addNode(node('srcA', 'source', { cooldown: 0, itemType: 'widget' }));
+    graph.addNode(node('srcB', 'source', { cooldown: 0, itemType: 'widget' }));
+    graph.addNode(node('merge', 'merger'));
+    graph.addNode(node('snk', 'sink'));
+    graph.addEdge(edge('eA', 'srcA', 'merge', { sourcePort: 0 }));
+    graph.addEdge(edge('eB', 'srcB', 'merge', { sourcePort: 0 }));
+    graph.addEdge(edge('eOut', 'merge', 'snk'));
+
+    const engine = new SimEngine(graph);
+    let spawned = 0;
+    let consumed = 0;
+    for (let i = 0; i < 30; i++) {
+      engine.tick(1);
+      for (const event of engine.drainEvents()) {
+        if (event.kind === 'spawned') spawned += 1;
+        if (event.kind === 'consumed') consumed += 1;
+      }
+    }
+
+    const inFlight = engine.getItemsInFlight().length;
+    expect(spawned).toBe(consumed + inFlight); // merger holds nothing of its own, unlike buffer
+    expect(spawned).toBeGreaterThan(0);
+    expect(consumed).toBeGreaterThan(0);
+    // Both sources actually fed the merger — not just one of them.
+    expect((engine.getNodeState('srcA')?.spawnedCount as number) ?? 0).toBeGreaterThan(0);
+    expect((engine.getNodeState('srcB')?.spawnedCount as number) ?? 0).toBeGreaterThan(0);
   });
 });

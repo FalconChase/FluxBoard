@@ -248,6 +248,11 @@ function NodeProperties({
 
       {node.kind === 'source' && <SourceFields node={node} onChange={patch} />}
       {node.kind === 'distributor' && <DistributorFields node={node} onChange={patch} />}
+      {node.kind === 'merger' && (
+        <p style={{ fontSize: 12, color: '#8a8a93' }}>
+          Merger has nothing to configure — every arriving item forwards straight out its one output.
+        </p>
+      )}
       {node.kind === 'sorter' && <SorterFields node={node} onChange={patch} />}
       {node.kind === 'mixer' && <MixerFields node={node} onChange={patch} />}
       {node.kind === 'buffer' && <BufferFields node={node} onChange={patch} />}

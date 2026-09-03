@@ -52,6 +52,23 @@ const distributor: IconDrawFn = (ctx, cx, cy, size) => {
   ctx.stroke();
 };
 
+/** Merger — the mirror of the distributor icon: two lines converging
+ * into one, instead of one splitting into two ("the opposite of
+ * distributor," Falcon 2026-09-03). */
+const merger: IconDrawFn = (ctx, cx, cy, size) => {
+  const s = size * 0.55;
+  ctx.lineWidth = Math.max(1.5, size * 0.14);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.7, cy - s * 0.6);
+  ctx.lineTo(cx + s * 0.05, cy);
+  ctx.moveTo(cx - s * 0.7, cy + s * 0.6);
+  ctx.lineTo(cx + s * 0.05, cy);
+  ctx.lineTo(cx + s * 0.75, cy);
+  ctx.stroke();
+};
+
 /** Sorter — a funnel narrowing to a stem, like a filter. */
 const sorter: IconDrawFn = (ctx, cx, cy, size) => {
   const s = size * 0.58;
@@ -89,4 +106,4 @@ const buffer: IconDrawFn = (ctx, cx, cy, size) => {
   }
 };
 
-export const nodeIcons = { source, sink, distributor, sorter, mixer, buffer } as const;
+export const nodeIcons = { source, sink, distributor, merger, sorter, mixer, buffer } as const;

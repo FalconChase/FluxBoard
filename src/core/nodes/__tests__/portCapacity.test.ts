@@ -28,4 +28,8 @@ describe('getPortCapacity', () => {
     expect(getPortCapacity('distributor')).toEqual({});
     expect(getPortCapacity('sorter')).toEqual({});
   });
+
+  it('merger: 1 output (single active-output-edge lookup, the mirror of distributor), inputs uncapped', () => {
+    expect(getPortCapacity('merger')).toEqual({ maxOutputs: 1 });
+  });
 });

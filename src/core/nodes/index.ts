@@ -3,6 +3,7 @@ import type { NodeBehavior } from './contract';
 import { sourceBehavior } from './source';
 import { sinkBehavior } from './sink';
 import { distributorBehavior } from './distributor';
+import { mergerBehavior } from './merger';
 import { sorterBehavior } from './sorter';
 import { mixerBehavior } from './mixer';
 import { bufferBehavior } from './buffer';
@@ -18,6 +19,7 @@ export const nodeHandlers: Partial<Record<NodeDef['kind'], NodeBehavior>> = {
   source: sourceBehavior,
   sink: sinkBehavior,
   distributor: distributorBehavior,
+  merger: mergerBehavior,
   sorter: sorterBehavior,
   mixer: mixerBehavior,
   buffer: bufferBehavior,
