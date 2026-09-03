@@ -1,8 +1,13 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { FloorLayout } from '../floor/floorLayout';
 import { FluxCanvas } from './FluxCanvas';
 import { GraphModel } from '../core/GraphModel';
+import type { NodeId, NodeKind } from '../core/types';
+import type { Point } from '../floor/bezier';
 import { SkinConfig } from '../skin/SkinConfig';
+import { NodePalette } from './NodePalette';
+import { PropertiesPanel } from './PropertiesPanel';
+import type { Selection } from './selection';
 
 /**
  * Milestone 4 demo graph (design doc §9 step 4): source -> distributor
@@ -110,10 +115,70 @@ function buildDemoSkinConfig(): SkinConfig {
   return skin;
 }
 
+/** Sensible starting config per kind when a new node is placed from
+ * the palette — the same defaults each node handler itself falls back
+ * to when a field is missing (design doc §4.2), so a freshly-placed
+ * node behaves identically to one whose config the panel hasn't been
+ * touched for yet. */
+function defaultConfigFor(kind: NodeKind): Record<string, unknown> {
+  switch (kind) {
+    case 'source':
+      return { cooldown: 2, itemType: 'widget' };
+    case 'distributor':
+      return { mode: 'roundRobin' };
+    case 'sorter':
+      return { rules: [], defaultPort: 0, unmatchedPolicy: 'hold' };
+    case 'mixer':
+      return { recipe: {}, outputPort: 0, outputType: 'item' };
+    case 'buffer':
+      return { capacity: 3, overflowPolicy: 'block' };
+    case 'sink':
+      return {};
+    default:
+      return {};
+  }
+}
+
 export function App() {
   const graph = useMemo(() => buildDemoGraph(), []);
   const floorLayout = useMemo(() => buildDemoFloorLayout(), []);
   const skinConfig = useMemo(() => buildDemoSkinConfig(), []);
+
+  // Milestone 5 (minimal-chrome scope, FBP008 resolved): selection +
+  // node placement + body-to-body wiring. graph/floorLayout/skinConfig
+  // are mutated directly (they're the single source of truth, design
+  // doc §4.6) — the canvas picks up any change on its next animation
+  // frame with no extra plumbing; only selection/placement state needs
+  // to be real React state, since the palette/properties panel need to
+  // re-render on those.
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [placementKind, setPlacementKind] = useState<NodeKind | null>(null);
+  const nextIdRef = useRef(1);
+
+  function handlePlaceNode(kind: NodeKind, worldPoint: Point): void {
+    const id = `user-node-${nextIdRef.current++}`;
+    graph.addNode({ id, kind, config: defaultConfigFor(kind) });
+    floorLayout.setNodePosition(id, worldPoint);
+    setSelection({ type: 'node', id });
+    setPlacementKind(null);
+  }
+
+  function handleCreateEdge(sourceNodeId: NodeId, targetNodeId: NodeId): void {
+    const id = `user-edge-${nextIdRef.current++}`;
+    graph.addEdge({
+      id,
+      source: sourceNodeId,
+      target: targetNodeId,
+      sourcePort: 0,
+      targetPort: 0,
+      flowRate: 0.15,
+      active: true,
+    });
+    floorLayout.setEdgeCurve(id, sourceNodeId, targetNodeId, 0.15);
+    setSelection({ type: 'edge', id });
+  }
+
+  const selectionKey = selection ? `${selection.type}:${selection.id}` : 'none';
 
   return (
     <div
@@ -126,11 +191,24 @@ export function App() {
       }}
     >
       <header style={{ padding: '0.6rem 1rem', borderBottom: '1px solid #e5e4e7', fontSize: 14 }}>
-        <strong>FluxBoard</strong> — Milestone 4: skin layer. Octagon nodes with icons/badges,
-        conveyor/glass-tube/transparent paths. Drag to pan, scroll to zoom.
+        <strong>FluxBoard</strong> — Milestone 5: node palette, properties panel, body-to-body wiring.
+        Click a node/edge to select it, drag from a node to wire it up.
       </header>
-      <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-        <FluxCanvas graph={graph} floorLayout={floorLayout} skinConfig={skinConfig} />
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <NodePalette armedKind={placementKind} onArm={setPlacementKind} />
+        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+          <FluxCanvas
+            graph={graph}
+            floorLayout={floorLayout}
+            skinConfig={skinConfig}
+            selection={selection}
+            onSelect={setSelection}
+            placementKind={placementKind}
+            onPlaceNode={handlePlaceNode}
+            onCreateEdge={handleCreateEdge}
+          />
+        </div>
+        <PropertiesPanel key={selectionKey} selection={selection} graph={graph} skinConfig={skinConfig} />
       </div>
     </div>
   );

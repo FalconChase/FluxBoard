@@ -66,4 +66,37 @@ export class GraphModel {
     if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);
     edge.active = active;
   }
+
+  /** Edge flow rate — logic-owned, real throughput consequences
+   * (design doc §5.4). Small setter mirroring setEdgeActive so the
+   * properties panel (Milestone 5) has something to call. */
+  setEdgeFlowRate(edgeId: EdgeId, flowRate: number): void {
+    const edge = this.edges.get(edgeId);
+    if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);
+    edge.flowRate = flowRate;
+  }
+
+  /** Edge port numbers — the integers each node kind's own handler
+   * matches against (sorter rules, mixer recipe ports, distributor
+   * round-robin order, ...). Renamed here to make clear this is NOT
+   * the octagon's 8 geometric port anchors (design doc §4.1) — that
+   * mapping doesn't exist yet (FBP009); this only changes which
+   * logical port number an existing edge is wired to. */
+  updateEdgePorts(edgeId: EdgeId, patch: { sourcePort?: number; targetPort?: number }): void {
+    const edge = this.edges.get(edgeId);
+    if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);
+    if (patch.sourcePort !== undefined) edge.sourcePort = patch.sourcePort;
+    if (patch.targetPort !== undefined) edge.targetPort = patch.targetPort;
+  }
+
+  /** Shallow-merges into a node's own functional config (design doc
+   * §4.6 — properties panels read/write logic-layer config; this is
+   * the one write path they all share, since each kind's config shape
+   * differs and a per-field setter per kind would be far more surface
+   * area for the same result). */
+  updateNodeConfig(nodeId: NodeId, patch: Record<string, unknown>): void {
+    const node = this.nodes.get(nodeId);
+    if (!node) throw new Error(`Node "${nodeId}" does not exist`);
+    node.config = { ...node.config, ...patch };
+  }
 }

@@ -171,6 +171,20 @@ export function drawPathOver(
   void half; // half kept for reference/future use (e.g. end caps)
 }
 
+/** Edge selection highlight (Milestone 5) — a bright overlay stroke
+ * along the curve, drawn on top of everything else so it reads
+ * regardless of the edge's own style (including 'transparent', which
+ * otherwise draws nothing at all). Pure UI affordance, no skin-layer
+ * meaning of its own. */
+export function drawCurveSelectionHighlight(
+  ctx: CanvasRenderingContext2D,
+  curve: BezierPath,
+  camera: Camera,
+  viewport: Viewport,
+): void {
+  strokeCurve(ctx, curve, camera, viewport, Math.max(2, 4 * camera.zoom), 'rgba(37, 99, 235, 0.55)');
+}
+
 /** Rotation (radians) for an item token riding a path under the given
  * orientation mode (design doc §5.3). */
 export function getItemRotation(

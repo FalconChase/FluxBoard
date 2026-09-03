@@ -4,11 +4,19 @@ import type { FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
-import type { NodeDef } from '../core/types';
+import type { NodeDef, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
-import { drawNode } from '../skin/nodeSkin';
-import { drawPathUnder, drawPathOver, drawItemToken, getItemRotation } from '../skin/pathSkin';
+import { drawNode, drawNodeSelectionRing } from '../skin/nodeSkin';
+import {
+  drawPathUnder,
+  drawPathOver,
+  drawItemToken,
+  getItemRotation,
+  drawCurveSelectionHighlight,
+} from '../skin/pathSkin';
+import { octagonVertices, isPointInOctagon } from '../skin/octagon';
+import type { Selection } from './selection';
 
 interface FluxCanvasProps {
   graph: GraphModel;
@@ -17,6 +25,19 @@ interface FluxCanvasProps {
   /** Fixed logic-tick interval — decoupled from render frame rate
    * (design doc §5.1). */
   tickIntervalMs?: number;
+
+  /** Milestone 5: click-to-select. null = nothing selected. */
+  selection: Selection | null;
+  onSelect: (selection: Selection | null) => void;
+  /** When set, the NEXT click on empty canvas places a new node of
+   * this kind there instead of doing anything else (armed by the
+   * node palette). */
+  placementKind: NodeKind | null;
+  onPlaceNode: (kind: NodeKind, worldPoint: Point) => void;
+  /** Drag from one node's body to another's to connect them. Simple
+   * body-to-body for now — see FBP009 for why this isn't per-socket
+   * yet. Ports/flowRate/gate are then tuned in the properties panel. */
+  onCreateEdge: (sourceNodeId: NodeId, targetNodeId: NodeId) => void;
 }
 
 const GRID_SPACING = 64;
@@ -24,24 +45,48 @@ const ITEM_RADIUS = 7;
 const NODE_RADIUS = 22;
 const ITEM_FILL = '#2ecc71';
 const ITEM_STROKE = '#1c8a4f';
+const CLICK_MOVE_THRESHOLD_PX = 5;
+const EDGE_HIT_TOLERANCE_PX = 12;
 
 /**
- * Milestone 4: skin layer wired into the canvas (design doc §9 step 4)
- * — octagon node shapes with per-kind icons and unbounded counter
- * badges (§4.1, §4.5), nodes sorted by skin-owned z-order, and the
- * three-pass path render stack (skin-under -> item tokens -> skin-
- * over, §5.2) for conveyor/glass-tube/transparent edge styles with
- * static/parallel/circling item orientation (§5.3).
+ * Milestone 4 (skin layer) + Milestone 5 (selection, node placement,
+ * body-to-body wiring — design doc §9 step 5, minimal-chrome scope
+ * per FBP008's resolution) wired into the canvas.
  *
- * Floor-layer geometry/camera (Milestone 2) and the full node
- * registry (Milestone 3) are unchanged by this — this file only
- * changes HOW things are painted, never where they are or what the
- * simulation does.
+ * Floor-layer geometry/camera (Milestone 2), the full node registry
+ * (Milestone 3) and the skin render stack (Milestone 4) are unchanged
+ * by this — this file only adds pointer INTERACTION on top of what
+ * was already being painted.
  */
-export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 400 }: FluxCanvasProps) {
+export function FluxCanvas({
+  graph,
+  floorLayout,
+  skinConfig,
+  tickIntervalMs = 400,
+  selection,
+  onSelect,
+  placementKind,
+  onPlaceNode,
+  onCreateEdge,
+}: FluxCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const driverRef = useRef<InterpolatedSimDriver | null>(null);
   const [isRunning, setIsRunning] = useState(true);
+
+  // Interaction props change far more often than the sim/graph setup
+  // (every click) — routing them through refs keeps them out of the
+  // main effect's dependency array, so selecting something doesn't
+  // tear down and recreate the SimEngine/driver.
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const placementKindRef = useRef(placementKind);
+  placementKindRef.current = placementKind;
+  const onPlaceNodeRef = useRef(onPlaceNode);
+  onPlaceNodeRef.current = onPlaceNode;
+  const onCreateEdgeRef = useRef(onCreateEdge);
+  onCreateEdgeRef.current = onCreateEdge;
 
   function toggleRunning(): void {
     const driver = driverRef.current;
@@ -83,6 +128,50 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
     // progress along the path.
     let animElapsedMs = 0;
 
+    function currentViewport(): Viewport {
+      return { width: canvas!.clientWidth, height: canvas!.clientHeight };
+    }
+
+    function toWorld(clientX: number, clientY: number): Point {
+      const rect = canvas!.getBoundingClientRect();
+      const screenPoint = { x: clientX - rect.left, y: clientY - rect.top };
+      return camera.screenToWorld(screenPoint, currentViewport());
+    }
+
+    /** Topmost (highest z-order) node whose octagon body contains
+     * `worldPoint`, or undefined. World-space hit-test — NODE_RADIUS
+     * is the same un-scaled radius used to compute the screen radius
+     * at render time (r = NODE_RADIUS * camera.zoom), so no
+     * conversion is needed here. */
+    function hitTestNode(worldPoint: Point): NodeId | undefined {
+      const candidates = graph
+        .getAllNodes()
+        .map((n) => ({ n, pos: floorLayout.getNodePosition(n.id) }))
+        .filter((e): e is { n: NodeDef; pos: Point } => e.pos !== undefined)
+        .sort((a, b) => skinConfig.getNodeZIndex(b.n.id) - skinConfig.getNodeZIndex(a.n.id));
+      for (const { n, pos } of candidates) {
+        if (isPointInOctagon(worldPoint, octagonVertices(pos, NODE_RADIUS))) return n.id;
+      }
+      return undefined;
+    }
+
+    function hitTestEdge(worldPoint: Point): string | undefined {
+      const toleranceWorld = EDGE_HIT_TOLERANCE_PX / camera.zoom;
+      for (const edge of graph.getAllEdges()) {
+        const curve = floorLayout.getEdgeCurve(edge.id);
+        if (!curve || curve.totalLength === 0) continue;
+        let minDist = Infinity;
+        const samples = 40;
+        for (let i = 0; i <= samples; i++) {
+          const p = curve.getPointAtProgress(i / samples);
+          const d = Math.hypot(p.x - worldPoint.x, p.y - worldPoint.y);
+          if (d < minDist) minDist = d;
+        }
+        if (minDist <= toleranceWorld) return edge.id;
+      }
+      return undefined;
+    }
+
     function resize(): void {
       const parent = canvas!.parentElement;
       const width = parent ? parent.clientWidth : window.innerWidth;
@@ -107,7 +196,9 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
       lastFrameMs = nowMs;
       const elapsedMs = animElapsedMs;
 
-      const viewport: Viewport = { width: canvas!.clientWidth, height: canvas!.clientHeight };
+      canvas!.style.cursor = placementKindRef.current ? 'crosshair' : wireFromNodeId ? 'crosshair' : 'grab';
+
+      const viewport = currentViewport();
       ctx!.clearRect(0, 0, viewport.width, viewport.height);
       ctx!.fillStyle = '#faf9fb';
       ctx!.fillRect(0, 0, viewport.width, viewport.height);
@@ -117,10 +208,9 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
       // Culling: only draw entities whose position intersects the
       // visible world rect (design doc §3 — virtualization).
       const bounds = camera.getVisibleWorldBounds(viewport, NODE_RADIUS * 4);
+      const sel = selectionRef.current;
 
       // --- Three-pass path render stack (design doc §5.2) ---
-      // Pass 1: skin-under for every edge (belt body / tube fill),
-      // batched across all edges before any item is drawn.
       const edges = graph.getAllEdges();
       for (const edge of edges) {
         const curve = floorLayout.getEdgeCurve(edge.id);
@@ -130,8 +220,6 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
         drawPathUnder(ctx!, curve, camera, viewport, skin, beltPhase);
       }
 
-      // Pass 2: item tokens — always drawn on the transparent movement
-      // layer, regardless of the edge's style.
       for (const renderItem of driver.getRenderItems()) {
         const curve = floorLayout.getEdgeCurve(renderItem.edgeId);
         if (!curve) continue;
@@ -150,14 +238,33 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
         drawItemToken(ctx!, screen, ITEM_RADIUS * camera.zoom, rotation, ITEM_FILL, ITEM_STROKE);
       }
 
-      // Pass 3: skin-over for every edge (tube boundary/highlight),
-      // painted after items so a glass tube reads as translucent
-      // around them. Empty for conveyor/transparent.
       for (const edge of edges) {
         const curve = floorLayout.getEdgeCurve(edge.id);
         if (!curve) continue;
         const skin = skinConfig.getEdgeSkin(edge.id);
         drawPathOver(ctx!, curve, camera, viewport, skin);
+        if (sel?.type === 'edge' && sel.id === edge.id) {
+          drawCurveSelectionHighlight(ctx!, curve, camera, viewport);
+        }
+      }
+
+      // Live wire-drag line, drawn under the nodes so the node bodies
+      // still read clearly on top of it.
+      if (wireFromNodeId && wireCurrentWorld) {
+        const fromPos = floorLayout.getNodePosition(wireFromNodeId);
+        if (fromPos) {
+          const a = camera.worldToScreen(fromPos, viewport);
+          const b = camera.worldToScreen(wireCurrentWorld, viewport);
+          ctx!.save();
+          ctx!.setLineDash([6, 4]);
+          ctx!.strokeStyle = 'rgba(37, 99, 235, 0.7)';
+          ctx!.lineWidth = Math.max(1.5, 2 * camera.zoom);
+          ctx!.beginPath();
+          ctx!.moveTo(a.x, a.y);
+          ctx!.lineTo(b.x, b.y);
+          ctx!.stroke();
+          ctx!.restore();
+        }
       }
 
       // --- Nodes: octagon body + icon + badge, sorted by skin-owned
@@ -176,38 +283,123 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
         const r = NODE_RADIUS * camera.zoom;
         const state = engine.getNodeState(node.id) ?? {};
         drawNode(ctx!, node, state, screen, r, camera.zoom);
+        if (sel?.type === 'node' && sel.id === node.id) {
+          drawNodeSelectionRing(ctx!, screen, r, camera.zoom);
+        }
       }
 
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
 
-    let dragStart: { x: number; y: number } | null = null;
+    // --- Pointer interaction state machine ---
+    // A click (movement under the threshold) selects/deselects or
+    // places a node; a drag either pans the camera (from empty
+    // space) or, starting from a node's body, drags out a new edge.
+    type PointerMode = 'idle' | 'pan' | 'node-down' | 'edge-down' | 'wire' | 'placement';
+    let pointerMode: PointerMode = 'idle';
+    let dragOriginScreen: { x: number; y: number } | null = null;
+    let dragLastScreen: { x: number; y: number } | null = null;
+    let pendingNodeHitId: NodeId | undefined;
+    let pendingEdgeHitId: string | undefined;
+    let wireFromNodeId: NodeId | undefined;
+    let wireCurrentWorld: Point | undefined;
 
     function onPointerDown(e: PointerEvent): void {
-      dragStart = { x: e.clientX, y: e.clientY };
+      dragOriginScreen = { x: e.clientX, y: e.clientY };
+      dragLastScreen = { x: e.clientX, y: e.clientY };
       canvas!.setPointerCapture(e.pointerId);
+
+      const worldPoint = toWorld(e.clientX, e.clientY);
+
+      if (placementKindRef.current) {
+        pointerMode = 'placement';
+        return;
+      }
+
+      const nodeId = hitTestNode(worldPoint);
+      if (nodeId) {
+        pointerMode = 'node-down';
+        pendingNodeHitId = nodeId;
+        return;
+      }
+
+      const edgeId = hitTestEdge(worldPoint);
+      if (edgeId) {
+        pointerMode = 'edge-down';
+        pendingEdgeHitId = edgeId;
+        return;
+      }
+
+      pointerMode = 'pan';
     }
+
     function onPointerMove(e: PointerEvent): void {
-      if (!dragStart) return;
-      const dx = e.clientX - dragStart.x;
-      const dy = e.clientY - dragStart.y;
-      dragStart = { x: e.clientX, y: e.clientY };
-      camera.pan(dx, dy);
+      if (!dragOriginScreen || !dragLastScreen) return;
+      const totalMove = Math.hypot(e.clientX - dragOriginScreen.x, e.clientY - dragOriginScreen.y);
+
+      if (pointerMode === 'pan') {
+        const dx = e.clientX - dragLastScreen.x;
+        const dy = e.clientY - dragLastScreen.y;
+        dragLastScreen = { x: e.clientX, y: e.clientY };
+        camera.pan(dx, dy);
+        return;
+      }
+
+      if (pointerMode === 'node-down' && totalMove > CLICK_MOVE_THRESHOLD_PX) {
+        pointerMode = 'wire';
+        wireFromNodeId = pendingNodeHitId;
+      }
+
+      if (pointerMode === 'wire') {
+        wireCurrentWorld = toWorld(e.clientX, e.clientY);
+      }
     }
+
     function onPointerUp(e: PointerEvent): void {
-      dragStart = null;
+      const worldPoint = toWorld(e.clientX, e.clientY);
+      const totalMove = dragOriginScreen
+        ? Math.hypot(e.clientX - dragOriginScreen.x, e.clientY - dragOriginScreen.y)
+        : 0;
+      const isClick = totalMove <= CLICK_MOVE_THRESHOLD_PX;
+
+      if (pointerMode === 'placement') {
+        if (isClick && placementKindRef.current) {
+          onPlaceNodeRef.current(placementKindRef.current, worldPoint);
+        }
+      } else if (pointerMode === 'wire' && wireFromNodeId) {
+        const targetNodeId = hitTestNode(worldPoint);
+        if (targetNodeId && targetNodeId !== wireFromNodeId) {
+          onCreateEdgeRef.current(wireFromNodeId, targetNodeId);
+        }
+      } else if (pointerMode === 'node-down' && isClick && pendingNodeHitId) {
+        onSelectRef.current({ type: 'node', id: pendingNodeHitId });
+      } else if (pointerMode === 'edge-down' && isClick && pendingEdgeHitId) {
+        onSelectRef.current({ type: 'edge', id: pendingEdgeHitId });
+      } else if (pointerMode === 'pan' && isClick) {
+        onSelectRef.current(null);
+      }
+
+      pointerMode = 'idle';
+      dragOriginScreen = null;
+      dragLastScreen = null;
+      pendingNodeHitId = undefined;
+      pendingEdgeHitId = undefined;
+      wireFromNodeId = undefined;
+      wireCurrentWorld = undefined;
+
       try {
         canvas!.releasePointerCapture(e.pointerId);
       } catch {
         // capture may already be released — harmless
       }
     }
+
     function onWheel(e: WheelEvent): void {
       e.preventDefault();
       const rect = canvas!.getBoundingClientRect();
       const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      const viewport: Viewport = { width: canvas!.clientWidth, height: canvas!.clientHeight };
+      const viewport = currentViewport();
       const factor = Math.exp(-e.deltaY * 0.001);
       camera.zoomAt(screenPoint, viewport, factor);
     }
@@ -226,6 +418,11 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
       window.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('wheel', onWheel);
     };
+    // Interaction props (selection, onSelect, placementKind,
+    // onPlaceNode, onCreateEdge) are intentionally excluded — they're
+    // read through refs above so a click doesn't tear down and
+    // recreate the SimEngine/driver.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph, floorLayout, skinConfig, tickIntervalMs]);
 
   return (
@@ -254,6 +451,24 @@ export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 40
       >
         {isRunning ? '⏸ Hold' : '▶ Run'}
       </button>
+      {placementKind && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: 12,
+            padding: '6px 12px',
+            fontSize: 12,
+            fontFamily: 'system-ui, sans-serif',
+            fontWeight: 600,
+            borderRadius: 6,
+            background: 'rgba(37, 99, 235, 0.92)',
+            color: '#fff',
+          }}
+        >
+          Click the canvas to place a {placementKind}
+        </div>
+      )}
     </div>
   );
 }

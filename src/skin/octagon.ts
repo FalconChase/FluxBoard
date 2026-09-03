@@ -66,3 +66,22 @@ export function octagonPortAnchor(center: Point, radius: number, portIndex: numb
 }
 
 export const OCTAGON_PORT_COUNT = VERTEX_COUNT;
+
+/** Point-in-convex-polygon test via the standard "same side of every
+ * edge" check — exact for a convex shape like this octagon, and cheap
+ * enough to run per click against every node (Milestone 5 selection
+ * hit-testing). Vertices must be in consistent winding order, which
+ * octagonVertices() already produces. */
+export function isPointInOctagon(point: Point, verts: Point[]): boolean {
+  let sign = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i]!;
+    const b = verts[(i + 1) % verts.length]!;
+    const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+    if (cross === 0) continue; // on the edge — treat as inside
+    const s = cross > 0 ? 1 : -1;
+    if (sign === 0) sign = s;
+    else if (s !== sign) return false;
+  }
+  return true;
+}

@@ -101,6 +101,26 @@ function drawBadge(
  * `center`/`radius` are already in screen space (camera-projected) —
  * this function has no floor-layer knowledge of its own.
  */
+/** Selection ring (Milestone 5) — drawn as an extra pass OUTSIDE the
+ * node body, purely a UI affordance with no logic/floor meaning of
+ * its own. Kept separate from drawNode so the canvas decides whether
+ * to call it, rather than baking "am I selected" into the node's own
+ * draw call. */
+export function drawNodeSelectionRing(
+  ctx: CanvasRenderingContext2D,
+  center: Point,
+  radius: number,
+  zoom: number,
+): void {
+  const verts = octagonVertices(center, radius + 5 * zoom);
+  traceClosedPath(ctx, verts);
+  ctx.strokeStyle = '#2563eb';
+  ctx.lineWidth = Math.max(1.5, 2.5 * zoom);
+  ctx.setLineDash([Math.max(3, 4 * zoom), Math.max(2, 3 * zoom)]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
 export function drawNode(
   ctx: CanvasRenderingContext2D,
   node: NodeDef,
