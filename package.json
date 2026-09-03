@@ -1,0 +1,16 @@
+{
+  "name": "fluxboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Free-canvas, infinite node-graph app inspired by PCB layering and factory-building games.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.4"
+  }
+}
