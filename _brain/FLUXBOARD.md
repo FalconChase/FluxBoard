@@ -61,6 +61,8 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | FBT009 | — | Move/lock/delete/snap-to-grid: plain drag now moves a node (Shift+drag wires instead), lock toggle blocks it, Delete/Backspace + panel button remove a node (cascading its edges) or edge, F8/header toggle snaps drag+placement to the grid. `GraphModel.removeNode/removeEdge`, `FloorLayout.removeNodePosition/recomputeEdgeCurve/removeEdgeCurve`, `SkinConfig.getNodeLocked/setNodeLocked/removeNode/removeEdge`, lock badge icon. Resolves FBP009's deletion half; socket-precise wiring still deferred. | SES017 |
 | FBT010 | — | UI-chrome build from Falcon's wireframe (claude/build-log.md): left panel is now NODES/PATHS/OBJECTS tabs (PATHS = new palette of the 3 edge styles, arm-then-click-an-edge to apply, mirrors node placement; OBJECTS = "coming soon" placeholder pending spec). Properties panel gained an always-visible "Canvas & simulation" section (grid spacing, sim tick interval) below the selection editor, surviving selection changes via an inner remount key. Bottom bar relocates Run/Hold and adds a contextual instruction strip, replacing the old floating placement hint. | SES018 |
 | FBT011 | — | Per-socket wiring (FBP009 fully resolved): 8 octagon-side anchors per node, a path attaches to the nearest free one at each end (max 8 per node), `FloorLayout` owns the booking independent of GraphModel's routing ports. Path direction arrows (always drawn, even on 'transparent' style). Node badges now buffer-only (Falcon: only a genuine "silo" node should show a count) — `getBadgeCount` returns undefined for every other kind; underlying RuntimeState counters untouched. | SES019 |
+| FBT012 | — | Per-kind "nature" port caps (`core/nodes/portCapacity.ts`, grounded in each handler's real behavior): source 1 output, mixer 1 output, buffer 2 outputs, sink/distributor/sorter uncapped — enforced as a silent hard reject in `handleCreateEdge`, same style as the 8-socket structural cap. Properties panel gained a compass-style `SingleOutputSidePicker` so a capped-output node's one side is chosen by click, not rotation. | SES020 |
+| FBT013 | — | Freeform planning sketches (`app/sketchLayer.ts`): pure visual dashed-line scratch paths, deliberately OUTSIDE Logic/Floor/Skin — no simulation meaning, not a GraphModel edge. Armed from a new PATHS-tab button; a drag (not a click) commits one, mutually exclusive with node/edge-style arming. Selectable/deletable like a real path. | SES021 |
 
 ---
 ## DECISIONS
@@ -92,4 +94,4 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 95 / 120 — Budget remaining: 25
+# Lines: 97 / 120 — Budget remaining: 23

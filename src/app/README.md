@@ -47,14 +47,28 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   glassTube), previewed with mini canvas swatches matching
   pathSkin.ts's real alpha values; click to arm, then click an
   existing edge on the canvas to apply the style (mirrors NodePalette's
-  arm-then-place flow; disarms after one application).
+  arm-then-place flow; disarms after one application). Also has a
+  "Sketch a path" toggle that arms `sketchArmed` instead (see
+  `sketchLayer.ts` below) — mutually exclusive with the style swatches
+  and with NodePalette's placement arming.
 - `PropertiesPanel.tsx` — right-docked. A selection-editing block
   (kind-specific logic config per design doc §4.6, edge ports/
   flowRate/gate, edge skin, node z-order, a "Locked" checkbox, a
-  "Delete" button) that remounts on selection change, plus an
-  always-visible "Canvas & simulation" section below it (grid spacing,
-  sim tick interval) that doesn't remount with the selection.
-- `selection.ts` — the `Selection` type shared between the above.
+  "Delete" button, a compass-style output side picker for kinds capped
+  at 1 output, a minimal "planning only" view + Delete for a sketch
+  selection) that remounts on selection change, plus an always-visible
+  "Canvas & simulation" section below it (grid spacing, sim tick
+  interval) that doesn't remount with the selection.
+- `selection.ts` — the `Selection` type shared between the above:
+  `'node'`, `'edge'`, or `'sketch'`.
+- `sketchLayer.ts` — pure visual planning sketches (Falcon, 2026-09-03:
+  "draw paths without really needing node... freedom to plan the
+  paths"). `Sketch {id, from, to}` + `SketchLayer` CRUD, deliberately
+  OUTSIDE the Logic/Floor/Skin architecture — no simulation meaning,
+  not a GraphModel edge, never carries items. Armed from PathPalette;
+  committed only by an actual drag on the canvas (a plain click while
+  armed draws nothing), rendered as a dashed purple/violet line so it
+  reads as a background guide rather than a real path.
 
 Per-socket wiring lives mostly in `src/floor/floorLayout.ts`, not here
 — see that file's own header comment for the anchor-booking design
@@ -63,6 +77,12 @@ routing integers). Node badges (`src/skin/nodeSkin.ts`'s
 `getBadgeCount`) now only appear on buffer nodes — the only kind that
 actually holds items — per Falcon's framing that a pass-through node
 (source/sink/distributor/sorter/mixer) has nothing worth counting.
+
+Per-kind "nature" port caps live in `core/nodes/portCapacity.ts`
+(source/mixer 1 output, buffer 2 outputs, sink/distributor/sorter
+uncapped) — grounded in each handler's real `onItemArrival`/`trySpawn`
+behavior, enforced as a silent hard reject in `App.tsx`'s
+`handleCreateEdge` alongside the existing 8-socket structural cap.
 
 Deliberately deferred: OBJECTS tab is a non-functional placeholder
 (FBP011 — Falcon wants to spec the item-type registry further before
