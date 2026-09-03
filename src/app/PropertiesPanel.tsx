@@ -752,7 +752,7 @@ function EdgeProperties({
       </div>
 
       <div style={sectionTitleStyle}>Logic (design doc §5.4)</div>
-      <EdgeLogicFields edge={edge} graph={graph} />
+      <EdgeLogicFields edge={edge} graph={graph} floorLayout={floorLayout} />
 
       <div style={sectionTitleStyle}>Path shape (design doc §5.1)</div>
       <PathShapeField edgeId={edgeId} floorLayout={floorLayout} />
@@ -804,11 +804,41 @@ function PathShapeField({ edgeId, floorLayout }: { edgeId: string; floorLayout: 
   );
 }
 
-function EdgeLogicFields({ edge, graph }: { edge: EdgeDef; graph: GraphModel }) {
+/** Speed (Falcon, 2026-09-03: "why does a longer path make the
+ * object seem to travel faster?" — because `flowRate` is progress-
+ * per-second, edge-length-independent by design (design doc §5.1: an
+ * item always takes exactly `1 / flowRate` seconds to cross an edge,
+ * whatever its length, so a longer edge covers more pixels in that
+ * same fixed time). SimEngine (logic) is deliberately headless and
+ * never touches geometry, so it can only ever consume that abstract
+ * progress-per-second number — it has no way to know a path's real
+ * length. "Speed" is a friendlier UNIT for editing the very same
+ * `flowRate`, converted using the edge's CURRENT path length (a
+ * floor-layer fact this panel already has, via `floorLayout`) — this
+ * is a UI-layer convenience conversion only, not a new stored field
+ * or a change to SimEngine/GraphModel. Both fields write the same
+ * `edge.flowRate`, kept in sync live so editing either updates the
+ * other's display. Caveat: this is a one-time conversion at the
+ * moment you type a value — if the node is later dragged and the
+ * path gets longer/shorter, `flowRate` itself doesn't auto-adjust
+ * (same as it never has), so the item's actual speed will drift
+ * again and Speed will need re-entering to pin it back down. */
+function EdgeLogicFields({
+  edge,
+  graph,
+  floorLayout,
+}: {
+  edge: EdgeDef;
+  graph: GraphModel;
+  floorLayout: FloorLayout;
+}) {
   const [sourcePort, setSourcePort] = useState(edge.sourcePort);
   const [targetPort, setTargetPort] = useState(edge.targetPort);
   const [flowRate, setFlowRate] = useState(edge.flowRate);
   const [active, setActive] = useState(edge.active);
+
+  const pathLength = floorLayout.getEdgeCurve(edge.id)?.totalLength ?? 0;
+  const [speed, setSpeed] = useState(flowRate * pathLength);
 
   return (
     <>
@@ -841,6 +871,26 @@ function EdgeLogicFields({ edge, graph }: { edge: EdgeDef; graph: GraphModel }) 
         </div>
       </div>
       <div style={rowStyle}>
+        <label style={labelStyle}>Speed (world units / second)</label>
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={Math.round(speed * 100) / 100}
+          style={inputStyle}
+          disabled={pathLength <= 0}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setSpeed(v);
+            if (pathLength > 0) {
+              const nextFlowRate = v / pathLength;
+              setFlowRate(nextFlowRate);
+              graph.setEdgeFlowRate(edge.id, nextFlowRate);
+            }
+          }}
+        />
+      </div>
+      <div style={rowStyle}>
         <label style={labelStyle}>Flow rate (progress / logic-second)</label>
         <input
           type="number"
@@ -851,9 +901,15 @@ function EdgeLogicFields({ edge, graph }: { edge: EdgeDef; graph: GraphModel }) 
           onChange={(e) => {
             const v = Number(e.target.value);
             setFlowRate(v);
+            setSpeed(v * pathLength);
             graph.setEdgeFlowRate(edge.id, v);
           }}
         />
+      </div>
+      <div style={{ fontSize: 10, color: '#8a8a93', marginTop: -6, marginBottom: 10 }}>
+        Speed is converted to flow rate using this path's current length —
+        if you drag a connected node afterward, the path's length changes
+        but flow rate doesn't auto-adjust, so re-enter speed to keep it pinned.
       </div>
       <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
         <input
