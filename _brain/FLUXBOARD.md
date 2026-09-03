@@ -10,17 +10,18 @@ NORTH STAR  : Milestone 1 (headless core loop) first — GraphModel + SimEngine 
 
 ---
 ## STACK
-- App shell: plain browser web app — Vite + React + TypeScript. No Tauri/Rust for now (revised from design doc §8 — see FBD009).
+- App shell: Tauri + React + TypeScript — desktop, single-user, for Falcon's own use first (design doc §8, reaffirmed — see FBD009 rev.2).
 - Canvas2D/WebGL for rendering (native, no engine dependency)
-- Local data: browser-native (IndexedDB / File System Access API, or plain JSON export) — no SQL; see FBD010
+- Local data: SQLite via Tauri SQL plugin (or plain JSON) — desktop-only concern for now; see FBD010 rev.2
 - vitest for the core-logic test harness
+- Future, separate variant: a Canva-style hosted web build reusing src/core+floor+skin unchanged (FBP007)
 
 ---
 ## INFRA
 | ITEM      | VALUE |
 |-----------|-------|
 | Repo path | C:\Users\ACER\Desktop\CORELOGIX\FLUXBOARD\ — git initialized at root, remote set to github.com/FalconChase/FluxBoard (main). Not yet pushed (Falcon pushes manually). |
-| Local DB  | No SQL — browser-native storage or plain JSON per board (FBD010). |
+| Local DB  | SQLite via Tauri SQL plugin, or plain JSON — desktop build, decide freely (FBD010 rev.2). |
 
 ---
 ## PHASE
@@ -61,8 +62,10 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | FBD006 | LOCKED | Edge gating is a separate `active: boolean`, never overwrites `flowRate` (§7) |
 | FBD007 | LOCKED | Counter is a badge overlaid on the icon (not exclusive), genuinely unbounded — no digit cap (§4.5) |
 | FBD008 | LOCKED | No backend/Supabase — local-first, zero recurring hosting cost. Revisit only if cloud sync/collab is scoped in. |
-| FBD009 | LOCKED | App shell is a plain browser web app (Vite+React+TS), not Tauri, for now — runs in a tab, single-player, local-first. Installability path (PWA vs. wrapping in Tauri later) is deliberately left open; avoid any Tauri-only API so either door stays open. |
-| FBD010 | LOCKED | No SQL/SQLite — a board is one document (graph + runtime state), not relational records, so it saves/loads as browser-native storage or plain JSON, same shape as Blender/Figma-style documents. |
+| FBD009 | SUPERSEDED by rev.2 | Was: plain browser web app, no Tauri, for now. |
+| FBD009 rev.2 | LOCKED | Tauri desktop app is the primary build — single-user, Falcon's own machine, free to use Tauri APIs (SQL plugin, native dialogs) normally. A Canva-style hosted web version is a separate future variant (FBP007), not a portability constraint on this build — kept cheap only by isolating Tauri-specific calls behind one adapter in src/app (never scattered through UI/core code), since src/core + src/floor + src/skin are already 100% platform-agnostic TypeScript either way. |
+| FBD010 | SUPERSEDED by rev.2 | Was: no SQL, browser-native storage only. |
+| FBD010 rev.2 | LOCKED | Local data: SQLite via Tauri SQL plugin (or plain JSON) — fine to decide freely, since this is the desktop-only build. A future web variant would use its own browser-storage adapter instead, not force this build's choice. |
 
 ---
 ## FILES
@@ -77,4 +80,4 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 80 / 120 — Budget remaining: 40
+# Lines: 83 / 120 — Budget remaining: 37

@@ -24,3 +24,11 @@ Bugs found       : none.
 Fixes applied    : none.
 Lessons recorded : This came out of two prior Q&A turns (does it need SQL? can it be a web app like Canva?) rather than a single ask — worth remembering the STACK/DECISIONS sections in FLUXBOARD.md are the durable record, not the chat history.
 Carried forward  : FBT001 (Milestone 1 core loop) unaffected — still headless, still the next active item. Milestone 2+ (rendering) will scaffold as a Vite web app instead of `npm create tauri-app`.
+
+## SES004 — 2026-09-03 — App shell reverted to Tauri desktop; web version deferred as separate variant
+Progress made    : Falcon reconsidered — rather than one codebase staying portable to both a desktop and a Canva-style web distribution, the plan is now: build Tauri desktop app first for personal/single-user use (free to use Tauri APIs normally, no artificial restriction), and treat a Canva-style hosted web version as a wholly separate future variant if/when wanted. FBD009/FBD010 superseded by rev.2 accordingly. The one thing carried forward from the SES003 discussion: keep Tauri-specific calls (SQL plugin, native dialogs) isolated behind one adapter in src/app rather than scattered through UI code, since src/core/src/floor/src/skin are already platform-agnostic — that's what would make a future web variant (FBP007) a swap-the-adapter job instead of a rewrite, at zero cost to the desktop build.
+Items moved      : FBD009 -> SUPERSEDED, FBD009 rev.2 added. FBD010 -> SUPERSEDED, FBD010 rev.2 added. New: FBP007.
+Bugs found       : none.
+Fixes applied    : none.
+Lessons recorded : Two consecutive supersessions in one day (SES003 then SES004) on the same decision — worth deciding app-shell distribution strategy before more build work happens on top of it, not mid-stream.
+Carried forward  : FBT001 (Milestone 1 core loop) still unaffected either way — it's pure src/core, no shell involved.
