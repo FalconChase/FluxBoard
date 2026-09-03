@@ -23,8 +23,9 @@ const trySpawn: PerTickHook = (node, state, outputEdges, dt, makeItemId) => {
   }
 
   const item: Item = { id: makeItemId(), type: itemType };
+  const spawnedCount = typeof state.spawnedCount === 'number' ? state.spawnedCount : 0;
   return {
-    newState: { ...state, cooldownRemaining: cooldown },
+    newState: { ...state, cooldownRemaining: cooldown, spawnedCount: spawnedCount + 1 },
     actions: [{ type: 'send', edgeId: target.id, item }],
   };
 };

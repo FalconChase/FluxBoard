@@ -39,7 +39,11 @@ const onItemArrival: OnItemArrival = (item, node, state, outputEdges) => {
     return { newState: state, actions: [], accepted: false };
   }
 
-  return { newState: state, actions: [{ type: 'forward', edgeId: edge.id, item }] };
+  const routedCount = typeof state.routedCount === 'number' ? state.routedCount : 0;
+  return {
+    newState: { ...state, routedCount: routedCount + 1 },
+    actions: [{ type: 'forward', edgeId: edge.id, item }],
+  };
 };
 
 export const sorterBehavior: NodeBehavior = { onItemArrival };

@@ -55,6 +55,7 @@ describe('distributor', () => {
 
     const r3 = handler(item('i3'), n, state, [eA, eB], arrival, makeItemId);
     expect(r3.actions).toEqual([{ type: 'forward', edgeId: 'eA', item: item('i3') }]);
+    expect(r3.newState.routedCount).toBe(3); // skin badge reads this (design doc §4.5)
   });
 
   it('broadcast mode forwards a fresh-id copy onto every active output edge', () => {
@@ -95,6 +96,7 @@ describe('sorter', () => {
 
     const result = handler(item('i1', 'bolt'), n, {}, [eDefault, eBolt], arrival, makeItemId);
     expect(result.actions).toEqual([{ type: 'forward', edgeId: 'eBolt', item: item('i1', 'bolt') }]);
+    expect(result.newState.routedCount).toBe(1); // skin badge reads this (design doc §4.5)
   });
 
   it('falls through to defaultPort when no rule matches', () => {
@@ -173,6 +175,8 @@ describe('mixer', () => {
     expect(r2.actions).toHaveLength(1);
     expect(r2.actions[0]).toMatchObject({ type: 'send', edgeId: 'eOut' });
     expect((r2.actions[0] as { item: Item }).item.type).toBe('combo');
+    expect(r1.newState.producedCount ?? 0).toBe(0); // recipe incomplete: no fire yet
+    expect(r2.newState.producedCount).toBe(1); // skin badge reads this (design doc §4.5)
   });
 
   it('checks output-edge availability BEFORE consuming inputs: a blocked recipe just waits', () => {

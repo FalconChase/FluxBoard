@@ -83,6 +83,11 @@ describe('SimEngine (Milestone 1): source -> sink', () => {
 
     const sinkState = engine.getNodeState('snk');
     expect(sinkState?.consumedCount).toBe(consumed);
+
+    // spawnedCount (design doc §4.5 — skin badge reads this directly,
+    // no event-stream tallying needed on the skin side).
+    const sourceState = engine.getNodeState('src');
+    expect(sourceState?.spawnedCount).toBe(spawned);
   });
 
   it('never deadlocks: the source keeps spawning across many ticks', () => {

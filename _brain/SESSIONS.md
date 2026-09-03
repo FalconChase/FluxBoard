@@ -88,3 +88,19 @@ Bugs found       : none.
 Fixes applied    : none.
 Lessons recorded : Tests against tick-driven backpressure scenarios (an item held at a node with no available output) are fragile if built through SimEngine end-to-end, because a 0-cooldown source keeps spawning every tick regardless of downstream backpressure and piles up multiple in-flight items rather than one — exact-count assertions break. Unit-testing each node's `onItemArrival`/`tryDrain` handler directly (they're pure functions) sidesteps this entirely and is more precise; reserve SimEngine-level tests for end-to-end routing/conservation checks with either a controlled cooldown or loose (>0, balanced-within-1) assertions.
 Carried forward  : FBT007 next — Falcon to decide whether Milestone 4 (skin/icon layer) or the FBP008 UI-chrome discussion (ribbons/tabs/panels/properties) comes first. Falcon to run `npm test` locally to confirm the new suite passes; no new dependencies were added so `npm install` is not needed first. Still not pushed to GitHub — Falcon pushes manually.
+
+## SES012 — 2026-09-03 — Milestone 3 verified: `npm test` passes on Falcon's machine
+Progress made    : Falcon ran `npm test` locally — all 5 test files / 38 cases pass, including the 17 new cases in `src/core/__tests__/nodeRegistry.test.ts` (SES011's estimate of "25 new cases" in the commit message was an overcount, not a bug — actual count is 17). Confirms Milestone 3's distributor/sorter/mixer/buffer logic is correct, not just type-clean.
+Items moved      : none (verification only).
+Bugs found       : none.
+Fixes applied    : none.
+Lessons recorded : Double-check `it()` counts before writing them into a commit message/session log rather than estimating.
+Carried forward  : FBT007 still next — Falcon to decide Milestone 4 (skin/icon layer) vs. the FBP008 UI-chrome discussion.
+
+## SES013 — 2026-09-03 — Milestone 4: skin layer
+Progress made    : Built src/skin/: `octagon.ts` (edge-aligned octagon vertices + 8 compass-direction port anchors, design doc §4.1), `nodeIcons.ts` + `nodeSkin.ts` (per-kind vector icon glyphs, badge count reader, `drawNode` combining octagon body + port hints + icon + unbounded counter badge, §4.5), `pathSkin.ts` (three-pass conveyor/glass-tube/transparent render stack + static/parallel/circling item orientation, §5.2/§5.3), `SkinConfig.ts` (skin-owned node z-order + edge skin store, mirrors FloorLayout). Wired into FluxCanvas (edge skin-under -> item tokens -> edge skin-over -> z-order-sorted nodes). Added small counters (source.spawnedCount, distributor/sorter.routedCount, mixer.producedCount) plus GraphModel.getAllEdges() so badges read existing logic-layer state rather than the skin layer tallying its own. Expanded App.tsx's demo graph (source -> distributor -> {buffer -> sink, sink}) to exercise all 3 edge styles and all 3 orientation modes at once.
+Items moved      : FBT007 (Milestone 4) -> DONE.
+Bugs found       : none.
+Fixes applied    : none.
+Lessons recorded : Kept the badge-count design principle explicit in code comments — a Skin-layer counter must read a Logic-layer field that already exists (or a trivially-added one, like sink's own consumedCount pattern), never compute its own tally from the event stream, or the "cosmetic view of logic state" invariant (design doc §2) gets fuzzy over time.
+Carried forward  : `npx tsc --noEmit` clean from the bridge; `npm test`/`tauri:dev` not runnable from the bridge post-`npm install` (known caveat) — Falcon to confirm visually via `npm run tauri:dev` and run `npm test` locally. FBT008 next — Falcon to choose Milestone 5 (interactive ports/wiring/config panels/z-order controls) vs. the FBP008 UI-chrome discussion. Still not pushed to GitHub — Falcon pushes manually.

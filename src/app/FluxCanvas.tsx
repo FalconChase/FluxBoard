@@ -4,10 +4,16 @@ import type { FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
+import type { NodeDef } from '../core/types';
+import type { Point } from '../floor/bezier';
+import type { SkinConfig } from '../skin/SkinConfig';
+import { drawNode } from '../skin/nodeSkin';
+import { drawPathUnder, drawPathOver, drawItemToken, getItemRotation } from '../skin/pathSkin';
 
 interface FluxCanvasProps {
   graph: GraphModel;
   floorLayout: FloorLayout;
+  skinConfig: SkinConfig;
   /** Fixed logic-tick interval — decoupled from render frame rate
    * (design doc §5.1). */
   tickIntervalMs?: number;
@@ -15,16 +21,24 @@ interface FluxCanvasProps {
 
 const GRID_SPACING = 64;
 const ITEM_RADIUS = 7;
-const NODE_RADIUS = 18;
+const NODE_RADIUS = 22;
+const ITEM_FILL = '#2ecc71';
+const ITEM_STROKE = '#1c8a4f';
 
 /**
- * Milestone 2: infinite canvas (pan/zoom/culling) rendering the current
- * item(s) on a "transparent"-style path (design doc §5.2 — transparent
- * is the base state, so no path skin is drawn, only the item tokens
- * themselves). Node markers here are schematic placeholders, not the
- * octagon/icon skin layer that lands later (§9, Milestones 3-4).
+ * Milestone 4: skin layer wired into the canvas (design doc §9 step 4)
+ * — octagon node shapes with per-kind icons and unbounded counter
+ * badges (§4.1, §4.5), nodes sorted by skin-owned z-order, and the
+ * three-pass path render stack (skin-under -> item tokens -> skin-
+ * over, §5.2) for conveyor/glass-tube/transparent edge styles with
+ * static/parallel/circling item orientation (§5.3).
+ *
+ * Floor-layer geometry/camera (Milestone 2) and the full node
+ * registry (Milestone 3) are unchanged by this — this file only
+ * changes HOW things are painted, never where they are or what the
+ * simulation does.
  */
-export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCanvasProps) {
+export function FluxCanvas({ graph, floorLayout, skinConfig, tickIntervalMs = 400 }: FluxCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const driverRef = useRef<InterpolatedSimDriver | null>(null);
   const [isRunning, setIsRunning] = useState(true);
@@ -61,6 +75,7 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
     }
 
     let raf = 0;
+    let startMs: number | null = null;
 
     function resize(): void {
       const parent = canvas!.parentElement;
@@ -78,6 +93,8 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
 
     function frame(nowMs: number): void {
       driver.update(nowMs);
+      if (startMs === null) startMs = nowMs;
+      const elapsedMs = nowMs - startMs;
 
       const viewport: Viewport = { width: canvas!.clientWidth, height: canvas!.clientHeight };
       ctx!.clearRect(0, 0, viewport.width, viewport.height);
@@ -90,24 +107,20 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
       // visible world rect (design doc §3 — virtualization).
       const bounds = camera.getVisibleWorldBounds(viewport, NODE_RADIUS * 4);
 
-      for (const node of graph.getAllNodes()) {
-        const pos = floorLayout.getNodePosition(node.id);
-        if (!pos) continue;
-        if (pos.x < bounds.minX || pos.x > bounds.maxX || pos.y < bounds.minY || pos.y > bounds.maxY) continue;
-
-        const screen = camera.worldToScreen(pos, viewport);
-        const r = NODE_RADIUS * camera.zoom;
-        ctx!.beginPath();
-        ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
-        ctx!.fillStyle = node.kind === 'source' ? '#3d7fff' : '#ff5d5d';
-        ctx!.fill();
-        ctx!.fillStyle = '#fff';
-        ctx!.font = `${Math.max(8, 11 * camera.zoom)}px system-ui, sans-serif`;
-        ctx!.textAlign = 'center';
-        ctx!.textBaseline = 'middle';
-        ctx!.fillText(node.kind, screen.x, screen.y);
+      // --- Three-pass path render stack (design doc §5.2) ---
+      // Pass 1: skin-under for every edge (belt body / tube fill),
+      // batched across all edges before any item is drawn.
+      const edges = graph.getAllEdges();
+      for (const edge of edges) {
+        const curve = floorLayout.getEdgeCurve(edge.id);
+        if (!curve) continue;
+        const skin = skinConfig.getEdgeSkin(edge.id);
+        const beltPhase = (elapsedMs / 1000) * edge.flowRate * curve.totalLength;
+        drawPathUnder(ctx!, curve, camera, viewport, skin, beltPhase);
       }
 
+      // Pass 2: item tokens — always drawn on the transparent movement
+      // layer, regardless of the edge's style.
       for (const renderItem of driver.getRenderItems()) {
         const curve = floorLayout.getEdgeCurve(renderItem.edgeId);
         if (!curve) continue;
@@ -120,15 +133,38 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
         ) {
           continue;
         }
+        const skin = skinConfig.getEdgeSkin(renderItem.edgeId);
+        const rotation = getItemRotation(skin.itemOrientation, curve, renderItem.progress, elapsedMs, skin.spinSpeed);
         const screen = camera.worldToScreen(worldPoint, viewport);
-        const r = ITEM_RADIUS * camera.zoom;
-        ctx!.beginPath();
-        ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
-        ctx!.fillStyle = '#2ecc71';
-        ctx!.fill();
-        ctx!.strokeStyle = '#1c8a4f';
-        ctx!.lineWidth = 1.5;
-        ctx!.stroke();
+        drawItemToken(ctx!, screen, ITEM_RADIUS * camera.zoom, rotation, ITEM_FILL, ITEM_STROKE);
+      }
+
+      // Pass 3: skin-over for every edge (tube boundary/highlight),
+      // painted after items so a glass tube reads as translucent
+      // around them. Empty for conveyor/transparent.
+      for (const edge of edges) {
+        const curve = floorLayout.getEdgeCurve(edge.id);
+        if (!curve) continue;
+        const skin = skinConfig.getEdgeSkin(edge.id);
+        drawPathOver(ctx!, curve, camera, viewport, skin);
+      }
+
+      // --- Nodes: octagon body + icon + badge, sorted by skin-owned
+      // z-order (design doc §4.1, §4.5) so higher zIndex paints last. ---
+      const visibleNodes: { node: NodeDef; pos: Point }[] = [];
+      for (const node of graph.getAllNodes()) {
+        const pos = floorLayout.getNodePosition(node.id);
+        if (!pos) continue;
+        if (pos.x < bounds.minX || pos.x > bounds.maxX || pos.y < bounds.minY || pos.y > bounds.maxY) continue;
+        visibleNodes.push({ node, pos });
+      }
+      visibleNodes.sort((a, b) => skinConfig.getNodeZIndex(a.node.id) - skinConfig.getNodeZIndex(b.node.id));
+
+      for (const { node, pos } of visibleNodes) {
+        const screen = camera.worldToScreen(pos, viewport);
+        const r = NODE_RADIUS * camera.zoom;
+        const state = engine.getNodeState(node.id) ?? {};
+        drawNode(ctx!, node, state, screen, r, camera.zoom);
       }
 
       raf = requestAnimationFrame(frame);
@@ -179,7 +215,7 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
       window.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('wheel', onWheel);
     };
-  }, [graph, floorLayout, tickIntervalMs]);
+  }, [graph, floorLayout, skinConfig, tickIntervalMs]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

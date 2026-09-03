@@ -48,6 +48,13 @@ export class GraphModel {
     return [...this.nodes.values()];
   }
 
+  /** All edges — the query the skin/floor renderers need to draw path
+   * geometry and styling (design doc §5, §9 step 4). Read-only, same
+   * spirit as getAllNodes(). */
+  getAllEdges(): EdgeDef[] {
+    return [...this.edges.values()];
+  }
+
   /** Outgoing edges from a node — the query SimEngine needs to route items. */
   outputEdges(nodeId: NodeId): EdgeDef[] {
     return (this.outEdgesByNode.get(nodeId) ?? []).map((id) => this.edges.get(id)!);

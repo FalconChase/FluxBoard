@@ -23,19 +23,21 @@ const onItemArrival: OnItemArrival = (item, node, state, outputEdges, _arrivalEd
 
   const mode = node.config.mode === 'broadcast' ? 'broadcast' : 'roundRobin';
 
+  const routedCount = typeof state.routedCount === 'number' ? state.routedCount : 0;
+
   if (mode === 'broadcast') {
     const actions = active.map((edge) => ({
       type: 'forward' as const,
       edgeId: edge.id,
       item: { id: makeItemId(), type: item.type } as Item,
     }));
-    return { newState: state, actions };
+    return { newState: { ...state, routedCount: routedCount + 1 }, actions };
   }
 
   const rrIndex = typeof state.rrIndex === 'number' ? state.rrIndex : 0;
   const target = active[rrIndex % active.length]!;
   return {
-    newState: { ...state, rrIndex: (rrIndex + 1) % active.length },
+    newState: { ...state, rrIndex: (rrIndex + 1) % active.length, routedCount: routedCount + 1 },
     actions: [{ type: 'forward', edgeId: target.id, item }],
   };
 };

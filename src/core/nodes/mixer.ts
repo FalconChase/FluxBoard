@@ -53,9 +53,10 @@ const onItemArrival: OnItemArrival = (item, node, state, outputEdges, arrivalEdg
   }
   const outputType = typeof node.config.outputType === 'string' ? node.config.outputType : 'item';
   const newItem: Item = { id: makeItemId(), type: outputType };
+  const producedCount = typeof state.producedCount === 'number' ? state.producedCount : 0;
 
   return {
-    newState: { ...state, buffers },
+    newState: { ...state, buffers, producedCount: producedCount + 1 },
     actions: [{ type: 'send', edgeId: outEdge.id, item: newItem }],
   };
 };

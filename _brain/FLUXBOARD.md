@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1, 2 and 3 DONE. src-tauri/ scaffolded and verified working on Falcon's machine; RUN/HOLD toggle added on the canvas. Milestone 3 (full node registry: distributor, sorter, mixer, buffer/overflow) implemented against the shared onItemArrival contract — still schematic rendering only, per Falcon's own confirmation this is expected. UI chrome (FBP008) discussion still deferred until Falcon opts back in.
+Milestones 1-4 DONE. src-tauri/ verified working; RUN/HOLD toggle on the canvas. Milestone 4 (skin layer: octagon shapes, per-kind icons, unbounded counter badges, conveyor/glass-tube/transparent path render stack, item orientation) implemented and wired into FluxCanvas — visually verified pending Falcon's local confirmation. UI chrome (FBP008) discussion still deferred until Falcon opts back in.
 
 ---
 ## STATE
@@ -44,7 +44,7 @@ Milestones 1, 2 and 3 DONE. src-tauri/ scaffolded and verified working on Falcon
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| FBT007 | HIGH | Milestone 4 — skin/icon layer (octagon node shapes, item/path visuals per design doc §4.1, §5.2) OR the UI chrome discussion (FBP008) — Falcon to choose which comes first. | — |
+| FBT008 | HIGH | Milestone 5 (interactive octagon port sockets: drag-to-connect wiring, config panels — mixer recipes/sorter rules/edge gates, interactive z-order controls) OR the deferred UI chrome discussion (FBP008) — Falcon to choose which comes first. | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
@@ -55,7 +55,8 @@ Milestones 1, 2 and 3 DONE. src-tauri/ scaffolded and verified working on Falcon
 | FBT004 | — | Scaffold src-tauri/ (Tauri desktop wrapper) via `tauri init` — devUrl/frontendDist wired to the existing Vite app, identifier set, Cargo.toml details filled in | SES008 |
 | FBT005 | — | Verified `npm run tauri:dev` opens the actual FluxBoard PC desktop window on Falcon's machine, rendering the Milestone 2 canvas correctly. Cargo.lock committed. | SES009 |
 | FBT006 | — | RUN/HOLD button on the canvas: `InterpolatedSimDriver.pause()/resume()/isRunning()`, freezes items in place, resumes without a jump. | SES010 |
-| FBT003 | — | Milestone 3 — full node registry: `distributor` (round-robin/broadcast), `sorter` (first-match rules + unmatchedPolicy, resolves FBP003), `mixer` (per-port buffered recipe matching), `buffer` (capacity + block/divert overflow + continuous tryDrain). Extended the shared contract (`accepted?`, `'forward'` action, `arrivalEdge`+`makeItemId` params, `tryDrain` hook). 25 new vitest cases. | SES011 |
+| FBT003 | — | Milestone 3 — full node registry: `distributor` (round-robin/broadcast), `sorter` (first-match rules + unmatchedPolicy, resolves FBP003), `mixer` (per-port buffered recipe matching), `buffer` (capacity + block/divert overflow + continuous tryDrain). Extended the shared contract (`accepted?`, `'forward'` action, `arrivalEdge`+`makeItemId` params, `tryDrain` hook). 17 new vitest cases (verified via `npm test`, SES012). | SES011 |
+| FBT007 | — | Milestone 4 — skin layer: octagon shapes (edge-aligned ports, §4.1), per-kind icons + unbounded counter badges (§4.5, read each node's own existing runtime counters, no separate tally), z-order-sortable node draw, three-pass conveyor/glass-tube/transparent path stack + static/parallel/circling item orientation (§5.2, §5.3). Small counters added to source/distributor/sorter/mixer state; `GraphModel.getAllEdges()`. Demo graph expanded to exercise all edge styles + orientation modes. | SES013 |
 
 ---
 ## DECISIONS
@@ -87,4 +88,4 @@ Milestones 1, 2 and 3 DONE. src-tauri/ scaffolded and verified working on Falcon
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 90 / 120 — Budget remaining: 30
+# Lines: 91 / 120 — Budget remaining: 29
