@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1 and 2 DONE, src-tauri/ scaffolded and verified working on Falcon's machine. Added a RUN/HOLD toggle button on the canvas (`InterpolatedSimDriver.pause()/resume()`, freezes item progress with no jump on resume) since the animation previously had no way to stop — Falcon's feedback after seeing it running. Milestone 3 (full node registry) not yet started. Milestone 3 (full node registry) not yet started.
+Milestones 1, 2 and 3 DONE. src-tauri/ scaffolded and verified working on Falcon's machine; RUN/HOLD toggle added on the canvas. Milestone 3 (full node registry: distributor, sorter, mixer, buffer/overflow) implemented against the shared onItemArrival contract — still schematic rendering only, per Falcon's own confirmation this is expected. UI chrome (FBP008) discussion still deferred until Falcon opts back in.
 
 ---
 ## STATE
@@ -44,7 +44,7 @@ Milestones 1 and 2 DONE, src-tauri/ scaffolded and verified working on Falcon's 
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| FBT003 | HIGH | Milestone 3 — full node registry: distributor, sorter, mixer, buffer/overflow node kinds against the shared onItemArrival contract, still schematic rendering only (§9). | — |
+| FBT007 | HIGH | Milestone 4 — skin/icon layer (octagon node shapes, item/path visuals per design doc §4.1, §5.2) OR the UI chrome discussion (FBP008) — Falcon to choose which comes first. | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
@@ -55,6 +55,7 @@ Milestones 1 and 2 DONE, src-tauri/ scaffolded and verified working on Falcon's 
 | FBT004 | — | Scaffold src-tauri/ (Tauri desktop wrapper) via `tauri init` — devUrl/frontendDist wired to the existing Vite app, identifier set, Cargo.toml details filled in | SES008 |
 | FBT005 | — | Verified `npm run tauri:dev` opens the actual FluxBoard PC desktop window on Falcon's machine, rendering the Milestone 2 canvas correctly. Cargo.lock committed. | SES009 |
 | FBT006 | — | RUN/HOLD button on the canvas: `InterpolatedSimDriver.pause()/resume()/isRunning()`, freezes items in place, resumes without a jump. | SES010 |
+| FBT003 | — | Milestone 3 — full node registry: `distributor` (round-robin/broadcast), `sorter` (first-match rules + unmatchedPolicy, resolves FBP003), `mixer` (per-port buffered recipe matching), `buffer` (capacity + block/divert overflow + continuous tryDrain). Extended the shared contract (`accepted?`, `'forward'` action, `arrivalEdge`+`makeItemId` params, `tryDrain` hook). 25 new vitest cases. | SES011 |
 
 ---
 ## DECISIONS
@@ -86,4 +87,4 @@ Milestones 1 and 2 DONE, src-tauri/ scaffolded and verified working on Falcon's 
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 89 / 120 — Budget remaining: 31
+# Lines: 90 / 120 — Budget remaining: 30
