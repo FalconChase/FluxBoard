@@ -1,6 +1,8 @@
 import { useState, type CSSProperties } from 'react';
 import { GraphModel } from '../core/GraphModel';
 import type { EdgeDef, NodeDef } from '../core/types';
+import { getPortCapacity } from '../core/nodes/portCapacity';
+import type { FloorLayout } from '../floor/floorLayout';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
 import type { Selection } from './selection';
@@ -9,6 +11,7 @@ interface PropertiesPanelProps {
   selection: Selection | null;
   graph: GraphModel;
   skinConfig: SkinConfig;
+  floorLayout: FloorLayout;
   /** Deletes whatever is currently selected (node — cascading to its
    * edges — or edge). App.tsx owns the actual GraphModel/FloorLayout/
    * SkinConfig cleanup and the Delete/Backspace shortcut; this panel
@@ -62,6 +65,7 @@ export function PropertiesPanel({
   selection,
   graph,
   skinConfig,
+  floorLayout,
   onDelete,
   gridSpacing,
   onGridSpacingChange,
@@ -106,7 +110,7 @@ export function PropertiesPanel({
           </p>
         )}
         {selection?.type === 'node' && (
-          <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
+          <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} floorLayout={floorLayout} onDelete={onDelete} />
         )}
         {selection?.type === 'edge' && (
           <EdgeProperties edgeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
@@ -209,11 +213,13 @@ function NodeProperties({
   nodeId,
   graph,
   skinConfig,
+  floorLayout,
   onDelete,
 }: {
   nodeId: string;
   graph: GraphModel;
   skinConfig: SkinConfig;
+  floorLayout: FloorLayout;
   onDelete: () => void;
 }) {
   const node = graph.getNode(nodeId);
@@ -237,6 +243,8 @@ function NodeProperties({
         <p style={{ fontSize: 12, color: '#8a8a93' }}>Sink has nothing to configure — it just consumes.</p>
       )}
 
+      <SingleOutputSidePicker nodeId={nodeId} kind={node.kind} graph={graph} floorLayout={floorLayout} />
+
       <div style={sectionTitleStyle}>Z-order</div>
       <ZOrderButtons nodeId={nodeId} graph={graph} skinConfig={skinConfig} />
 
@@ -252,6 +260,80 @@ function NodeProperties({
         Delete node
       </button>
     </div>
+  );
+}
+
+/** "Toggle which side to output" (Falcon, 2026-09-03) — for a kind
+ * whose nature caps it to exactly one output (source, mixer — see
+ * portCapacity.ts), lets the user reassign that single output's
+ * anchor directly instead of redoing the drag-to-wire gesture. Only
+ * renders once the node actually has its one output wired — nothing
+ * to point at a side before that. Compass layout matches
+ * skin/octagon.ts's anchor convention (0=E,1=SE,2=S,3=SW,4=W,5=NW,
+ * 6=N,7=NE). */
+function SingleOutputSidePicker({
+  nodeId,
+  kind,
+  graph,
+  floorLayout,
+}: {
+  nodeId: string;
+  kind: NodeDef['kind'];
+  graph: GraphModel;
+  floorLayout: FloorLayout;
+}) {
+  const capacity = getPortCapacity(kind);
+  const outputEdges = graph.outputEdges(nodeId);
+  const [, forceRender] = useState(0);
+
+  if (capacity.maxOutputs !== 1 || outputEdges.length !== 1) return null;
+  const edge = outputEdges[0]!;
+  const anchors = floorLayout.getEdgeAnchors(edge.id);
+  if (!anchors) return null;
+
+  // [label, anchorIndex] in visual reading order for a 3x3 compass
+  // grid, center cell left empty.
+  const COMPASS: (readonly [string, number] | null)[] = [
+    ['NW', 5], ['N', 6], ['NE', 7],
+    ['W', 4], null, ['E', 0],
+    ['SW', 3], ['S', 2], ['SE', 1],
+  ];
+
+  function pick(anchorIndex: number): void {
+    floorLayout.reassignAnchor(edge!.id, 'source', anchorIndex);
+    forceRender((n) => n + 1); // FloorLayout mutates directly (§4.6) — nudge this panel to reread it
+  }
+
+  return (
+    <>
+      <div style={sectionTitleStyle}>Output side</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, width: 108, marginBottom: 4 }}>
+        {COMPASS.map((cell, i) => {
+          if (!cell) return <div key={`empty-${i}`} />;
+          const [label, anchorIndex] = cell;
+          const active = anchorIndex === anchors.sourceAnchor;
+          return (
+            <button
+              key={label}
+              type="button"
+              onClick={() => pick(anchorIndex)}
+              style={{
+                padding: '5px 0',
+                fontSize: 10,
+                fontWeight: 700,
+                borderRadius: 5,
+                border: '1px solid ' + (active ? '#2563eb' : '#d8d7dd'),
+                background: active ? '#2563eb' : '#f6f6f8',
+                color: active ? '#fff' : '#3c3c43',
+                cursor: 'pointer',
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
 

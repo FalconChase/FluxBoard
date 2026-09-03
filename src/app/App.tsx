@@ -5,6 +5,7 @@ import { GraphModel } from '../core/GraphModel';
 import type { EdgeId, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import { SkinConfig } from '../skin/SkinConfig';
+import { getPortCapacity } from '../core/nodes/portCapacity';
 import type { EdgeStyle } from '../skin/pathSkin';
 import { LeftPanel, type LeftPanelTab } from './LeftPanel';
 import { PropertiesPanel } from './PropertiesPanel';
@@ -239,6 +240,22 @@ export function App() {
     if (!floorLayout.hasFreeAnchorSlot(sourceNodeId) || !floorLayout.hasFreeAnchorSlot(targetNodeId)) {
       return;
     }
+
+    // Per-kind "nature" caps (Falcon, 2026-09-03: a source only ever
+    // has one output) — also checked before creating anything, same
+    // silent-rejection style as the anchor cap above.
+    const sourceNode = graph.getNode(sourceNodeId);
+    const targetNode = graph.getNode(targetNodeId);
+    if (!sourceNode || !targetNode) return;
+    const sourceCap = getPortCapacity(sourceNode.kind);
+    const targetCap = getPortCapacity(targetNode.kind);
+    if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
+      return;
+    }
+    if (targetCap.maxInputs !== undefined && graph.inputEdges(targetNodeId).length >= targetCap.maxInputs) {
+      return;
+    }
+
     const id = `user-edge-${nextIdRef.current++}`;
     graph.addEdge({
       id,
@@ -362,6 +379,7 @@ export function App() {
           selection={selection}
           graph={graph}
           skinConfig={skinConfig}
+          floorLayout={floorLayout}
           onDelete={handleDeleteSelection}
           gridSpacing={gridSpacing}
           onGridSpacingChange={setGridSpacing}

@@ -117,4 +117,14 @@ describe('GraphModel', () => {
     expect(graph.removeNode('nope')).toEqual([]);
     expect(graph.getAllEdges().map((e) => e.id)).toEqual(['e1']);
   });
+
+  it('inputEdges returns only edges targeting the given node', () => {
+    const graph = buildGraph();
+    graph.addNode({ id: 'snk2', kind: 'sink', config: {} });
+    graph.addEdge({ id: 'e2', source: 'src', target: 'snk2', sourcePort: 1, targetPort: 0, flowRate: 0.1, active: true });
+
+    expect(graph.inputEdges('snk').map((e) => e.id)).toEqual(['e1']);
+    expect(graph.inputEdges('snk2').map((e) => e.id)).toEqual(['e2']);
+    expect(graph.inputEdges('src')).toEqual([]); // src is nobody's target
+  });
 });

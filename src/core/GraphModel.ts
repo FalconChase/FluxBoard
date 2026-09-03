@@ -60,6 +60,15 @@ export class GraphModel {
     return (this.outEdgesByNode.get(nodeId) ?? []).map((id) => this.edges.get(id)!);
   }
 
+  /** Incoming edges to a node — no index kept for this direction (only
+   * outputEdges is on the hot SimEngine path), so this scans all edges.
+   * Cheap enough for wiring-time checks (portCapacity.ts's per-kind
+   * input caps) and other occasional callers; not meant for a per-tick
+   * hot path the way outputEdges is. */
+  inputEdges(nodeId: NodeId): EdgeDef[] {
+    return this.getAllEdges().filter((e) => e.target === nodeId);
+  }
+
   /** Flow gate toggle (design doc §7) — preserves flowRate. */
   setEdgeActive(edgeId: EdgeId, active: boolean): void {
     const edge = this.edges.get(edgeId);

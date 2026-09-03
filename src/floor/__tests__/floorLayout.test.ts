@@ -136,4 +136,43 @@ describe('FloorLayout', () => {
     layout.setNodePosition('a', { x: 0, y: 0 });
     expect(() => layout.setEdgeCurve('e1', 'a', 'b')).toThrow();
   });
+
+  it('reassignAnchor moves one end of an existing edge to a different side and rebuilds the curve there', () => {
+    const layout = buildLayout(); // a=(0,0), b=(100,0) -> a's anchor auto-picked as 0 (east)
+    expect(layout.getEdgeAnchors('e1')).toEqual({ sourceAnchor: 0, targetAnchor: 4 });
+
+    expect(layout.reassignAnchor('e1', 'source', 6)).toBe(true); // 6 = north
+    expect(layout.getEdgeAnchors('e1')).toEqual({ sourceAnchor: 6, targetAnchor: 4 });
+
+    const apothem = NODE_RADIUS * Math.cos(Math.PI / 8);
+    const start = layout.getEdgeCurve('e1')!.getPointAtProgress(0);
+    expect(start.x).toBeCloseTo(0);
+    expect(start.y).toBeCloseTo(-apothem); // north is -y in screen space
+  });
+
+  it('reassignAnchor frees the old side, so a new edge can take it', () => {
+    const layout = buildLayout();
+    layout.reassignAnchor('e1', 'source', 6); // a's east side (0) is now free
+
+    layout.setNodePosition('c', { x: 300, y: 0 });
+    expect(layout.setEdgeCurve('e2', 'a', 'c', 0.15)).toBe(true);
+    expect(layout.getEdgeAnchors('e2')!.sourceAnchor).toBe(0); // took the freed east slot
+  });
+
+  it('reassignAnchor refuses a side already occupied by a different edge, leaving the original untouched', () => {
+    const layout = buildLayout();
+    layout.setNodePosition('c', { x: 0, y: -500 }); // due north of a
+    layout.setEdgeCurve('e2', 'a', 'c', 0.15); // takes a's north anchor (6)
+
+    expect(layout.reassignAnchor('e1', 'source', 6)).toBe(false);
+    expect(layout.getEdgeAnchors('e1')).toEqual({ sourceAnchor: 0, targetAnchor: 4 }); // unchanged
+  });
+
+  it('reassignAnchor on an edge with no recorded anchors returns false', () => {
+    const layout = new FloorLayout();
+    layout.setNodePosition('a', { x: 0, y: 0 });
+    layout.setNodePosition('b', { x: 100, y: 0 });
+    layout.recomputeEdgeCurve('e1', 'a', 'b'); // never went through setEdgeCurve -> no anchors
+    expect(layout.reassignAnchor('e1', 'source', 6)).toBe(false);
+  });
 });

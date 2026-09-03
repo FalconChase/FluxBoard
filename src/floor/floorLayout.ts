@@ -175,6 +175,49 @@ export class FloorLayout {
     return this.edgeCurves.get(edgeId);
   }
 
+  /** Which anchor (0-7) an edge is attached to at each end — read-only
+   * view for UI that wants to show/change it (properties panel's
+   * side-picker for a single-socket kind, Falcon 2026-09-03). */
+  getEdgeAnchors(edgeId: EdgeId): { sourceAnchor: number; targetAnchor: number } | undefined {
+    const anchors = this.edgeAnchors.get(edgeId);
+    if (!anchors) return undefined;
+    return { sourceAnchor: anchors.sourceAnchor, targetAnchor: anchors.targetAnchor };
+  }
+
+  /** Moves one end of an already-wired edge to a specific anchor
+   * (0-7) on its own node — the "toggle which side to output" control
+   * for a node whose kind only ever has one socket of a given role
+   * (e.g. source's single output), so the user doesn't need to redo
+   * the drag gesture just to change sides. Returns false (no change)
+   * if the edge has no recorded anchors, or if the requested side is
+   * already occupied by a DIFFERENT edge on that node. */
+  reassignAnchor(edgeId: EdgeId, end: 'source' | 'target', newAnchorIndex: number): boolean {
+    const anchors = this.edgeAnchors.get(edgeId);
+    if (!anchors) return false;
+
+    const nodeId = end === 'source' ? anchors.sourceNodeId : anchors.targetNodeId;
+    const oldAnchorIndex = end === 'source' ? anchors.sourceAnchor : anchors.targetAnchor;
+    if (oldAnchorIndex === newAnchorIndex) return true;
+
+    const used = this.nodeAnchorUsage.get(nodeId);
+    if (used?.has(newAnchorIndex)) return false;
+
+    used?.delete(oldAnchorIndex);
+    this.occupyAnchor(nodeId, newAnchorIndex);
+    if (end === 'source') anchors.sourceAnchor = newAnchorIndex;
+    else anchors.targetAnchor = newAnchorIndex;
+
+    const bow = this.edgeBow.get(edgeId) ?? 0.15;
+    const fromPos = this.nodePositions.get(anchors.sourceNodeId);
+    const toPos = this.nodePositions.get(anchors.targetNodeId);
+    if (fromPos && toPos) {
+      const fromPoint = octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor);
+      const toPoint = octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor);
+      this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromPoint, toPoint, bow)));
+    }
+    return true;
+  }
+
   removeEdgeCurve(edgeId: EdgeId): void {
     this.releaseEdgeAnchors(edgeId);
     this.edgeCurves.delete(edgeId);
