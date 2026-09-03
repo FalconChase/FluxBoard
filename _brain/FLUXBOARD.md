@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1 and 2 DONE (see FBT001/FBT002 below). `src-tauri/` scaffolded this session (`npx tauri init`, identifier `com.corelogix.fluxboard`, devUrl -> Vite on :5173, frontendDist -> ../dist) — Falcon confirmed Rust 1.96.0 installed locally, but this bridge VM still has no cargo, so the Rust side has NOT been compiled/verified from here. FBT005: Falcon needs to run `npm run tauri:dev` locally and confirm a window opens before this counts as done. Milestone 3 (full node registry) not yet started.
+Milestones 1 and 2 DONE. `src-tauri/` scaffolded and VERIFIED: Falcon ran `npm run tauri:dev` on his own machine (after re-running `npm install` there — the bridge VM's own install had left Linux-platform binaries in node_modules, which don't work on Windows) and confirmed the actual FluxBoard PC desktop window opens, showing the Milestone 2 canvas with items gliding source->sink. Cargo.lock committed. Milestone 3 (full node registry) not yet started. Milestone 3 (full node registry) not yet started.
 
 ---
 ## STATE
@@ -44,7 +44,6 @@ Milestones 1 and 2 DONE (see FBT001/FBT002 below). `src-tauri/` scaffolded this 
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| FBT005 | HIGH | Verify src-tauri/ actually builds/runs: `npm run tauri:dev` on Falcon's real machine (Rust 1.96.0 confirmed installed). Commit the resulting Cargo.lock once it compiles. | — |
 | FBT003 | HIGH | Milestone 3 — full node registry: distributor, sorter, mixer, buffer/overflow node kinds against the shared onItemArrival contract, still schematic rendering only (§9). | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
@@ -54,6 +53,7 @@ Milestones 1 and 2 DONE (see FBT001/FBT002 below). `src-tauri/` scaffolded this 
 | FBT001 | — | Milestone 1 — `GraphModel` + `SimEngine` implemented (source/sink node kinds, sourceTrySpawn, sink onItemArrival), verified via vitest (item conservation, no deadlock, edge-gate hold/resume) and `scripts/simHarness.ts` console harness | SES006 |
 | FBT002 | — | Milestone 2 — flat canvas, one path: floor-layer curve/camera math + Vite/React canvas renderer (pan/zoom/culling, item gliding on transparent-style path), 20 vitest cases, visually verified | SES007 |
 | FBT004 | — | Scaffold src-tauri/ (Tauri desktop wrapper) via `tauri init` — devUrl/frontendDist wired to the existing Vite app, identifier set, Cargo.toml details filled in | SES008 |
+| FBT005 | — | Verified `npm run tauri:dev` opens the actual FluxBoard PC desktop window on Falcon's machine, rendering the Milestone 2 canvas correctly. Cargo.lock committed. | SES009 |
 
 ---
 ## DECISIONS
