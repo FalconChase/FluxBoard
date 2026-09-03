@@ -276,7 +276,7 @@ export function App() {
         ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
         : selection?.type === 'edge'
           ? 'Path selected — edit it in the properties panel, Delete to remove.'
-          : 'Click a node or path to select it, or choose something from the left panel to add.';
+          : 'Click a node or path to select it, choose something from the left panel to add, or Shift+drag from one node to another to connect them.';
 
   return (
     <div
