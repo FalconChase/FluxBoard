@@ -202,4 +202,52 @@ describe('FloorLayout', () => {
     const layout = new FloorLayout();
     expect(layout.getEdgeBow('nonexistent')).toBe(0.15);
   });
+
+  // restoreEdgeCurve (Falcon, 2026-09-03: persistence/save-load) — a
+  // reload needs an edge to land back on the EXACT anchors it was
+  // saved with, not just the nearest free ones setEdgeCurve would
+  // auto-pick.
+  describe('restoreEdgeCurve', () => {
+    it('rebuilds a curve at the exact requested anchors and bow', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('a', { x: 0, y: 0 });
+      layout.setNodePosition('b', { x: 100, y: 0 });
+      // Anchor 2 and 6 are NOT what setEdgeCurve would auto-pick for a
+      // due-east neighbor (that'd be 0/4) — proves this is exact, not nearest-free.
+      const ok = layout.restoreEdgeCurve('e1', 'a', 2, 'b', 6, 0.3);
+      expect(ok).toBe(true);
+      expect(layout.getEdgeAnchors('e1')).toEqual({ sourceAnchor: 2, targetAnchor: 6 });
+      expect(layout.getEdgeBow('e1')).toBe(0.3);
+      expect(layout.getEdgeCurve('e1')).toBeDefined();
+    });
+
+    it('returns false and books nothing when the requested anchor is already taken by a different edge', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('a', { x: 0, y: 0 });
+      layout.setNodePosition('b', { x: 100, y: 0 });
+      layout.setNodePosition('c', { x: 0, y: 100 });
+      layout.restoreEdgeCurve('e1', 'a', 2, 'b', 6, 0.3);
+      const ok = layout.restoreEdgeCurve('e2', 'a', 2, 'c', 5, 0.15); // a's anchor 2 already taken
+      expect(ok).toBe(false);
+      expect(layout.getEdgeAnchors('e2')).toBeUndefined();
+      // The original booking is untouched.
+      expect(layout.getEdgeAnchors('e1')).toEqual({ sourceAnchor: 2, targetAnchor: 6 });
+    });
+
+    it('is idempotent for the same edge id: re-restoring at the same anchors succeeds', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('a', { x: 0, y: 0 });
+      layout.setNodePosition('b', { x: 100, y: 0 });
+      layout.restoreEdgeCurve('e1', 'a', 2, 'b', 6, 0.3);
+      const ok = layout.restoreEdgeCurve('e1', 'a', 2, 'b', 6, 0.3);
+      expect(ok).toBe(true);
+      expect(layout.getEdgeAnchors('e1')).toEqual({ sourceAnchor: 2, targetAnchor: 6 });
+    });
+
+    it('throws if either node has no recorded position yet', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('a', { x: 0, y: 0 });
+      expect(() => layout.restoreEdgeCurve('e1', 'a', 0, 'missing', 4, 0.15)).toThrow();
+    });
+  });
 });

@@ -11,6 +11,7 @@ import { LeftPanel, type LeftPanelTab } from './LeftPanel';
 import { PropertiesPanel } from './PropertiesPanel';
 import type { Selection } from './selection';
 import { SketchLayer } from './sketchLayer';
+import { clearAllStores, loadFromDisk, populateState, saveToDisk, serializeState, type CanvasSettings } from './persistence';
 
 /**
  * Milestone 4 demo graph (design doc §9 step 4): source -> distributor
@@ -144,6 +145,21 @@ function defaultConfigFor(kind: NodeKind): Record<string, unknown> {
   }
 }
 
+/** After a load, later placements must not collide with an id
+ * already used in the save file — nextIdRef is one shared counter
+ * for nodes/edges/sketches (`user-node-N` / `user-edge-N` /
+ * `sketch-N`), so this scans every loaded id and fast-forwards the
+ * counter past whatever's highest already in use. */
+function advanceNextIdPast(ref: { current: number }, ids: string[]): void {
+  const pattern = /-(\d+)$/;
+  for (const id of ids) {
+    const match = pattern.exec(id);
+    if (!match) continue;
+    const n = Number(match[1]);
+    if (n >= ref.current) ref.current = n + 1;
+  }
+}
+
 export function App() {
   const graph = useMemo(() => buildDemoGraph(), []);
   const floorLayout = useMemo(() => buildDemoFloorLayout(), []);
@@ -180,6 +196,13 @@ export function App() {
   const [tickIntervalMs, setTickIntervalMs] = useState(400);
   const [isRunning, setIsRunning] = useState(true);
   const fluxCanvasRef = useRef<FluxCanvasHandle | null>(null);
+  // Read inside the autosave effect below without needing gridSpacing/
+  // tickIntervalMs in its deps (same "ref mirrors current state"
+  // convention FluxCanvas already uses for its interaction props).
+  const gridSpacingRef = useRef(gridSpacing);
+  gridSpacingRef.current = gridSpacing;
+  const tickIntervalMsRef = useRef(tickIntervalMs);
+  tickIntervalMsRef.current = tickIntervalMs;
 
   // Move/delete/snap feature set: Delete/Backspace removes whatever is
   // selected, F8 toggles snap-to-grid. Both are window-level so they
@@ -212,6 +235,74 @@ export function App() {
     // every render already (plain function, not memoized) — omitted
     // from deps deliberately, same reasoning FluxCanvas's own effect
     // documents for its interaction props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persistence (Falcon, 2026-09-03: "my progress lost or gets
+  // unsaved... why is this?"). On mount, load whatever was autosaved
+  // last time and replace the demo graph with it IN PLACE —
+  // clearAllStores empties, then populateState refills, the SAME
+  // graph/floorLayout/skinConfig/sketchLayer instances every other
+  // component already holds a reference to, rather than swapping in
+  // new ones (deliberate: avoids a null/loading React-state window and
+  // any risk to the keydown effect just above, which closes over these
+  // instances once at mount). No save yet — first run ever, or running
+  // outside the real Tauri shell via plain `npm run dev` — leaves the
+  // demo graph exactly as it was.
+  useEffect(() => {
+    let cancelled = false;
+    loadFromDisk().then((saved) => {
+      if (cancelled || !saved) return;
+      clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+      const settings = populateState(saved, graph, floorLayout, skinConfig, sketchLayer);
+      setGridSpacing(settings.gridSpacing);
+      setTickIntervalMs(settings.tickIntervalMs);
+      advanceNextIdPast(nextIdRef, [
+        ...saved.nodes.map((n) => n.id),
+        ...saved.edges.map((e) => e.id),
+        ...saved.sketches.map((s) => s.id),
+      ]);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // graph/floorLayout/skinConfig/sketchLayer are stable useMemo
+    // singletons (never reassigned) and nextIdRef is a ref — safe to
+    // omit, same reasoning the keydown effect above documents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Autosave: a periodic tick plus every "the person might be about
+  // to lose this" moment (tab/window hidden — covers minimizing, the
+  // case Falcon reported — and the page actually closing). Settings
+  // are read through the refs above so this effect never needs
+  // gridSpacing/tickIntervalMs in its deps and the interval never has
+  // to be torn down and restarted when they change.
+  useEffect(() => {
+    function doSave(): void {
+      const settings: CanvasSettings = {
+        gridSpacing: gridSpacingRef.current,
+        tickIntervalMs: tickIntervalMsRef.current,
+      };
+      const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+      void saveToDisk(saved);
+    }
+
+    const intervalId = window.setInterval(doSave, 3000);
+
+    function onVisibilityChange(): void {
+      if (document.visibilityState === 'hidden') doSave();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', doSave);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', doSave);
+    };
+    // graph/floorLayout/skinConfig/sketchLayer are stable singletons —
+    // safe to omit, same reasoning as the load effect just above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

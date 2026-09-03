@@ -17,6 +17,7 @@
     "sim:harness": "tsx scripts/simHarness.ts"
   },
   "dependencies": {
+    "@tauri-apps/plugin-fs": "^2.4.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

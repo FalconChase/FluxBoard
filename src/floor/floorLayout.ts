@@ -245,6 +245,45 @@ export class FloorLayout {
     this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromPoint, toPoint, bow)));
   }
 
+  /** Rebuilds an edge's curve at EXACT, caller-specified anchors
+   * rather than auto-picking the nearest free one — the save/load
+   * feature's hydration path (persistence.ts) needs this so a
+   * reloaded graph's paths land on the exact same physical sides they
+   * were saved with, not just "close enough." Both anchors must be
+   * free (or already booked to THIS edge, for idempotent re-hydration)
+   * — returns false and books nothing if either is taken by a
+   * different edge. */
+  restoreEdgeCurve(
+    edgeId: EdgeId,
+    fromNodeId: NodeId,
+    sourceAnchor: number,
+    toNodeId: NodeId,
+    targetAnchor: number,
+    bow: number,
+  ): boolean {
+    const from = this.nodePositions.get(fromNodeId);
+    const to = this.nodePositions.get(toNodeId);
+    if (!from || !to) {
+      throw new Error(`FloorLayout.restoreEdgeCurve: missing node position for edge "${edgeId}"`);
+    }
+
+    this.releaseEdgeAnchors(edgeId);
+
+    const sourceTaken = this.nodeAnchorUsage.get(fromNodeId)?.has(sourceAnchor);
+    const targetTaken = this.nodeAnchorUsage.get(toNodeId)?.has(targetAnchor);
+    if (sourceTaken || targetTaken) return false;
+
+    this.occupyAnchor(fromNodeId, sourceAnchor);
+    this.occupyAnchor(toNodeId, targetAnchor);
+    this.edgeAnchors.set(edgeId, { sourceNodeId: fromNodeId, sourceAnchor, targetNodeId: toNodeId, targetAnchor });
+
+    const fromAnchorPoint = octagonPortAnchor(from, NODE_RADIUS, sourceAnchor);
+    const toAnchorPoint = octagonPortAnchor(to, NODE_RADIUS, targetAnchor);
+    this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromAnchorPoint, toAnchorPoint, bow)));
+    this.edgeBow.set(edgeId, bow);
+    return true;
+  }
+
   removeEdgeCurve(edgeId: EdgeId): void {
     this.releaseEdgeAnchors(edgeId);
     this.edgeCurves.delete(edgeId);
