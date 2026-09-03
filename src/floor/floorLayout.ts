@@ -218,6 +218,33 @@ export class FloorLayout {
     return true;
   }
 
+  /** The bow an edge's curve was last built with — 0 means a
+   * straight line (Falcon, 2026-09-03: "linear" path type), any
+   * other value a gentle curve ("curve" path type, `curveBetween`'s
+   * own 0.15 cosmetic default when one hasn't been set explicitly). */
+  getEdgeBow(edgeId: EdgeId): number {
+    return this.edgeBow.get(edgeId) ?? 0.15;
+  }
+
+  /** Sets an edge's path SHAPE — 0 for a dead-straight "linear" path,
+   * any other value for a "curve" path (Falcon, 2026-09-03: "we
+   * should have a path type, the basic one is the linear type
+   * (straight line) and curve type"). Rebuilds the curve immediately
+   * from the edge's current anchors/node positions, same as
+   * `reassignAnchor` — a no-op on the curve itself if the edge has no
+   * recorded anchors yet (bow is still remembered for when it does). */
+  setEdgeBow(edgeId: EdgeId, bow: number): void {
+    this.edgeBow.set(edgeId, bow);
+    const anchors = this.edgeAnchors.get(edgeId);
+    if (!anchors) return;
+    const fromPos = this.nodePositions.get(anchors.sourceNodeId);
+    const toPos = this.nodePositions.get(anchors.targetNodeId);
+    if (!fromPos || !toPos) return;
+    const fromPoint = octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor);
+    const toPoint = octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor);
+    this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromPoint, toPoint, bow)));
+  }
+
   removeEdgeCurve(edgeId: EdgeId): void {
     this.releaseEdgeAnchors(edgeId);
     this.edgeCurves.delete(edgeId);

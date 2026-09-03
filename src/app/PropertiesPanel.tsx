@@ -116,7 +116,13 @@ export function PropertiesPanel({
           <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} floorLayout={floorLayout} onDelete={onDelete} />
         )}
         {selection?.type === 'edge' && (
-          <EdgeProperties edgeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
+          <EdgeProperties
+            edgeId={selection.id}
+            graph={graph}
+            skinConfig={skinConfig}
+            floorLayout={floorLayout}
+            onDelete={onDelete}
+          />
         )}
         {selection?.type === 'sketch' && (
           <SketchProperties sketchId={selection.id} sketchLayer={sketchLayer} onDelete={onDelete} />
@@ -721,11 +727,13 @@ function EdgeProperties({
   edgeId,
   graph,
   skinConfig,
+  floorLayout,
   onDelete,
 }: {
   edgeId: string;
   graph: GraphModel;
   skinConfig: SkinConfig;
+  floorLayout: FloorLayout;
   onDelete: () => void;
 }) {
   const edge = graph.getEdge(edgeId);
@@ -741,6 +749,9 @@ function EdgeProperties({
       <div style={sectionTitleStyle}>Logic (design doc §5.4)</div>
       <EdgeLogicFields edge={edge} graph={graph} />
 
+      <div style={sectionTitleStyle}>Path shape (design doc §5.1)</div>
+      <PathShapeField edgeId={edgeId} floorLayout={floorLayout} />
+
       <div style={sectionTitleStyle}>Skin (design doc §5.2, §5.3)</div>
       <EdgeSkinFields edgeId={edgeId} skinConfig={skinConfig} />
 
@@ -752,6 +763,38 @@ function EdgeProperties({
       >
         Delete edge
       </button>
+    </div>
+  );
+}
+
+/** Path type (Falcon, 2026-09-03: "the basic one is the linear type
+ * (straight line) and curve type") — a floor-layer geometry choice
+ * (design doc §5.1's curveBetween `bow` parameter), not a skin
+ * concern: bow=0 is a dead-straight line, any other value ("curve")
+ * is the gentle bend paths have always rendered with. Restoring
+ * "curve" uses curveBetween's own 0.15 cosmetic default rather than
+ * remembering whatever custom bow a path had before — there's no UI
+ * for arbitrary bow amounts yet, just the two named types Falcon
+ * asked for. */
+function PathShapeField({ edgeId, floorLayout }: { edgeId: string; floorLayout: FloorLayout }) {
+  const [bow, setBow] = useState(floorLayout.getEdgeBow(edgeId));
+  const pathType = bow === 0 ? 'linear' : 'curve';
+
+  return (
+    <div style={rowStyle}>
+      <label style={labelStyle}>Path type</label>
+      <select
+        value={pathType}
+        style={inputStyle}
+        onChange={(e) => {
+          const nextBow = e.target.value === 'linear' ? 0 : 0.15;
+          setBow(nextBow);
+          floorLayout.setEdgeBow(edgeId, nextBow);
+        }}
+      >
+        <option value="linear">Linear (straight)</option>
+        <option value="curve">Curve</option>
+      </select>
     </div>
   );
 }

@@ -175,4 +175,31 @@ describe('FloorLayout', () => {
     layout.recomputeEdgeCurve('e1', 'a', 'b'); // never went through setEdgeCurve -> no anchors
     expect(layout.reassignAnchor('e1', 'source', 6)).toBe(false);
   });
+
+  // Path type (Falcon, 2026-09-03): "linear" is bow=0 (a straight
+  // line), "curve" is any other bow.
+  it('setEdgeBow(0) straightens an existing curve to a flat line at its midpoint', () => {
+    const layout = buildLayout(); // built with bow 0.4 — a real curve
+    const before = layout.getEdgeCurve('e1')!.getPointAtProgress(0.5);
+    expect(before.y).not.toBeCloseTo(0, 5);
+
+    layout.setEdgeBow('e1', 0);
+    expect(layout.getEdgeBow('e1')).toBe(0);
+    const after = layout.getEdgeCurve('e1')!.getPointAtProgress(0.5);
+    expect(after.y).toBeCloseTo(0, 5); // straight line from (0,0) to (100,0)
+  });
+
+  it('setEdgeBow restores a curve after being set to linear', () => {
+    const layout = buildLayout();
+    layout.setEdgeBow('e1', 0);
+    layout.setEdgeBow('e1', 0.4);
+    expect(layout.getEdgeBow('e1')).toBe(0.4);
+    const point = layout.getEdgeCurve('e1')!.getPointAtProgress(0.5);
+    expect(point.y).not.toBeCloseTo(0, 5);
+  });
+
+  it('getEdgeBow defaults to 0.15 (curveBetween\'s own cosmetic default) for an edge with no bow recorded yet', () => {
+    const layout = new FloorLayout();
+    expect(layout.getEdgeBow('nonexistent')).toBe(0.15);
+  });
 });
