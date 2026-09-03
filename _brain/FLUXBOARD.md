@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, then with Falcon's wireframe UI chrome (tabbed left panel, PATHS palette, canvas/sim settings, bottom bar). Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
+Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, Falcon's wireframe UI chrome, then per-socket wiring (FBP009 fully resolved), path direction arrows, and storage-only node badges. Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
 
 ---
 ## STATE
@@ -44,7 +44,7 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| —  | —        | Falcon to try the wireframe UI chrome locally and decide what's next: spec the OBJECTS registry (FBP011), FBP009's remaining half (socket-precise wiring), Milestone 6 (isometric, stretch), or something else entirely. | — |
+| —  | —        | Falcon to try the latest build locally (per-socket wiring, direction arrows, badge changes) and decide what's next: spec the OBJECTS registry (FBP011), Milestone 6 (isometric, stretch), or something else entirely. | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
@@ -60,6 +60,7 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | FBT008 | — | Milestone 5, minimal-chrome scope (FBP008 resolved): selection + hit-testing (`isPointInOctagon`), left-docked node palette (click-to-place), right-docked properties panel (kind-specific logic config, edge ports/flowRate/gate, edge skin, node z-order), body-to-body drag wiring. `GraphModel.updateNodeConfig`/`setEdgeFlowRate`/`updateEdgePorts` added. Precise per-socket wiring + node/edge deletion deferred (FBP009). | SES016 |
 | FBT009 | — | Move/lock/delete/snap-to-grid: plain drag now moves a node (Shift+drag wires instead), lock toggle blocks it, Delete/Backspace + panel button remove a node (cascading its edges) or edge, F8/header toggle snaps drag+placement to the grid. `GraphModel.removeNode/removeEdge`, `FloorLayout.removeNodePosition/recomputeEdgeCurve/removeEdgeCurve`, `SkinConfig.getNodeLocked/setNodeLocked/removeNode/removeEdge`, lock badge icon. Resolves FBP009's deletion half; socket-precise wiring still deferred. | SES017 |
 | FBT010 | — | UI-chrome build from Falcon's wireframe (claude/build-log.md): left panel is now NODES/PATHS/OBJECTS tabs (PATHS = new palette of the 3 edge styles, arm-then-click-an-edge to apply, mirrors node placement; OBJECTS = "coming soon" placeholder pending spec). Properties panel gained an always-visible "Canvas & simulation" section (grid spacing, sim tick interval) below the selection editor, surviving selection changes via an inner remount key. Bottom bar relocates Run/Hold and adds a contextual instruction strip, replacing the old floating placement hint. | SES018 |
+| FBT011 | — | Per-socket wiring (FBP009 fully resolved): 8 octagon-side anchors per node, a path attaches to the nearest free one at each end (max 8 per node), `FloorLayout` owns the booking independent of GraphModel's routing ports. Path direction arrows (always drawn, even on 'transparent' style). Node badges now buffer-only (Falcon: only a genuine "silo" node should show a count) — `getBadgeCount` returns undefined for every other kind; underlying RuntimeState counters untouched. | SES019 |
 
 ---
 ## DECISIONS
@@ -91,4 +92,4 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 94 / 120 — Budget remaining: 26
+# Lines: 95 / 120 — Budget remaining: 25

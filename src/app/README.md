@@ -13,24 +13,29 @@ just don't paint it out of reach for free.
 ## Status
 
 Milestones 1-5 (minimal-chrome scope, extended with move/lock/delete/
-snap-to-grid — SES017, then Falcon's wireframe UI chrome — SES018)
-done. `src-tauri/` scaffolded and verified working on Falcon's own
-machine.
+snap-to-grid — SES017, Falcon's wireframe UI chrome — SES018, then
+per-socket wiring/direction arrows/storage-only badges — SES019) done.
+`src-tauri/` scaffolded and verified working on Falcon's own machine.
 
 - `main.tsx` — entry.
 - `App.tsx` — demo graph/floor layout/skin config + the three-pane
   layout (left panel | canvas | properties) + a bottom bar (Run/Hold +
   a contextual instruction strip) + selection/placement/edge-style-
   arming/snap-to-grid/canvas-settings state + the window-level
-  Delete/Backspace and F8 keyboard shortcuts.
+  Delete/Backspace and F8 keyboard shortcuts. `handleCreateEdge` checks
+  `FloorLayout.hasFreeAnchorSlot` on both nodes before ever creating a
+  GraphModel edge, so a full node (8 paths already) silently rejects a
+  9th.
 - `FluxCanvas.tsx` — the Canvas2D renderer: pan/zoom camera, culling,
-  the skin layer's three-pass path render stack, octagon nodes with
-  icons/badges/lock indicator, click-to-select hit-testing, click-to-
-  place node creation (snap-to-grid aware), plain-drag to move a node
-  (no-op if locked, snap-to-grid aware, recomputes every touching
-  edge's curve live), Shift+drag for body-to-body wiring, and click-
-  an-edge to apply an armed PATHS style. Exposes `toggleRunning()` via
-  `forwardRef`/`useImperativeHandle` since App.tsx's Run/Hold button
+  the skin layer's three-pass path render stack plus a direction arrow
+  on every path, octagon nodes with icons/badges/lock indicator,
+  click-to-select hit-testing, click-to-place node creation (snap-to-
+  grid aware), plain-drag to move a node (no-op if locked, snap-to-grid
+  aware, recomputes every touching edge's curve live — staying on the
+  same octagon side it was originally wired to), Shift+drag for
+  per-socket wiring (auto-picks the nearest free side at each end), and
+  click-an-edge to apply an armed PATHS style. Exposes `toggleRunning()`
+  via `forwardRef`/`useImperativeHandle` since App.tsx's Run/Hold button
   lives outside this component but the sim driver only exists inside
   its own effect.
 - `LeftPanel.tsx` — NODES/PATHS/OBJECTS tab row; swaps in
@@ -51,11 +56,19 @@ machine.
   sim tick interval) that doesn't remount with the selection.
 - `selection.ts` — the `Selection` type shared between the above.
 
+Per-socket wiring lives mostly in `src/floor/floorLayout.ts`, not here
+— see that file's own header comment for the anchor-booking design
+(kept deliberately independent of GraphModel's sourcePort/targetPort
+routing integers). Node badges (`src/skin/nodeSkin.ts`'s
+`getBadgeCount`) now only appear on buffer nodes — the only kind that
+actually holds items — per Falcon's framing that a pass-through node
+(source/sink/distributor/sorter/mixer) has nothing worth counting.
+
 Deliberately deferred: OBJECTS tab is a non-functional placeholder
 (FBP011 — Falcon wants to spec the item-type registry further before
 it's built). Object-type -> path-style taxonomy (FBP012) and the
 wireframe's "LAYER 1-5" z-axis floor-stacking concept (FBP013) are
-both future-only per Falcon. Precise per-socket wiring (FBP009's
-remaining half) and lock blocking deletion (FBP010) are also still
-deferred. Ribbon/tabs chrome (FBP008) resolved as out of scope beyond
-LeftPanel's own NODES/PATHS/OBJECTS tabs.
+both future-only per Falcon. Lock blocking deletion (FBP010) is also
+still deferred. Ribbon/tabs chrome (FBP008) resolved as out of scope
+beyond LeftPanel's own NODES/PATHS/OBJECTS tabs. FBP009 (per-socket
+wiring + deletion) is now fully resolved.
