@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1 and 2 DONE. `src-tauri/` scaffolded and VERIFIED: Falcon ran `npm run tauri:dev` on his own machine (after re-running `npm install` there — the bridge VM's own install had left Linux-platform binaries in node_modules, which don't work on Windows) and confirmed the actual FluxBoard PC desktop window opens, showing the Milestone 2 canvas with items gliding source->sink. Cargo.lock committed. Milestone 3 (full node registry) not yet started. Milestone 3 (full node registry) not yet started.
+Milestones 1 and 2 DONE, src-tauri/ scaffolded and verified working on Falcon's machine. Added a RUN/HOLD toggle button on the canvas (`InterpolatedSimDriver.pause()/resume()`, freezes item progress with no jump on resume) since the animation previously had no way to stop — Falcon's feedback after seeing it running. Milestone 3 (full node registry) not yet started. Milestone 3 (full node registry) not yet started.
 
 ---
 ## STATE
@@ -54,6 +54,7 @@ Milestones 1 and 2 DONE. `src-tauri/` scaffolded and VERIFIED: Falcon ran `npm r
 | FBT002 | — | Milestone 2 — flat canvas, one path: floor-layer curve/camera math + Vite/React canvas renderer (pan/zoom/culling, item gliding on transparent-style path), 20 vitest cases, visually verified | SES007 |
 | FBT004 | — | Scaffold src-tauri/ (Tauri desktop wrapper) via `tauri init` — devUrl/frontendDist wired to the existing Vite app, identifier set, Cargo.toml details filled in | SES008 |
 | FBT005 | — | Verified `npm run tauri:dev` opens the actual FluxBoard PC desktop window on Falcon's machine, rendering the Milestone 2 canvas correctly. Cargo.lock committed. | SES009 |
+| FBT006 | — | RUN/HOLD button on the canvas: `InterpolatedSimDriver.pause()/resume()/isRunning()`, freezes items in place, resumes without a jump. | SES010 |
 
 ---
 ## DECISIONS
@@ -85,4 +86,4 @@ Milestones 1 and 2 DONE. `src-tauri/` scaffolded and VERIFIED: Falcon ran `npm r
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 88 / 120 — Budget remaining: 32
+# Lines: 89 / 120 — Budget remaining: 31

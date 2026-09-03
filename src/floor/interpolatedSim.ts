@@ -33,6 +33,7 @@ export class InterpolatedSimDriver {
   private tickIntervalMs: number;
   private accumulatorMs = 0;
   private lastNow: number | null = null;
+  private running = true;
 
   private prevSnapshot = new Map<string, ItemSnapshot>();
   private currSnapshot = new Map<string, ItemSnapshot>();
@@ -67,6 +68,13 @@ export class InterpolatedSimDriver {
     }
     const deltaMs = Math.max(0, nowMs - this.lastNow);
     this.lastNow = nowMs;
+
+    // Held (paused): keep the clock moving so a later resume doesn't see
+    // one giant deltaMs and burn through a pile of ticks at once, but
+    // don't accumulate time or advance the sim — items stay exactly
+    // where they are.
+    if (!this.running) return;
+
     this.accumulatorMs += deltaMs;
 
     while (this.accumulatorMs >= this.tickIntervalMs) {
@@ -75,6 +83,20 @@ export class InterpolatedSimDriver {
       this.captureInto(this.currSnapshot);
       this.accumulatorMs -= this.tickIntervalMs;
     }
+  }
+
+  /** RUN/HOLD control. Held items stay frozen in place — no lost
+   * progress, no jump on resume. */
+  pause(): void {
+    this.running = false;
+  }
+
+  resume(): void {
+    this.running = true;
+  }
+
+  isRunning(): boolean {
+    return this.running;
   }
 
   /** Items with progress blended between the last two ticks, ready for

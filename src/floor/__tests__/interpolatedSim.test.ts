@@ -72,4 +72,49 @@ describe('InterpolatedSimDriver', () => {
       expect(item.progress).toBeGreaterThanOrEqual(0);
     }
   });
+
+  it('RUN/HOLD: freezes item progress while held, resumes cleanly without a jump', () => {
+    // Slower flowRate than the other tests so item-1 is still in flight
+    // several ticks in, not delivered partway through this test.
+    const graph = new GraphModel();
+    graph.addNode({ id: 'src', kind: 'source', config: { cooldown: 0, itemType: 'widget' } });
+    graph.addNode({ id: 'snk', kind: 'sink', config: {} });
+    graph.addEdge({
+      id: 'e1',
+      source: 'src',
+      target: 'snk',
+      sourcePort: 0,
+      targetPort: 0,
+      flowRate: 0.2,
+      active: true,
+    });
+    const engine = new SimEngine(graph);
+    const driver = new InterpolatedSimDriver(engine, 100);
+
+    driver.update(0);
+    driver.update(100); // tick 1: item-1 spawns
+    driver.update(200); // tick 2: item-1 at progress 0.2
+    const beforeHold = driver.getRenderItems().find((i) => i.id === 'item-1')?.progress;
+    expect(beforeHold).toBeDefined();
+
+    driver.pause();
+    expect(driver.isRunning()).toBe(false);
+
+    // A lot of "real" time passes while held — none of it should reach the sim.
+    driver.update(500);
+    driver.update(5000);
+    expect(engine.getTick()).toBe(2);
+    expect(driver.getRenderItems().find((i) => i.id === 'item-1')?.progress).toBeCloseTo(beforeHold!);
+
+    driver.resume();
+    expect(driver.isRunning()).toBe(true);
+
+    // Resuming shouldn't replay the 4800ms that elapsed while held as a
+    // burst of ticks — exactly one more tick's worth of real time should
+    // produce exactly one more tick.
+    driver.update(5100);
+    expect(engine.getTick()).toBe(3);
+    const afterResume = driver.getRenderItems().find((i) => i.id === 'item-1')?.progress;
+    expect(afterResume).toBeGreaterThan(beforeHold!);
+  });
 });

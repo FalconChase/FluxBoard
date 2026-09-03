@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Camera, type Viewport } from '../floor/camera';
 import type { FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
@@ -26,6 +26,19 @@ const NODE_RADIUS = 18;
  */
 export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const driverRef = useRef<InterpolatedSimDriver | null>(null);
+  const [isRunning, setIsRunning] = useState(true);
+
+  function toggleRunning(): void {
+    const driver = driverRef.current;
+    if (!driver) return;
+    if (driver.isRunning()) {
+      driver.pause();
+    } else {
+      driver.resume();
+    }
+    setIsRunning(driver.isRunning());
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -35,6 +48,7 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
 
     const engine = new SimEngine(graph);
     const driver = new InterpolatedSimDriver(engine, tickIntervalMs);
+    driverRef.current = driver;
 
     const camera = new Camera();
     const nodePositions = graph
@@ -158,6 +172,7 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
 
     return () => {
       cancelAnimationFrame(raf);
+      driverRef.current = null;
       window.removeEventListener('resize', resize);
       canvas.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
@@ -167,10 +182,32 @@ export function FluxCanvas({ graph, floorLayout, tickIntervalMs = 400 }: FluxCan
   }, [graph, floorLayout, tickIntervalMs]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', cursor: 'grab' }}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <canvas
+        ref={canvasRef}
+        style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', cursor: 'grab' }}
+      />
+      <button
+        type="button"
+        onClick={toggleRunning}
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          padding: '6px 14px',
+          fontSize: 13,
+          fontFamily: 'system-ui, sans-serif',
+          fontWeight: 600,
+          border: '1px solid ' + (isRunning ? '#d8555a' : '#2f8f57'),
+          borderRadius: 6,
+          background: isRunning ? '#ff5d5d' : '#2ecc71',
+          color: '#fff',
+          cursor: 'pointer',
+        }}
+      >
+        {isRunning ? '⏸ Hold' : '▶ Run'}
+      </button>
+    </div>
   );
 }
 
