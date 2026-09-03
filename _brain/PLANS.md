@@ -7,3 +7,4 @@ FBP002 | DEFERRED | Manual z-order vs. automatic isometric depth-sort reconcilia
 FBP003 | DEFERRED | Edge-gated "no viable output" fallback (design doc §7) — proposed to reuse the sorter's unmatchedPolicy machinery; not yet implemented/verified
 FBP004 | DEFERRED | Buffer drainPolicy on-idle variant (design doc §4.2) — deferred on top of continuous-only v1 drain behavior
 FBP005 | DEFERRED | Isometric mode (design doc §3, roadmap Milestone 6, stretch) — camera projection toggle, mode-specific skin assets, depth-sorted draw order. App ships without it if not reached.
+FBP006 | PLANNED | USER_GUIDE.md — end-user guide to navigating/using the FluxBoard app (not dev docs). Falcon adding to _brain/ directly.
