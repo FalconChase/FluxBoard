@@ -7,6 +7,8 @@ factory-building games (Factorio, Shapez.io).
 
 Full design: [`docs/FluxBoard-design-doc.md`](docs/FluxBoard-design-doc.md).
 
+Project brain (working memory, decisions, session log): [`_brain/FLUXBOARD.md`](_brain/FLUXBOARD.md).
+
 ## Architecture
 
 Three strictly separated layers (never violate this — see the design
