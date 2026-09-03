@@ -64,6 +64,7 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | FBT012 | — | Per-kind "nature" port caps (`core/nodes/portCapacity.ts`, grounded in each handler's real behavior): source 1 output, mixer 1 output, buffer 2 outputs, sink/distributor/sorter uncapped — enforced as a silent hard reject in `handleCreateEdge`, same style as the 8-socket structural cap. Properties panel gained a compass-style `SingleOutputSidePicker` so a capped-output node's one side is chosen by click, not rotation. | SES020 |
 | FBT013 | — | Freeform planning sketches (`app/sketchLayer.ts`): pure visual dashed-line scratch paths, deliberately OUTSIDE Logic/Floor/Skin — no simulation meaning, not a GraphModel edge. Armed from a new PATHS-tab button; a drag (not a click) commits one, mutually exclusive with node/edge-style arming. Selectable/deletable like a real path. | SES021 |
 | FBT014 | — | Path type: linear (straight, bow=0) vs curve (bow!=0) — `FloorLayout.getEdgeBow`/`setEdgeBow`, a "Path type" dropdown on the edge properties panel. New edges still default to curve. | SES022 |
+| FBT015 | — | New node kind `merger` — opposite of distributor: many inputs (uncapped) merge into one output (capped, `portCapacity.ts`). Pure pass-through, no config, no badge (not a silo). `core/nodes/merger.ts`. | SES023 |
 
 ---
 ## DECISIONS
@@ -95,4 +96,4 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 98 / 120 — Budget remaining: 22
+# Lines: 99 / 120 — Budget remaining: 21
