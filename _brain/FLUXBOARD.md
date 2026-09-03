@@ -10,9 +10,9 @@ NORTH STAR  : Milestone 1 (headless core loop) first — GraphModel + SimEngine 
 
 ---
 ## STACK
-- Tauri + React + TypeScript (app shell — not yet scaffolded, added once there's something to render)
+- App shell: plain browser web app — Vite + React + TypeScript. No Tauri/Rust for now (revised from design doc §8 — see FBD009).
 - Canvas2D/WebGL for rendering (native, no engine dependency)
-- Local data: SQLite via Tauri SQL plugin, or plain JSON — undecided (design doc §8)
+- Local data: browser-native (IndexedDB / File System Access API, or plain JSON export) — no SQL; see FBD010
 - vitest for the core-logic test harness
 
 ---
@@ -20,7 +20,7 @@ NORTH STAR  : Milestone 1 (headless core loop) first — GraphModel + SimEngine 
 | ITEM      | VALUE |
 |-----------|-------|
 | Repo path | C:\Users\ACER\Desktop\CORELOGIX\FLUXBOARD\ — git initialized at root, remote set to github.com/FalconChase/FluxBoard (main). Not yet pushed (Falcon pushes manually). |
-| Local DB  | Undecided — see FBP-tracked open question in PLANS.md if/when it blocks a milestone. |
+| Local DB  | No SQL — browser-native storage or plain JSON per board (FBD010). |
 
 ---
 ## PHASE
@@ -60,7 +60,9 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | FBD005 | LOCKED | Item orientation mode is edge-owned for v1 (`path.itemOrientation`), not item-owned (§5.3) |
 | FBD006 | LOCKED | Edge gating is a separate `active: boolean`, never overwrites `flowRate` (§7) |
 | FBD007 | LOCKED | Counter is a badge overlaid on the icon (not exclusive), genuinely unbounded — no digit cap (§4.5) |
-| FBD008 | LOCKED | Tech stack: Tauri + React + TS, local-first, zero recurring hosting cost (§8) |
+| FBD008 | LOCKED | No backend/Supabase — local-first, zero recurring hosting cost. Revisit only if cloud sync/collab is scoped in. |
+| FBD009 | LOCKED | App shell is a plain browser web app (Vite+React+TS), not Tauri, for now — runs in a tab, single-player, local-first. Installability path (PWA vs. wrapping in Tauri later) is deliberately left open; avoid any Tauri-only API so either door stays open. |
+| FBD010 | LOCKED | No SQL/SQLite — a board is one document (graph + runtime state), not relational records, so it saves/loads as browser-native storage or plain JSON, same shape as Blender/Figma-style documents. |
 
 ---
 ## FILES
@@ -75,4 +77,4 @@ Design phase complete (design doc rev. 2, `docs/FluxBoard-design-doc.md`). Repo 
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 78 / 120 — Budget remaining: 42
+# Lines: 80 / 120 — Budget remaining: 40

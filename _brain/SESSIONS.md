@@ -16,3 +16,11 @@ Bugs found       : none.
 Fixes applied    : none.
 Lessons recorded : Guide is explicitly provisional — sections read as UX preview, not current capability, until each milestone actually ships. Update alongside each milestone rather than all at once at the end.
 Carried forward  : FBT001 (Milestone 1 core loop) still the next active item.
+
+## SES003 — 2026-09-03 — App shell revised: browser web app, not Tauri
+Progress made    : Falcon clarified FluxBoard should run in a browser tab as a local single-player tool for now (like Canva but without the account/cloud layer), with installability (PWA vs. later wrapping in Tauri) deliberately left undecided. Locked as FBD009: app shell is Vite + React + TS, no Rust/Tauri, avoiding any Tauri-only API so both the PWA and future-Tauri-wrap doors stay open. This also resolved the design doc §8 "SQLite via Tauri SQL plugin, or plain JSON" question, since the Tauri SQL plugin is now off the table — locked as FBD010: no SQL, a board is one document (browser-native storage or plain JSON), same shape as Blender/Figma files, not relational records like Pathwork Pro's multi-project workspace.
+Items moved      : FBD008 rephrased for clarity (no content change — still "no backend/Supabase"). New: FBD009, FBD010.
+Bugs found       : none.
+Fixes applied    : none.
+Lessons recorded : This came out of two prior Q&A turns (does it need SQL? can it be a web app like Canva?) rather than a single ask — worth remembering the STACK/DECISIONS sections in FLUXBOARD.md are the durable record, not the chat history.
+Carried forward  : FBT001 (Milestone 1 core loop) unaffected — still headless, still the next active item. Milestone 2+ (rendering) will scaffold as a Vite web app instead of `npm create tauri-app`.
