@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FloorLayout } from '../floor/floorLayout';
-import { FluxCanvas } from './FluxCanvas';
+import { FluxCanvas, type FluxCanvasHandle } from './FluxCanvas';
 import { GraphModel } from '../core/GraphModel';
-import type { NodeId, NodeKind } from '../core/types';
+import type { EdgeId, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import { SkinConfig } from '../skin/SkinConfig';
-import { NodePalette } from './NodePalette';
+import type { EdgeStyle } from '../skin/pathSkin';
+import { LeftPanel, type LeftPanelTab } from './LeftPanel';
 import { PropertiesPanel } from './PropertiesPanel';
 import type { Selection } from './selection';
 
@@ -156,6 +157,20 @@ export function App() {
   const [snapToGrid, setSnapToGrid] = useState(false);
   const nextIdRef = useRef(1);
 
+  // UI chrome (Falcon's wireframe, claude/build-log.md): left-panel
+  // tabs, the PATHS palette's armed style, and the canvas/simulation
+  // settings the properties panel's new second section edits. isRunning
+  // mirrors FluxCanvas's own RUN/HOLD state so the bottom bar's
+  // Play/Pause button can show the right label — the actual toggle is
+  // called through fluxCanvasRef since the sim driver only exists
+  // inside FluxCanvas's own effect.
+  const [leftTab, setLeftTab] = useState<LeftPanelTab>('nodes');
+  const [armedEdgeStyle, setArmedEdgeStyle] = useState<EdgeStyle | null>(null);
+  const [gridSpacing, setGridSpacing] = useState(64);
+  const [tickIntervalMs, setTickIntervalMs] = useState(400);
+  const [isRunning, setIsRunning] = useState(true);
+  const fluxCanvasRef = useRef<FluxCanvasHandle | null>(null);
+
   // Move/delete/snap feature set: Delete/Backspace removes whatever is
   // selected, F8 toggles snap-to-grid. Both are window-level so they
   // work with focus anywhere on the canvas (which isn't a focusable
@@ -231,7 +246,37 @@ export function App() {
     setSelection({ type: 'edge', id });
   }
 
-  const selectionKey = selection ? `${selection.type}:${selection.id}` : 'none';
+  // NODES and PATHS arming are mutually exclusive — arming one clears
+  // the other, so the canvas's pointer state machine never has to
+  // decide which one wins.
+  function handleArmNodeKind(kind: NodeKind | null): void {
+    setArmedEdgeStyle(null);
+    setPlacementKind(kind);
+  }
+
+  function handleArmEdgeStyle(style: EdgeStyle | null): void {
+    setPlacementKind(null);
+    setArmedEdgeStyle(style);
+  }
+
+  function handleApplyEdgeStyle(edgeId: EdgeId, style: EdgeStyle): void {
+    skinConfig.setEdgeSkin(edgeId, { style });
+    setArmedEdgeStyle(null);
+  }
+
+  function handlePlayPauseClick(): void {
+    fluxCanvasRef.current?.toggleRunning();
+  }
+
+  const instructionText = placementKind
+    ? `Click the canvas to place a ${placementKind}.`
+    : armedEdgeStyle
+      ? `Click an existing path to apply the ${armedEdgeStyle} style.`
+      : selection?.type === 'node'
+        ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
+        : selection?.type === 'edge'
+          ? 'Path selected — edit it in the properties panel, Delete to remove.'
+          : 'Click a node or path to select it, or choose something from the left panel to add.';
 
   return (
     <div
@@ -255,8 +300,8 @@ export function App() {
         }}
       >
         <span>
-          <strong>FluxBoard</strong> — Milestone 5: node palette, properties panel, wiring, drag-to-move.
-          Click to select, drag a node to move it (Shift+drag to wire), Delete to remove.
+          <strong>FluxBoard</strong> — node/path/object registry, properties panel, wiring, drag-to-move. See the
+          instruction strip at the bottom for what to do next.
         </span>
         <button
           type="button"
@@ -279,28 +324,74 @@ export function App() {
         </button>
       </header>
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <NodePalette armedKind={placementKind} onArm={setPlacementKind} />
+        <LeftPanel
+          activeTab={leftTab}
+          onTabChange={setLeftTab}
+          armedKind={placementKind}
+          onArmKind={handleArmNodeKind}
+          armedEdgeStyle={armedEdgeStyle}
+          onArmEdgeStyle={handleArmEdgeStyle}
+        />
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
           <FluxCanvas
+            ref={fluxCanvasRef}
             graph={graph}
             floorLayout={floorLayout}
             skinConfig={skinConfig}
+            tickIntervalMs={tickIntervalMs}
             selection={selection}
             onSelect={setSelection}
             placementKind={placementKind}
             onPlaceNode={handlePlaceNode}
             onCreateEdge={handleCreateEdge}
             snapToGrid={snapToGrid}
+            gridSpacing={gridSpacing}
+            armedEdgeStyle={armedEdgeStyle}
+            onApplyEdgeStyle={handleApplyEdgeStyle}
+            onRunningChange={setIsRunning}
           />
         </div>
         <PropertiesPanel
-          key={selectionKey}
           selection={selection}
           graph={graph}
           skinConfig={skinConfig}
           onDelete={handleDeleteSelection}
+          gridSpacing={gridSpacing}
+          onGridSpacingChange={setGridSpacing}
+          tickIntervalMs={tickIntervalMs}
+          onTickIntervalMsChange={setTickIntervalMs}
         />
       </div>
+      <footer
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '0.5rem 1rem',
+          borderTop: '1px solid #e5e4e7',
+          fontSize: 12,
+        }}
+      >
+        <button
+          type="button"
+          onClick={handlePlayPauseClick}
+          style={{
+            flexShrink: 0,
+            padding: '5px 14px',
+            fontSize: 13,
+            fontWeight: 600,
+            fontFamily: 'system-ui, sans-serif',
+            border: '1px solid ' + (isRunning ? '#d8555a' : '#2f8f57'),
+            borderRadius: 6,
+            background: isRunning ? '#ff5d5d' : '#2ecc71',
+            color: '#fff',
+            cursor: 'pointer',
+          }}
+        >
+          {isRunning ? '⏸ Hold' : '▶ Run'}
+        </button>
+        <span style={{ color: '#6b6b73', flex: 1 }}>{instructionText}</span>
+      </footer>
     </div>
   );
 }

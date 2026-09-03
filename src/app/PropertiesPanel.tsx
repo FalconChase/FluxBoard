@@ -15,6 +15,16 @@ interface PropertiesPanelProps {
    * only offers the same action as a button, and doesn't need to know
    * the selection's id since App.tsx already has it. */
   onDelete: () => void;
+
+  /** Canvas & Simulation section (wireframe's second properties-panel
+   * zone): global settings, not tied to any selection — App.tsx owns
+   * the actual state (FluxCanvas/App-level, not GraphModel/SkinConfig,
+   * since neither the grid nor the tick rate is part of the saved
+   * graph). Always rendered, regardless of what's selected. */
+  gridSpacing: number;
+  onGridSpacingChange: (spacing: number) => void;
+  tickIntervalMs: number;
+  onTickIntervalMsChange: (ms: number) => void;
 }
 
 const labelStyle: CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b6b73', display: 'block', marginBottom: 3 };
@@ -48,7 +58,24 @@ const sectionTitleStyle: CSSProperties = {
  * field below can hold plain local state without worrying about
  * stale values from a previous selection.
  */
-export function PropertiesPanel({ selection, graph, skinConfig, onDelete }: PropertiesPanelProps) {
+export function PropertiesPanel({
+  selection,
+  graph,
+  skinConfig,
+  onDelete,
+  gridSpacing,
+  onGridSpacingChange,
+  tickIntervalMs,
+  onTickIntervalMsChange,
+}: PropertiesPanelProps) {
+  // Keys just the selection-editing block below, not this whole
+  // component — so every field inside NodeProperties/EdgeProperties
+  // can hold plain local state without worrying about stale values
+  // from a previous selection (the reason this key exists at all),
+  // while the CanvasSettingsSection underneath stays mounted and
+  // doesn't lose focus/scroll position every time selection changes.
+  const selectionKey = selection ? `${selection.type}:${selection.id}` : 'none';
+
   return (
     <div
       style={{
@@ -72,18 +99,78 @@ export function PropertiesPanel({ selection, graph, skinConfig, onDelete }: Prop
       >
         Properties
       </div>
-      {selection === null && (
-        <p style={{ fontSize: 12, color: '#8a8a93', lineHeight: 1.5 }}>
-          Select a node or edge on the canvas to edit it, or choose a kind from the palette to add one.
-        </p>
-      )}
-      {selection?.type === 'node' && (
-        <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
-      )}
-      {selection?.type === 'edge' && (
-        <EdgeProperties edgeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
-      )}
+      <div key={selectionKey}>
+        {selection === null && (
+          <p style={{ fontSize: 12, color: '#8a8a93', lineHeight: 1.5 }}>
+            Select a node or edge on the canvas to edit it, or choose a kind from the palette to add one.
+          </p>
+        )}
+        {selection?.type === 'node' && (
+          <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
+        )}
+        {selection?.type === 'edge' && (
+          <EdgeProperties edgeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
+        )}
+      </div>
+
+      <div style={{ borderTop: '1px solid #e5e4e7', marginTop: 16, paddingTop: 4 }}>
+        <div style={sectionTitleStyle}>Canvas & simulation</div>
+        <CanvasSettingsSection
+          gridSpacing={gridSpacing}
+          onGridSpacingChange={onGridSpacingChange}
+          tickIntervalMs={tickIntervalMs}
+          onTickIntervalMsChange={onTickIntervalMsChange}
+        />
+      </div>
     </div>
+  );
+}
+
+/** Global canvas/simulation controls — not tied to any node or edge
+ * selection, so this section stays visible and doesn't remount when
+ * selection changes (see the selectionKey comment above). */
+function CanvasSettingsSection({
+  gridSpacing,
+  onGridSpacingChange,
+  tickIntervalMs,
+  onTickIntervalMsChange,
+}: {
+  gridSpacing: number;
+  onGridSpacingChange: (spacing: number) => void;
+  tickIntervalMs: number;
+  onTickIntervalMsChange: (ms: number) => void;
+}) {
+  return (
+    <>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Grid spacing (world units)</label>
+        <input
+          type="number"
+          min={4}
+          step={4}
+          value={gridSpacing}
+          style={inputStyle}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (v > 0) onGridSpacingChange(v);
+          }}
+        />
+      </div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Sim tick interval (ms)</label>
+        <input
+          type="number"
+          min={10}
+          step={10}
+          value={tickIntervalMs}
+          style={inputStyle}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (v > 0) onTickIntervalMsChange(v);
+          }}
+        />
+      </div>
+    </>
   );
 }
 

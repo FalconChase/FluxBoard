@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { Camera, type Viewport } from '../floor/camera';
 import type { FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
-import type { EdgeDef, NodeDef, NodeId, NodeKind } from '../core/types';
+import type { EdgeDef, EdgeId, NodeDef, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
 import { drawNode, drawNodeLockBadge, drawNodeSelectionRing } from '../skin/nodeSkin';
@@ -14,6 +14,7 @@ import {
   drawItemToken,
   getItemRotation,
   drawCurveSelectionHighlight,
+  type EdgeStyle,
 } from '../skin/pathSkin';
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import type { Selection } from './selection';
@@ -44,9 +45,29 @@ interface FluxCanvasProps {
    * position is rounded to the nearest grid line as it moves (App.tsx
    * owns the toggle — header button + F8 shortcut). */
   snapToGrid: boolean;
+  /** World-space spacing between grid lines — also the quantum
+   * snap-to-grid rounds to. App.tsx owns this as an editable canvas
+   * setting (properties panel's Canvas & Simulation section). */
+  gridSpacing: number;
+  /** PATHS palette: when set, the next click on an EXISTING edge
+   * applies this style to it instead of selecting it (armed by
+   * PathPalette — mirrors placementKind's node-creation flow). */
+  armedEdgeStyle: EdgeStyle | null;
+  onApplyEdgeStyle: (edgeId: EdgeId, style: EdgeStyle) => void;
+  /** Reports RUN/HOLD state changes so App.tsx's bottom-bar Play/Pause
+   * button can mirror it — the actual toggle lives here via
+   * FluxCanvasHandle (an imperative ref), since the driver instance is
+   * only created inside this component's own effect. */
+  onRunningChange?: (isRunning: boolean) => void;
 }
 
-const GRID_SPACING = 64;
+/** Imperative handle (App.tsx's Play/Pause button lives in the bottom
+ * bar, outside this component, but the sim driver it controls is only
+ * ever created inside FluxCanvas's own effect). */
+export interface FluxCanvasHandle {
+  toggleRunning: () => void;
+}
+
 const ITEM_RADIUS = 7;
 const NODE_RADIUS = 22;
 const ITEM_FILL = '#2ecc71';
@@ -65,21 +86,27 @@ const EDGE_HIT_TOLERANCE_PX = 12;
  * by this — this file only adds pointer INTERACTION on top of what
  * was already being painted.
  */
-export function FluxCanvas({
-  graph,
-  floorLayout,
-  skinConfig,
-  tickIntervalMs = 400,
-  selection,
-  onSelect,
-  placementKind,
-  onPlaceNode,
-  onCreateEdge,
-  snapToGrid,
-}: FluxCanvasProps) {
+export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function FluxCanvas(
+  {
+    graph,
+    floorLayout,
+    skinConfig,
+    tickIntervalMs = 400,
+    selection,
+    onSelect,
+    placementKind,
+    onPlaceNode,
+    onCreateEdge,
+    snapToGrid,
+    gridSpacing,
+    armedEdgeStyle,
+    onApplyEdgeStyle,
+    onRunningChange,
+  },
+  ref,
+) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const driverRef = useRef<InterpolatedSimDriver | null>(null);
-  const [isRunning, setIsRunning] = useState(true);
 
   // Interaction props change far more often than the sim/graph setup
   // (every click) — routing them through refs keeps them out of the
@@ -97,6 +124,14 @@ export function FluxCanvas({
   onCreateEdgeRef.current = onCreateEdge;
   const snapToGridRef = useRef(snapToGrid);
   snapToGridRef.current = snapToGrid;
+  const gridSpacingRef = useRef(gridSpacing);
+  gridSpacingRef.current = gridSpacing;
+  const armedEdgeStyleRef = useRef(armedEdgeStyle);
+  armedEdgeStyleRef.current = armedEdgeStyle;
+  const onApplyEdgeStyleRef = useRef(onApplyEdgeStyle);
+  onApplyEdgeStyleRef.current = onApplyEdgeStyle;
+  const onRunningChangeRef = useRef(onRunningChange);
+  onRunningChangeRef.current = onRunningChange;
 
   function toggleRunning(): void {
     const driver = driverRef.current;
@@ -106,8 +141,15 @@ export function FluxCanvas({
     } else {
       driver.resume();
     }
-    setIsRunning(driver.isRunning());
+    onRunningChangeRef.current?.(driver.isRunning());
   }
+
+  // Exposes RUN/HOLD control to App.tsx's bottom-bar Play/Pause button
+  // — recreated every render (no deps array) rather than memoized, so
+  // it always calls the current toggleRunning closure; this handle is
+  // called rarely (one click at a time), so there's no cost to skipping
+  // memoization here.
+  useImperativeHandle(ref, () => ({ toggleRunning }));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -118,6 +160,7 @@ export function FluxCanvas({
     const engine = new SimEngine(graph);
     const driver = new InterpolatedSimDriver(engine, tickIntervalMs);
     driverRef.current = driver;
+    onRunningChangeRef.current?.(driver.isRunning());
 
     const camera = new Camera();
     const nodePositions = graph
@@ -154,9 +197,10 @@ export function FluxCanvas({
      * respect the same toggle. */
     function snapToGridPoint(p: Point): Point {
       if (!snapToGridRef.current) return p;
+      const spacing = gridSpacingRef.current;
       return {
-        x: Math.round(p.x / GRID_SPACING) * GRID_SPACING,
-        y: Math.round(p.y / GRID_SPACING) * GRID_SPACING,
+        x: Math.round(p.x / spacing) * spacing,
+        y: Math.round(p.y / spacing) * spacing,
       };
     }
 
@@ -228,7 +272,7 @@ export function FluxCanvas({
       lastFrameMs = nowMs;
       const elapsedMs = animElapsedMs;
 
-      canvas!.style.cursor = placementKindRef.current
+      canvas!.style.cursor = placementKindRef.current || armedEdgeStyleRef.current
         ? 'crosshair'
         : pointerMode === 'move'
           ? 'grabbing'
@@ -241,7 +285,7 @@ export function FluxCanvas({
       ctx!.fillStyle = '#faf9fb';
       ctx!.fillRect(0, 0, viewport.width, viewport.height);
 
-      drawGrid(ctx!, camera, viewport);
+      drawGrid(ctx!, camera, viewport, gridSpacingRef.current);
 
       // Culling: only draw entities whose position intersects the
       // visible world rect (design doc §3 — virtualization).
@@ -339,7 +383,7 @@ export function FluxCanvas({
     // (a no-op if it's locked); Shift+drag instead drags out a new
     // edge, same as Milestone 5. From empty space, a drag pans the
     // camera.
-    type PointerMode = 'idle' | 'pan' | 'node-down' | 'edge-down' | 'wire' | 'move' | 'placement';
+    type PointerMode = 'idle' | 'pan' | 'node-down' | 'edge-down' | 'wire' | 'move' | 'placement' | 'apply-style';
     let pointerMode: PointerMode = 'idle';
     let dragOriginScreen: { x: number; y: number } | null = null;
     let dragLastScreen: { x: number; y: number } | null = null;
@@ -366,6 +410,11 @@ export function FluxCanvas({
 
       if (placementKindRef.current) {
         pointerMode = 'placement';
+        return;
+      }
+
+      if (armedEdgeStyleRef.current) {
+        pointerMode = 'apply-style';
         return;
       }
 
@@ -439,6 +488,11 @@ export function FluxCanvas({
         if (isClick && placementKindRef.current) {
           onPlaceNodeRef.current(placementKindRef.current, snapToGridPoint(worldPoint));
         }
+      } else if (pointerMode === 'apply-style') {
+        if (isClick && armedEdgeStyleRef.current) {
+          const edgeId = hitTestEdge(worldPoint);
+          if (edgeId) onApplyEdgeStyleRef.current(edgeId, armedEdgeStyleRef.current);
+        }
       } else if (pointerMode === 'wire' && wireFromNodeId) {
         const targetNodeId = hitTestNode(worldPoint);
         if (targetNodeId && targetNodeId !== wireFromNodeId) {
@@ -499,9 +553,11 @@ export function FluxCanvas({
       canvas.removeEventListener('wheel', onWheel);
     };
     // Interaction props (selection, onSelect, placementKind,
-    // onPlaceNode, onCreateEdge, snapToGrid) are intentionally
-    // excluded — they're read through refs above so a click doesn't
-    // tear down and recreate the SimEngine/driver.
+    // onPlaceNode, onCreateEdge, snapToGrid, gridSpacing,
+    // armedEdgeStyle, onApplyEdgeStyle) are intentionally excluded —
+    // they're read through refs above so a click doesn't tear down
+    // and recreate the SimEngine/driver. onRunningChange is invoked
+    // through a ref too, for the same reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph, floorLayout, skinConfig, tickIntervalMs]);
 
@@ -511,51 +567,14 @@ export function FluxCanvas({
         ref={canvasRef}
         style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', cursor: 'grab' }}
       />
-      <button
-        type="button"
-        onClick={toggleRunning}
-        style={{
-          position: 'absolute',
-          top: 12,
-          right: 12,
-          padding: '6px 14px',
-          fontSize: 13,
-          fontFamily: 'system-ui, sans-serif',
-          fontWeight: 600,
-          border: '1px solid ' + (isRunning ? '#d8555a' : '#2f8f57'),
-          borderRadius: 6,
-          background: isRunning ? '#ff5d5d' : '#2ecc71',
-          color: '#fff',
-          cursor: 'pointer',
-        }}
-      >
-        {isRunning ? '⏸ Hold' : '▶ Run'}
-      </button>
-      {placementKind && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 12,
-            left: 12,
-            padding: '6px 12px',
-            fontSize: 12,
-            fontFamily: 'system-ui, sans-serif',
-            fontWeight: 600,
-            borderRadius: 6,
-            background: 'rgba(37, 99, 235, 0.92)',
-            color: '#fff',
-          }}
-        >
-          Click the canvas to place a {placementKind}
-        </div>
-      )}
     </div>
   );
-}
+});
 
-function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewport: Viewport): void {
+FluxCanvas.displayName = 'FluxCanvas';
+
+function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewport: Viewport, spacing: number): void {
   const bounds = camera.getVisibleWorldBounds(viewport);
-  const spacing = GRID_SPACING;
   const startX = Math.floor(bounds.minX / spacing) * spacing;
   const startY = Math.floor(bounds.minY / spacing) * spacing;
 
