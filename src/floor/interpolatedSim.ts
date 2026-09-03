@@ -107,7 +107,22 @@ export class InterpolatedSimDriver {
 
     for (const [id, curr] of this.currSnapshot) {
       const prev = this.prevSnapshot.get(id);
-      const progress = prev ? prev.progress + (curr.progress - prev.progress) * alpha : curr.progress;
+      // Only blend across the tick boundary when the item stayed on
+      // the SAME edge. An item routed onto a new edge within the same
+      // tick it arrived (distributor/sorter forwarding — same item
+      // id, edgeId changes, progress resets to 0) would otherwise get
+      // its old edge's near-1 progress blended against its new edge's
+      // 0 progress and plotted along the NEW edge's curve: it renders
+      // at the new edge's far end right after the tick, then visibly
+      // crawls backward to the edge's start as alpha climbs toward 1
+      // — a "bounce back" that has nothing to do with the simulation,
+      // purely a rendering artifact of blending two different curves'
+      // progress values as if they were one. Treat an edge change
+      // exactly like a fresh spawn instead: hold at the new edge's
+      // actual position for this frame window, then blend normally
+      // once prev/curr agree on the edge again next tick.
+      const progress =
+        prev && prev.edgeId === curr.edgeId ? prev.progress + (curr.progress - prev.progress) * alpha : curr.progress;
       result.push({ id, type: curr.type, edgeId: curr.edgeId, progress });
     }
 
