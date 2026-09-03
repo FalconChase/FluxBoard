@@ -53,12 +53,14 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   and with NodePalette's placement arming.
 - `PropertiesPanel.tsx` — right-docked. A selection-editing block
   (kind-specific logic config per design doc §4.6, edge ports/
-  flowRate/gate, edge skin, node z-order, a "Locked" checkbox, a
-  "Delete" button, a compass-style output side picker for kinds capped
-  at 1 output, a minimal "planning only" view + Delete for a sketch
-  selection) that remounts on selection change, plus an always-visible
-  "Canvas & simulation" section below it (grid spacing, sim tick
-  interval) that doesn't remount with the selection.
+  flowRate/gate, a Linear/Curve path-type dropdown (floor-layer
+  geometry — see `floorLayout.ts`'s `getEdgeBow`/`setEdgeBow`), edge
+  skin, node z-order, a "Locked" checkbox, a "Delete" button, a
+  compass-style output side picker for kinds capped at 1 output, a
+  minimal "planning only" view + Delete for a sketch selection) that
+  remounts on selection change, plus an always-visible "Canvas &
+  simulation" section below it (grid spacing, sim tick interval) that
+  doesn't remount with the selection.
 - `selection.ts` — the `Selection` type shared between the above:
   `'node'`, `'edge'`, or `'sketch'`.
 - `sketchLayer.ts` — pure visual planning sketches (Falcon, 2026-09-03:
