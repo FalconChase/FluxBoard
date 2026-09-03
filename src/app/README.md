@@ -25,7 +25,11 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   Delete/Backspace and F8 keyboard shortcuts. `handleCreateEdge` checks
   `FloorLayout.hasFreeAnchorSlot` on both nodes before ever creating a
   GraphModel edge, so a full node (8 paths already) silently rejects a
-  9th.
+  9th. Two more mount effects (SES024): one loads any
+  autosaved graph and repopulates the same graph/floorLayout/
+  skinConfig/sketchLayer instances in place (leaving the demo graph
+  alone on first run), the other autosaves on a timer plus tab-hidden/
+  pagehide — see `persistence.ts`.
 - `FluxCanvas.tsx` — the Canvas2D renderer: pan/zoom camera, culling,
   the skin layer's three-pass path render stack plus a direction arrow
   on every path, octagon nodes with icons/badges/lock indicator,
@@ -42,7 +46,8 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   `NodePalette`/`PathPalette`/a "coming soon" OBJECTS placeholder
   below it (Falcon's wireframe: one dynamic content area, not three
   separate palettes).
-- `NodePalette.tsx` — the 6 node kinds; click to arm placement mode.
+- `NodePalette.tsx` — the 7 node kinds (source, distributor, merger,
+  sorter, mixer, buffer, sink); click to arm placement mode.
 - `PathPalette.tsx` — the 3 edge styles (transparent/conveyor/
   glassTube), previewed with mini canvas swatches matching
   pathSkin.ts's real alpha values; click to arm, then click an
@@ -63,6 +68,16 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   doesn't remount with the selection.
 - `selection.ts` — the `Selection` type shared between the above:
   `'node'`, `'edge'`, or `'sketch'`.
+- `persistence.ts` — save/load (Falcon, 2026-09-03: "my progress lost
+  or gets unsaved... why is this?"). `serializeState` reads the four
+  live stores into one plain-JSON snapshot; `clearAllStores`/
+  `populateState` empty and refill those SAME instances in place
+  (never fresh ones — App.tsx keeps its stable singletons across a
+  load); `saveToDisk`/`loadFromDisk` wrap `@tauri-apps/plugin-fs`,
+  scoped to the app's own AppData dir, no-op outside the real Tauri
+  shell (plain `npm run dev`). One fixed save file today
+  (`fluxboard-save.json`) — multiple named projects is a future File
+  tab (PLANS.md FBP014), not this.
 - `sketchLayer.ts` — pure visual planning sketches (Falcon, 2026-09-03:
   "draw paths without really needing node... freedom to plan the
   paths"). `Sketch {id, from, to}` + `SketchLayer` CRUD, deliberately

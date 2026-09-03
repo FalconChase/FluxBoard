@@ -13,7 +13,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 ## STACK
 - App shell: Tauri + React + TypeScript — desktop, single-user, for Falcon's own use first (design doc §8, reaffirmed — see FBD009 rev.2).
 - Canvas2D/WebGL for rendering (native, no engine dependency)
-- Local data: SQLite via Tauri SQL plugin (or plain JSON) — desktop-only concern for now; see FBD010 rev.2
+- Local data: plain JSON, autosaved via Tauri fs plugin — FBD010 rev.3, implemented (`app/persistence.ts`)
 - vitest for the core-logic test harness
 - Future, separate variant: a Canva-style hosted web build reusing src/core+floor+skin unchanged (FBP007)
 
@@ -22,11 +22,11 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 | ITEM      | VALUE |
 |-----------|-------|
 | Repo path | C:\Users\ACER\Desktop\CORELOGIX\FLUXBOARD\ — git initialized at root, remote set to github.com/FalconChase/FluxBoard (main). Not yet pushed (Falcon pushes manually). |
-| Local DB  | SQLite via Tauri SQL plugin, or plain JSON — desktop build, decide freely (FBD010 rev.2). |
+| Local data | Plain JSON autosave, `%AppData%/<id>/fluxboard-save.json` (FBD010 rev.3). |
 
 ---
 ## PHASE
-Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, Falcon's wireframe UI chrome, then per-socket wiring (FBP009 fully resolved), path direction arrows, and storage-only node badges. Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
+Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, Falcon's wireframe UI chrome, per-socket wiring (FBP009 resolved), path type, merger node, and autosave persistence (FBD010 rev.3). Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here) — persistence's Rust/Cargo side unverified from the bridge specifically.
 
 ---
 ## STATE
@@ -65,6 +65,8 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | FBT013 | — | Freeform planning sketches (`app/sketchLayer.ts`): pure visual dashed-line scratch paths, deliberately OUTSIDE Logic/Floor/Skin — no simulation meaning, not a GraphModel edge. Armed from a new PATHS-tab button; a drag (not a click) commits one, mutually exclusive with node/edge-style arming. Selectable/deletable like a real path. | SES021 |
 | FBT014 | — | Path type: linear (straight, bow=0) vs curve (bow!=0) — `FloorLayout.getEdgeBow`/`setEdgeBow`, a "Path type" dropdown on the edge properties panel. New edges still default to curve. | SES022 |
 | FBT015 | — | New node kind `merger` — opposite of distributor: many inputs (uncapped) merge into one output (capped, `portCapacity.ts`). Pure pass-through, no config, no badge (not a silo). `core/nodes/merger.ts`. | SES023 |
+| FBT016 | — | Autosave persistence (FBD010 rev.3): `app/persistence.ts` serializes the 4 stores to plain JSON, `saveToDisk`/`loadFromDisk` via Tauri fs plugin (AppData dir). App.tsx keeps its stable store singletons, load clears+repopulates them in place; autosaves every 3s + on tab-hidden/pagehide. | SES024 |
+| FBT017 | — | Edge properties gained a "Speed" field (world units/sec), converted to/from `flowRate` using the edge's current path length (UI-layer only, no stored field/SimEngine change) — explains/fixes "longer path looks faster" (`flowRate` is length-independent progress/sec by design, §5.1). Grid spacing now defaults to 8 (was 64), snap-to-grid on by default (was off). | SES025 |
 
 ---
 ## DECISIONS
@@ -81,7 +83,8 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | FBD009 | SUPERSEDED by rev.2 | Was: plain browser web app, no Tauri, for now. |
 | FBD009 rev.2 | LOCKED | Tauri desktop app (**FluxBoard PC**) is the primary build — single-user, Falcon's own machine, free to use Tauri APIs (SQL plugin, native dialogs) normally. A Canva-style hosted web version (**FluxBoard Web**, FBP007) is a separate future variant, not a portability constraint on this build — kept cheap only by isolating Tauri-specific calls behind one adapter in src/app (never scattered through UI/core code), since src/core + src/floor + src/skin are already 100% platform-agnostic TypeScript either way. |
 | FBD010 | SUPERSEDED by rev.2 | Was: no SQL, browser-native storage only. |
-| FBD010 rev.2 | LOCKED | Local data: SQLite via Tauri SQL plugin (or plain JSON) — fine to decide freely, since this is the desktop-only build. A future web variant would use its own browser-storage adapter instead, not force this build's choice. |
+| FBD010 rev.2 | SUPERSEDED by rev.3 | Was: SQLite or plain JSON, decide freely. |
+| FBD010 rev.3 | LOCKED | Plain JSON, autosaved (not SQLite, not manual save/load) — Falcon confirmed via AskUserQuestion, 2026-09-03. One fixed save file today; multiple named projects is a future File tab (PLANS.md). |
 
 ---
 ## FILES
@@ -96,4 +99,4 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, both fixed). M5 minimal-chrome
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 99 / 120 — Budget remaining: 21
+# Lines: 102 / 120 — Budget remaining: 18
