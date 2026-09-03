@@ -232,6 +232,13 @@ export function App() {
   }
 
   function handleCreateEdge(sourceNodeId: NodeId, targetNodeId: NodeId): void {
+    // Per-socket wiring (Falcon, 2026-09-03): max 8 paths per node,
+    // one per octagon side. Checked BEFORE creating anything so a
+    // node that's already full silently rejects the drag rather than
+    // leaving a logic-layer edge with no floor-layer curve to render.
+    if (!floorLayout.hasFreeAnchorSlot(sourceNodeId) || !floorLayout.hasFreeAnchorSlot(targetNodeId)) {
+      return;
+    }
     const id = `user-edge-${nextIdRef.current++}`;
     graph.addEdge({
       id,

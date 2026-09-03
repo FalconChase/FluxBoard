@@ -26,35 +26,30 @@ export const nodeSkinDefaults: Record<NodeKind, NodeSkinDefaults> = {
 };
 
 /**
- * Reads the one existing logic-layer counter each node kind already
- * tracks in its own runtime state (source.spawnedCount,
- * distributor/sorter.routedCount, mixer.producedCount,
- * sink.consumedCount, buffer's live queue length) — never computes a
- * new count itself, since the badge is a *view* of logic state, not a
- * second tally of it (design doc §2, §4.5).
+ * A badge only makes sense on a node that actually HOLDS something —
+ * a running lifetime tally on a pure pass-through node just grows
+ * forever and doesn't describe its current state (Falcon, 2026-09-03:
+ * source is unbounded by default so there's nothing worth counting
+ * unless a future spawn limit is configured; sinks purely absorb/
+ * destroy items, nothing to show; distributor/sorter/mixer route
+ * items through in the same tick, they don't store anything either).
+ * Buffer is the one kind that's genuinely a "silo" — it queues items
+ * — so it's the only kind with a badge today, and it shows its LIVE
+ * queue length (current holdings), not a lifetime counter.
  *
- * Returns undefined when the kind has nothing countable yet, so the
- * caller skips drawing a badge entirely rather than showing "0" for
- * something that was never spawned.
+ * source.spawnedCount/sink.consumedCount/distributor+sorter.
+ * routedCount/mixer.producedCount still exist in RuntimeState (tests
+ * rely on them, and they're cheap to keep tracking for later use —
+ * e.g. a future source spawn-limit badge) — this function just no
+ * longer surfaces them as a badge. Returns undefined when the kind
+ * has nothing to show, so the caller skips drawing a badge entirely.
  */
 export function getBadgeCount(kind: NodeKind, state: RuntimeState): number | undefined {
-  switch (kind) {
-    case 'source':
-      return typeof state.spawnedCount === 'number' ? state.spawnedCount : undefined;
-    case 'sink':
-      return typeof state.consumedCount === 'number' ? state.consumedCount : undefined;
-    case 'distributor':
-    case 'sorter':
-      return typeof state.routedCount === 'number' ? state.routedCount : undefined;
-    case 'mixer':
-      return typeof state.producedCount === 'number' ? state.producedCount : undefined;
-    case 'buffer': {
-      const queue = state.queue;
-      return Array.isArray(queue) ? queue.length : undefined;
-    }
-    default:
-      return undefined;
+  if (kind === 'buffer') {
+    const queue = state.queue;
+    return Array.isArray(queue) ? queue.length : undefined;
   }
+  return undefined;
 }
 
 /** Badge is a pill overlaid ON TOP of the icon — not exclusive with it

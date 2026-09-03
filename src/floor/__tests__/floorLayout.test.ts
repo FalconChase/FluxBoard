@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { FloorLayout } from '../floorLayout';
+import { FloorLayout, NODE_RADIUS } from '../floorLayout';
 
 /**
  * Milestone 5 target tests: the node-position/edge-curve mutators
  * drag-to-move and delete need — recomputeEdgeCurve (rebuild a curve
- * after an endpoint moves, keeping its original bow), and
- * removeNodePosition/removeEdgeCurve (drop state on deletion,
- * mirroring GraphModel.removeNode/removeEdge and
- * SkinConfig.removeNode/removeEdge).
+ * after an endpoint moves, keeping its original bow AND its original
+ * anchor side), removeNodePosition/removeEdgeCurve (drop state on
+ * deletion, mirroring GraphModel.removeNode/removeEdge and
+ * SkinConfig.removeNode/removeEdge), and per-socket wiring (Falcon,
+ * 2026-09-03): each node has 8 octagon-side anchors, a path attaches
+ * to the nearest free one at each end, max 8 paths per node.
  */
 function buildLayout(): FloorLayout {
   const layout = new FloorLayout();
@@ -25,7 +27,50 @@ describe('FloorLayout', () => {
     expect(curve!.totalLength).toBeGreaterThan(0);
   });
 
-  it('recomputeEdgeCurve rebuilds the curve after an endpoint moves, reusing the original bow', () => {
+  it('setEdgeCurve attaches each end at the anchor facing the other node (east on a, west on b, for a due-east neighbor)', () => {
+    const layout = buildLayout(); // a=(0,0), b=(100,0) — due east of a
+    const curve = layout.getEdgeCurve('e1')!;
+    const start = curve.getPointAtProgress(0);
+    const end = curve.getPointAtProgress(1);
+    const apothem = NODE_RADIUS * Math.cos(Math.PI / 8); // octagon edge-midpoint radius
+    expect(start.x).toBeCloseTo(apothem); // a's east anchor
+    expect(start.y).toBeCloseTo(0);
+    expect(end.x).toBeCloseTo(100 - apothem); // b's west anchor
+    expect(end.y).toBeCloseTo(0);
+  });
+
+  it('setEdgeCurve returns false and books nothing once a node already has 8 connections', () => {
+    const layout = new FloorLayout();
+    layout.setNodePosition('center', { x: 0, y: 0 });
+    for (let i = 0; i < 8; i++) {
+      layout.setNodePosition(`n${i}`, { x: 500 * Math.cos((i * Math.PI) / 4), y: 500 * Math.sin((i * Math.PI) / 4) });
+      expect(layout.setEdgeCurve(`e${i}`, 'center', `n${i}`, 0.15)).toBe(true);
+    }
+    expect(layout.hasFreeAnchorSlot('center')).toBe(false);
+
+    layout.setNodePosition('overflow', { x: 0, y: -900 });
+    const ok = layout.setEdgeCurve('e-overflow', 'center', 'overflow', 0.15);
+    expect(ok).toBe(false);
+    expect(layout.getEdgeCurve('e-overflow')).toBeUndefined();
+  });
+
+  it('removeEdgeCurve frees the anchor slot it held, letting a new edge take it', () => {
+    const layout = new FloorLayout();
+    layout.setNodePosition('center', { x: 0, y: 0 });
+    for (let i = 0; i < 8; i++) {
+      layout.setNodePosition(`n${i}`, { x: 500 * Math.cos((i * Math.PI) / 4), y: 500 * Math.sin((i * Math.PI) / 4) });
+      layout.setEdgeCurve(`e${i}`, 'center', `n${i}`, 0.15);
+    }
+    expect(layout.hasFreeAnchorSlot('center')).toBe(false);
+
+    layout.removeEdgeCurve('e0');
+    expect(layout.hasFreeAnchorSlot('center')).toBe(true);
+
+    layout.setNodePosition('overflow', { x: 0, y: -900 });
+    expect(layout.setEdgeCurve('e-overflow', 'center', 'overflow', 0.15)).toBe(true);
+  });
+
+  it('recomputeEdgeCurve rebuilds the curve after an endpoint moves, reusing the original bow AND the original anchor side', () => {
     const layout = buildLayout();
     const before = layout.getEdgeCurve('e1')!;
     const beforeStart = before.getPointAtProgress(0);
@@ -36,26 +81,26 @@ describe('FloorLayout', () => {
     const after = layout.getEdgeCurve('e1')!;
     const afterStart = after.getPointAtProgress(0);
 
-    // Curve now starts at a's new position, not its old one.
+    // Curve now starts near a's new position, not its old one — but
+    // still on the SAME side of a (east) it was originally wired to,
+    // not re-picked toward b's new relative direction.
+    const apothem = NODE_RADIUS * Math.cos(Math.PI / 8);
     expect(afterStart.y).toBeCloseTo(200);
+    expect(afterStart.x).toBeCloseTo(apothem); // still a's east anchor
     expect(afterStart.y).not.toBeCloseTo(beforeStart.y);
-
-    // Bow (0.4, passed to the original setEdgeCurve) survived the
-    // recompute — rebuild the same curve by hand with that bow and
-    // compare, since bow isn't otherwise observable from outside.
-    const manual = new FloorLayout();
-    manual.setNodePosition('a', { x: 0, y: 200 });
-    manual.setNodePosition('b', { x: 100, y: 0 });
-    manual.setEdgeCurve('e1', 'a', 'b', 0.4);
-    expect(after.totalLength).toBeCloseTo(manual.getEdgeCurve('e1')!.totalLength);
   });
 
-  it('recomputeEdgeCurve falls back to the 0.15 default bow when the edge was never set via setEdgeCurve', () => {
+  it('recomputeEdgeCurve falls back to node centers (and the 0.15 default bow) when the edge was never set via setEdgeCurve', () => {
     const layout = new FloorLayout();
     layout.setNodePosition('a', { x: 0, y: 0 });
     layout.setNodePosition('b', { x: 100, y: 0 });
     expect(() => layout.recomputeEdgeCurve('e1', 'a', 'b')).not.toThrow();
-    expect(layout.getEdgeCurve('e1')).toBeDefined();
+    const curve = layout.getEdgeCurve('e1');
+    expect(curve).toBeDefined();
+    // No anchors were ever booked for e1, so this falls back to the
+    // raw node centers rather than any octagon anchor.
+    expect(curve!.getPointAtProgress(0)).toEqual({ x: 0, y: 0 });
+    expect(curve!.getPointAtProgress(1)).toEqual({ x: 100, y: 0 });
   });
 
   it('removeNodePosition drops the node\'s position', () => {
@@ -65,18 +110,25 @@ describe('FloorLayout', () => {
     expect(layout.getNodePosition('b')).toBeDefined();
   });
 
-  it('removeEdgeCurve drops both the curve and its remembered bow', () => {
+  it('removeEdgeCurve drops the curve, its remembered bow, and its anchor booking', () => {
     const layout = buildLayout();
     layout.removeEdgeCurve('e1');
     expect(layout.getEdgeCurve('e1')).toBeUndefined();
+    expect(layout.hasFreeAnchorSlot('a')).toBe(true);
+    expect(layout.hasFreeAnchorSlot('b')).toBe(true);
 
-    // Bow was forgotten too — recomputing after removal falls back to
-    // the 0.15 default rather than the original 0.4.
-    layout.setEdgeCurve('e1', 'a', 'b'); // rebuild with default bow first, as a baseline
+    // Bow was forgotten too — recreating fresh (setEdgeCurve, no bow
+    // argument) picks the same anchors as before (only two nodes, so
+    // "nearest free" is deterministic) and falls back to the 0.15
+    // default bow rather than the original 0.4.
+    layout.setEdgeCurve('e1', 'a', 'b');
     const defaultBowCurve = layout.getEdgeCurve('e1')!;
-    layout.removeEdgeCurve('e1');
-    layout.recomputeEdgeCurve('e1', 'a', 'b');
-    expect(layout.getEdgeCurve('e1')!.totalLength).toBeCloseTo(defaultBowCurve.totalLength);
+
+    const manual = new FloorLayout();
+    manual.setNodePosition('a', { x: 0, y: 0 });
+    manual.setNodePosition('b', { x: 100, y: 0 });
+    manual.setEdgeCurve('e1', 'a', 'b', 0.15);
+    expect(defaultBowCurve.totalLength).toBeCloseTo(manual.getEdgeCurve('e1')!.totalLength);
   });
 
   it('setEdgeCurve throws if either endpoint has no position', () => {

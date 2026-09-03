@@ -185,6 +185,39 @@ export function drawCurveSelectionHighlight(
   strokeCurve(ctx, curve, camera, viewport, Math.max(2, 4 * camera.zoom), 'rgba(37, 99, 235, 0.55)');
 }
 
+/** A small directional arrowhead at a path's midpoint, drawn
+ * regardless of style — even 'transparent', which otherwise renders
+ * nothing at all (Falcon, 2026-09-03: a path's direction should read
+ * at a glance, not only by watching an item travel it, especially
+ * while paused or empty). Points along the curve's own tangent, so it
+ * automatically flips if the path is ever recreated in the other
+ * direction — no separate "reverse" state to keep in sync. */
+export function drawPathDirectionArrow(
+  ctx: CanvasRenderingContext2D,
+  curve: BezierPath,
+  camera: Camera,
+  viewport: Viewport,
+): void {
+  if (curve.totalLength === 0) return;
+  const progress = 0.5;
+  const worldPoint = curve.getPointAtProgress(progress);
+  const angle = curve.getTangentAngleAtProgress(progress);
+  const screen = camera.worldToScreen(worldPoint, viewport);
+  const size = Math.max(5, 7 * camera.zoom);
+
+  ctx.save();
+  ctx.translate(screen.x, screen.y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(size, 0);
+  ctx.lineTo(-size * 0.6, size * 0.62);
+  ctx.lineTo(-size * 0.6, -size * 0.62);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(58, 58, 66, 0.6)';
+  ctx.fill();
+  ctx.restore();
+}
+
 /** Rotation (radians) for an item token riding a path under the given
  * orientation mode (design doc §5.3). */
 export function getItemRotation(

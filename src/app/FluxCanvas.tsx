@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { Camera, type Viewport } from '../floor/camera';
-import type { FloorLayout } from '../floor/floorLayout';
+import { NODE_RADIUS, type FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
@@ -11,6 +11,7 @@ import { drawNode, drawNodeLockBadge, drawNodeSelectionRing } from '../skin/node
 import {
   drawPathUnder,
   drawPathOver,
+  drawPathDirectionArrow,
   drawItemToken,
   getItemRotation,
   drawCurveSelectionHighlight,
@@ -69,7 +70,6 @@ export interface FluxCanvasHandle {
 }
 
 const ITEM_RADIUS = 7;
-const NODE_RADIUS = 22;
 const ITEM_FILL = '#2ecc71';
 const ITEM_STROKE = '#1c8a4f';
 const CLICK_MOVE_THRESHOLD_PX = 5;
@@ -325,6 +325,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         if (!curve) continue;
         const skin = skinConfig.getEdgeSkin(edge.id);
         drawPathOver(ctx!, curve, camera, viewport, skin);
+        drawPathDirectionArrow(ctx!, curve, camera, viewport);
         if (sel?.type === 'edge' && sel.id === edge.id) {
           drawCurveSelectionHighlight(ctx!, curve, camera, viewport);
         }
