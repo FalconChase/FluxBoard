@@ -66,4 +66,55 @@ describe('GraphModel', () => {
     expect(() => graph.updateEdgePorts('nope', { sourcePort: 1 })).toThrow();
     expect(() => graph.setEdgeFlowRate('nope', 1)).toThrow();
   });
+
+  it('removeEdge deletes the edge and drops it from the source node\'s out-edge list', () => {
+    const graph = buildGraph();
+    graph.removeEdge('e1');
+    expect(graph.getEdge('e1')).toBeUndefined();
+    expect(graph.getAllEdges()).toEqual([]);
+    expect(graph.outputEdges('src')).toEqual([]);
+  });
+
+  it('removeEdge on an unknown id is a no-op, not an error', () => {
+    const graph = buildGraph();
+    expect(() => graph.removeEdge('nope')).not.toThrow();
+    expect(graph.getAllEdges().map((e) => e.id)).toEqual(['e1']);
+  });
+
+  it('removeNode deletes the node and cascades to every edge touching it, returning their ids', () => {
+    const graph = buildGraph();
+    graph.addNode({ id: 'snk2', kind: 'sink', config: {} });
+    graph.addEdge({
+      id: 'e2',
+      source: 'src',
+      target: 'snk2',
+      sourcePort: 1,
+      targetPort: 0,
+      flowRate: 0.3,
+      active: true,
+    });
+
+    const removed = graph.removeNode('src');
+
+    expect(removed.sort()).toEqual(['e1', 'e2']);
+    expect(graph.getNode('src')).toBeUndefined();
+    expect(graph.getAllEdges()).toEqual([]);
+    // snk/snk2 remain — only src and its edges were removed
+    expect(graph.getNode('snk')).toBeDefined();
+    expect(graph.getNode('snk2')).toBeDefined();
+  });
+
+  it('removeNode also cascades an edge where the node is only the target', () => {
+    const graph = buildGraph();
+    const removed = graph.removeNode('snk');
+    expect(removed).toEqual(['e1']);
+    expect(graph.getAllEdges()).toEqual([]);
+    expect(graph.getNode('src')).toBeDefined();
+  });
+
+  it('removeNode on an unknown id is a no-op and returns an empty array', () => {
+    const graph = buildGraph();
+    expect(graph.removeNode('nope')).toEqual([]);
+    expect(graph.getAllEdges().map((e) => e.id)).toEqual(['e1']);
+  });
 });

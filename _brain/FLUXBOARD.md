@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, FBB001/FBB002, both fixed). M5 built to the minimal-chrome scope FBP008 resolved to: selection, node palette, properties panel, body-to-body wiring. Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
+Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, FBB001/FBB002, both fixed). M5 minimal-chrome scope (FBP008) extended with drag-to-move (Shift+drag now wires instead), lock toggle, delete (Del/Backspace + panel button), snap-to-grid (F8 + header toggle). Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
 
 ---
 ## STATE
@@ -44,7 +44,7 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, FBB001/FBB002, both fixed). M5
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| —  | —        | Falcon to try Milestone 5 locally and decide what's next: FBP009 (socket-precise wiring, deletion), Milestone 6 (isometric, stretch), or something else entirely. | — |
+| —  | —        | Falcon to try the move/lock/delete/snap feature locally and decide what's next: FBP009's remaining half (socket-precise wiring), Milestone 6 (isometric, stretch), or something else entirely. | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
@@ -58,6 +58,7 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, FBB001/FBB002, both fixed). M5
 | FBT003 | — | Milestone 3 — full node registry: `distributor` (round-robin/broadcast), `sorter` (first-match rules + unmatchedPolicy, resolves FBP003), `mixer` (per-port buffered recipe matching), `buffer` (capacity + block/divert overflow + continuous tryDrain). Extended the shared contract (`accepted?`, `'forward'` action, `arrivalEdge`+`makeItemId` params, `tryDrain` hook). 17 new vitest cases (verified via `npm test`, SES012). | SES011 |
 | FBT007 | — | Milestone 4 — skin layer: octagon shapes (edge-aligned ports, §4.1), per-kind icons + unbounded counter badges (§4.5, read each node's own existing runtime counters, no separate tally), z-order-sortable node draw, three-pass conveyor/glass-tube/transparent path stack + static/parallel/circling item orientation (§5.2, §5.3). Small counters added to source/distributor/sorter/mixer state; `GraphModel.getAllEdges()`. Demo graph expanded to exercise all edge styles + orientation modes. | SES013 |
 | FBT008 | — | Milestone 5, minimal-chrome scope (FBP008 resolved): selection + hit-testing (`isPointInOctagon`), left-docked node palette (click-to-place), right-docked properties panel (kind-specific logic config, edge ports/flowRate/gate, edge skin, node z-order), body-to-body drag wiring. `GraphModel.updateNodeConfig`/`setEdgeFlowRate`/`updateEdgePorts` added. Precise per-socket wiring + node/edge deletion deferred (FBP009). | SES016 |
+| FBT009 | — | Move/lock/delete/snap-to-grid: plain drag now moves a node (Shift+drag wires instead), lock toggle blocks it, Delete/Backspace + panel button remove a node (cascading its edges) or edge, F8/header toggle snaps drag+placement to the grid. `GraphModel.removeNode/removeEdge`, `FloorLayout.removeNodePosition/recomputeEdgeCurve/removeEdgeCurve`, `SkinConfig.getNodeLocked/setNodeLocked/removeNode/removeEdge`, lock badge icon. Resolves FBP009's deletion half; socket-precise wiring still deferred. | SES017 |
 
 ---
 ## DECISIONS
@@ -89,4 +90,4 @@ Milestones 1-5 DONE (M4 had 2 post-ship bugfixes, FBB001/FBB002, both fixed). M5
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 92 / 120 — Budget remaining: 28
+# Lines: 93 / 120 — Budget remaining: 27

@@ -4,10 +4,10 @@ import type { FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
-import type { NodeDef, NodeId, NodeKind } from '../core/types';
+import type { EdgeDef, NodeDef, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
-import { drawNode, drawNodeSelectionRing } from '../skin/nodeSkin';
+import { drawNode, drawNodeLockBadge, drawNodeSelectionRing } from '../skin/nodeSkin';
 import {
   drawPathUnder,
   drawPathOver,
@@ -34,10 +34,16 @@ interface FluxCanvasProps {
    * node palette). */
   placementKind: NodeKind | null;
   onPlaceNode: (kind: NodeKind, worldPoint: Point) => void;
-  /** Drag from one node's body to another's to connect them. Simple
-   * body-to-body for now — see FBP009 for why this isn't per-socket
-   * yet. Ports/flowRate/gate are then tuned in the properties panel. */
+  /** Shift+drag from one node's body to another's to connect them.
+   * Simple body-to-body for now — see FBP009 for why this isn't
+   * per-socket yet. Ports/flowRate/gate are then tuned in the
+   * properties panel. Plain drag (no Shift) MOVES the node instead —
+   * see the pointer state machine below. */
   onCreateEdge: (sourceNodeId: NodeId, targetNodeId: NodeId) => void;
+  /** Move/delete/snap feature set: when true, a dragged node's
+   * position is rounded to the nearest grid line as it moves (App.tsx
+   * owns the toggle — header button + F8 shortcut). */
+  snapToGrid: boolean;
 }
 
 const GRID_SPACING = 64;
@@ -50,8 +56,9 @@ const EDGE_HIT_TOLERANCE_PX = 12;
 
 /**
  * Milestone 4 (skin layer) + Milestone 5 (selection, node placement,
- * body-to-body wiring — design doc §9 step 5, minimal-chrome scope
- * per FBP008's resolution) wired into the canvas.
+ * body-to-body wiring, drag-to-move, lock, delete, snap-to-grid —
+ * design doc §9 step 5, minimal-chrome scope per FBP008's resolution)
+ * wired into the canvas.
  *
  * Floor-layer geometry/camera (Milestone 2), the full node registry
  * (Milestone 3) and the skin render stack (Milestone 4) are unchanged
@@ -68,6 +75,7 @@ export function FluxCanvas({
   placementKind,
   onPlaceNode,
   onCreateEdge,
+  snapToGrid,
 }: FluxCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const driverRef = useRef<InterpolatedSimDriver | null>(null);
@@ -87,6 +95,8 @@ export function FluxCanvas({
   onPlaceNodeRef.current = onPlaceNode;
   const onCreateEdgeRef = useRef(onCreateEdge);
   onCreateEdgeRef.current = onCreateEdge;
+  const snapToGridRef = useRef(snapToGrid);
+  snapToGridRef.current = snapToGrid;
 
   function toggleRunning(): void {
     const driver = driverRef.current;
@@ -136,6 +146,28 @@ export function FluxCanvas({
       const rect = canvas!.getBoundingClientRect();
       const screenPoint = { x: clientX - rect.left, y: clientY - rect.top };
       return camera.screenToWorld(screenPoint, currentViewport());
+    }
+
+    /** Rounds a world point to the nearest grid line when snap-to-grid
+     * is on (App.tsx state, F8 shortcut); passes it through unchanged
+     * otherwise. Shared by drag-to-move and node placement so both
+     * respect the same toggle. */
+    function snapToGridPoint(p: Point): Point {
+      if (!snapToGridRef.current) return p;
+      return {
+        x: Math.round(p.x / GRID_SPACING) * GRID_SPACING,
+        y: Math.round(p.y / GRID_SPACING) * GRID_SPACING,
+      };
+    }
+
+    /** Every edge with `nodeId` as either endpoint — both directions,
+     * since moving a node can bend an edge it's only the TARGET of
+     * just as much as one it's the source of. GraphModel only indexes
+     * outgoing edges (outputEdges), so this scans getAllEdges() —
+     * fine at this graph size, and this is a per-drag-frame cost, not
+     * a per-sim-tick one. */
+    function edgesTouchingNode(nodeId: NodeId): EdgeDef[] {
+      return graph.getAllEdges().filter((e) => e.source === nodeId || e.target === nodeId);
     }
 
     /** Topmost (highest z-order) node whose octagon body contains
@@ -196,7 +228,13 @@ export function FluxCanvas({
       lastFrameMs = nowMs;
       const elapsedMs = animElapsedMs;
 
-      canvas!.style.cursor = placementKindRef.current ? 'crosshair' : wireFromNodeId ? 'crosshair' : 'grab';
+      canvas!.style.cursor = placementKindRef.current
+        ? 'crosshair'
+        : pointerMode === 'move'
+          ? 'grabbing'
+          : wireFromNodeId
+            ? 'crosshair'
+            : 'grab';
 
       const viewport = currentViewport();
       ctx!.clearRect(0, 0, viewport.width, viewport.height);
@@ -283,6 +321,9 @@ export function FluxCanvas({
         const r = NODE_RADIUS * camera.zoom;
         const state = engine.getNodeState(node.id) ?? {};
         drawNode(ctx!, node, state, screen, r, camera.zoom);
+        if (skinConfig.getNodeLocked(node.id)) {
+          drawNodeLockBadge(ctx!, screen, r, camera.zoom);
+        }
         if (sel?.type === 'node' && sel.id === node.id) {
           drawNodeSelectionRing(ctx!, screen, r, camera.zoom);
         }
@@ -294,9 +335,11 @@ export function FluxCanvas({
 
     // --- Pointer interaction state machine ---
     // A click (movement under the threshold) selects/deselects or
-    // places a node; a drag either pans the camera (from empty
-    // space) or, starting from a node's body, drags out a new edge.
-    type PointerMode = 'idle' | 'pan' | 'node-down' | 'edge-down' | 'wire' | 'placement';
+    // places a node. From a node's body: a plain drag MOVES the node
+    // (a no-op if it's locked); Shift+drag instead drags out a new
+    // edge, same as Milestone 5. From empty space, a drag pans the
+    // camera.
+    type PointerMode = 'idle' | 'pan' | 'node-down' | 'edge-down' | 'wire' | 'move' | 'placement';
     let pointerMode: PointerMode = 'idle';
     let dragOriginScreen: { x: number; y: number } | null = null;
     let dragLastScreen: { x: number; y: number } | null = null;
@@ -304,6 +347,15 @@ export function FluxCanvas({
     let pendingEdgeHitId: string | undefined;
     let wireFromNodeId: NodeId | undefined;
     let wireCurrentWorld: Point | undefined;
+    // Latched at pointerdown (not re-read live) so a gesture commits
+    // to one interpretation for its whole drag, rather than switching
+    // mid-drag if a modifier key state changes.
+    let wireGesture = false;
+    let moveLocked = false;
+    // Offset from the node's own position to the point the user
+    // actually grabbed it at, so the node doesn't jump to re-center
+    // under the cursor the instant a drag starts.
+    let moveGrabOffset: Point | null = null;
 
     function onPointerDown(e: PointerEvent): void {
       dragOriginScreen = { x: e.clientX, y: e.clientY };
@@ -321,6 +373,10 @@ export function FluxCanvas({
       if (nodeId) {
         pointerMode = 'node-down';
         pendingNodeHitId = nodeId;
+        wireGesture = e.shiftKey;
+        moveLocked = skinConfig.getNodeLocked(nodeId);
+        const nodePos = floorLayout.getNodePosition(nodeId);
+        moveGrabOffset = nodePos ? { x: worldPoint.x - nodePos.x, y: worldPoint.y - nodePos.y } : { x: 0, y: 0 };
         return;
       }
 
@@ -347,12 +403,28 @@ export function FluxCanvas({
       }
 
       if (pointerMode === 'node-down' && totalMove > CLICK_MOVE_THRESHOLD_PX) {
-        pointerMode = 'wire';
-        wireFromNodeId = pendingNodeHitId;
+        if (wireGesture) {
+          pointerMode = 'wire';
+          wireFromNodeId = pendingNodeHitId;
+        } else if (!moveLocked) {
+          pointerMode = 'move';
+        }
+        // else: dragging a locked node with no Shift — stays
+        // 'node-down' with no visible effect; releasing past the
+        // click threshold then selects nothing new (see onPointerUp).
       }
 
       if (pointerMode === 'wire') {
         wireCurrentWorld = toWorld(e.clientX, e.clientY);
+      }
+
+      if (pointerMode === 'move' && pendingNodeHitId && moveGrabOffset) {
+        const currentWorld = toWorld(e.clientX, e.clientY);
+        const rawPos = { x: currentWorld.x - moveGrabOffset.x, y: currentWorld.y - moveGrabOffset.y };
+        floorLayout.setNodePosition(pendingNodeHitId, snapToGridPoint(rawPos));
+        for (const edge of edgesTouchingNode(pendingNodeHitId)) {
+          floorLayout.recomputeEdgeCurve(edge.id, edge.source, edge.target);
+        }
       }
     }
 
@@ -365,13 +437,18 @@ export function FluxCanvas({
 
       if (pointerMode === 'placement') {
         if (isClick && placementKindRef.current) {
-          onPlaceNodeRef.current(placementKindRef.current, worldPoint);
+          onPlaceNodeRef.current(placementKindRef.current, snapToGridPoint(worldPoint));
         }
       } else if (pointerMode === 'wire' && wireFromNodeId) {
         const targetNodeId = hitTestNode(worldPoint);
         if (targetNodeId && targetNodeId !== wireFromNodeId) {
           onCreateEdgeRef.current(wireFromNodeId, targetNodeId);
         }
+      } else if (pointerMode === 'move' && pendingNodeHitId) {
+        // The drag itself already committed the position on every
+        // pointermove — this just leaves the moved node selected, so
+        // the properties panel follows it.
+        onSelectRef.current({ type: 'node', id: pendingNodeHitId });
       } else if (pointerMode === 'node-down' && isClick && pendingNodeHitId) {
         onSelectRef.current({ type: 'node', id: pendingNodeHitId });
       } else if (pointerMode === 'edge-down' && isClick && pendingEdgeHitId) {
@@ -387,6 +464,9 @@ export function FluxCanvas({
       pendingEdgeHitId = undefined;
       wireFromNodeId = undefined;
       wireCurrentWorld = undefined;
+      wireGesture = false;
+      moveLocked = false;
+      moveGrabOffset = null;
 
       try {
         canvas!.releasePointerCapture(e.pointerId);
@@ -419,9 +499,9 @@ export function FluxCanvas({
       canvas.removeEventListener('wheel', onWheel);
     };
     // Interaction props (selection, onSelect, placementKind,
-    // onPlaceNode, onCreateEdge) are intentionally excluded — they're
-    // read through refs above so a click doesn't tear down and
-    // recreate the SimEngine/driver.
+    // onPlaceNode, onCreateEdge, snapToGrid) are intentionally
+    // excluded — they're read through refs above so a click doesn't
+    // tear down and recreate the SimEngine/driver.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph, floorLayout, skinConfig, tickIntervalMs]);
 

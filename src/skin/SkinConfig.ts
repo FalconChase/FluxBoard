@@ -15,6 +15,7 @@ import { type EdgeSkin, defaultEdgeSkin } from './pathSkin';
  */
 export class SkinConfig {
   private nodeZIndex = new Map<NodeId, number>();
+  private nodeLocked = new Map<NodeId, boolean>();
   private edgeSkins = new Map<EdgeId, EdgeSkin>();
 
   setNodeZIndex(nodeId: NodeId, zIndex: number): void {
@@ -23,6 +24,19 @@ export class SkinConfig {
 
   getNodeZIndex(nodeId: NodeId): number {
     return this.nodeZIndex.get(nodeId) ?? 0;
+  }
+
+  /** Locked = drag-to-move is a no-op for this node (Milestone 5).
+   * Purely a UI affordance — logic/floor/skin rendering don't care,
+   * only FluxCanvas's pointer handling reads this. Defaults to
+   * unlocked, keeping the free-canvas design pillar (design doc §1)
+   * as the default rather than something opted out of. */
+  setNodeLocked(nodeId: NodeId, locked: boolean): void {
+    this.nodeLocked.set(nodeId, locked);
+  }
+
+  getNodeLocked(nodeId: NodeId): boolean {
+    return this.nodeLocked.get(nodeId) ?? false;
   }
 
   /** Partial update — only the given fields change, everything else
@@ -34,5 +48,18 @@ export class SkinConfig {
 
   getEdgeSkin(edgeId: EdgeId): EdgeSkin {
     return this.edgeSkins.get(edgeId) ?? defaultEdgeSkin;
+  }
+
+  /** Drops whatever skin state a deleted node/edge had (Milestone 5
+   * deletion) — otherwise it just sits here orphaned forever, since
+   * nothing else ever removes a map entry on its own. Safe to call
+   * even if there was never any override to begin with. */
+  removeNode(nodeId: NodeId): void {
+    this.nodeZIndex.delete(nodeId);
+    this.nodeLocked.delete(nodeId);
+  }
+
+  removeEdge(edgeId: EdgeId): void {
+    this.edgeSkins.delete(edgeId);
   }
 }

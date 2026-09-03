@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FloorLayout } from '../floor/floorLayout';
 import { FluxCanvas } from './FluxCanvas';
 import { GraphModel } from '../core/GraphModel';
@@ -153,7 +153,60 @@ export function App() {
   // re-render on those.
   const [selection, setSelection] = useState<Selection | null>(null);
   const [placementKind, setPlacementKind] = useState<NodeKind | null>(null);
+  const [snapToGrid, setSnapToGrid] = useState(false);
   const nextIdRef = useRef(1);
+
+  // Move/delete/snap feature set: Delete/Backspace removes whatever is
+  // selected, F8 toggles snap-to-grid. Both are window-level so they
+  // work with focus anywhere on the canvas (which isn't a focusable
+  // element itself) — guarded so typing in a properties-panel text
+  // field (e.g. Backspace while editing an item type) never deletes
+  // the selected node/edge instead of a character.
+  useEffect(() => {
+    function isEditableTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+    }
+
+    function onKeyDown(e: KeyboardEvent): void {
+      if (e.key === 'F8') {
+        e.preventDefault();
+        setSnapToGrid((v) => !v);
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        handleDeleteSelection();
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // handleDeleteSelection and selection close over current state on
+    // every render already (plain function, not memoized) — omitted
+    // from deps deliberately, same reasoning FluxCanvas's own effect
+    // documents for its interaction props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleDeleteSelection(): void {
+    if (!selection) return;
+    if (selection.type === 'node') {
+      const removedEdgeIds = graph.removeNode(selection.id);
+      floorLayout.removeNodePosition(selection.id);
+      skinConfig.removeNode(selection.id);
+      for (const edgeId of removedEdgeIds) {
+        floorLayout.removeEdgeCurve(edgeId);
+        skinConfig.removeEdge(edgeId);
+      }
+    } else {
+      graph.removeEdge(selection.id);
+      floorLayout.removeEdgeCurve(selection.id);
+      skinConfig.removeEdge(selection.id);
+    }
+    setSelection(null);
+  }
 
   function handlePlaceNode(kind: NodeKind, worldPoint: Point): void {
     const id = `user-node-${nextIdRef.current++}`;
@@ -190,9 +243,40 @@ export function App() {
         fontFamily: 'system-ui, sans-serif',
       }}
     >
-      <header style={{ padding: '0.6rem 1rem', borderBottom: '1px solid #e5e4e7', fontSize: 14 }}>
-        <strong>FluxBoard</strong> — Milestone 5: node palette, properties panel, body-to-body wiring.
-        Click a node/edge to select it, drag from a node to wire it up.
+      <header
+        style={{
+          padding: '0.6rem 1rem',
+          borderBottom: '1px solid #e5e4e7',
+          fontSize: 14,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}
+      >
+        <span>
+          <strong>FluxBoard</strong> — Milestone 5: node palette, properties panel, wiring, drag-to-move.
+          Click to select, drag a node to move it (Shift+drag to wire), Delete to remove.
+        </span>
+        <button
+          type="button"
+          onClick={() => setSnapToGrid((v) => !v)}
+          title="Toggle snap-to-grid (F8)"
+          style={{
+            flexShrink: 0,
+            padding: '5px 12px',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'system-ui, sans-serif',
+            borderRadius: 6,
+            border: '1px solid ' + (snapToGrid ? '#2563eb' : '#d8d7dd'),
+            background: snapToGrid ? '#2563eb' : '#f6f6f8',
+            color: snapToGrid ? '#fff' : '#3c3c43',
+            cursor: 'pointer',
+          }}
+        >
+          ⌗ Snap to grid (F8) {snapToGrid ? 'ON' : 'OFF'}
+        </button>
       </header>
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <NodePalette armedKind={placementKind} onArm={setPlacementKind} />
@@ -206,9 +290,16 @@ export function App() {
             placementKind={placementKind}
             onPlaceNode={handlePlaceNode}
             onCreateEdge={handleCreateEdge}
+            snapToGrid={snapToGrid}
           />
         </div>
-        <PropertiesPanel key={selectionKey} selection={selection} graph={graph} skinConfig={skinConfig} />
+        <PropertiesPanel
+          key={selectionKey}
+          selection={selection}
+          graph={graph}
+          skinConfig={skinConfig}
+          onDelete={handleDeleteSelection}
+        />
       </div>
     </div>
   );

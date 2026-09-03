@@ -99,4 +99,40 @@ export class GraphModel {
     if (!node) throw new Error(`Node "${nodeId}" does not exist`);
     node.config = { ...node.config, ...patch };
   }
+
+  /** Removes one edge. Idempotent — removing an id that's already
+   * gone (e.g. a cascade from removeNode racing a direct call) is a
+   * no-op, not an error, since "the edge doesn't exist" is exactly
+   * the state the caller wanted. */
+  removeEdge(edgeId: EdgeId): void {
+    const edge = this.edges.get(edgeId);
+    if (!edge) return;
+    this.edges.delete(edgeId);
+    const list = this.outEdgesByNode.get(edge.source);
+    if (list) {
+      const idx = list.indexOf(edgeId);
+      if (idx !== -1) list.splice(idx, 1);
+    }
+  }
+
+  /** Removes a node AND every edge touching it (as source or
+   * target) — an edge can't legally reference a node that no longer
+   * exists (addEdge already enforces that on the way in). Returns the
+   * ids of the edges removed as a side effect, so a caller managing
+   * per-edge state in another layer (floor curves, skin styling) knows
+   * what else to clean up — GraphModel has no idea those layers exist
+   * (design doc §2). No-op if the node doesn't exist. */
+  removeNode(nodeId: NodeId): EdgeId[] {
+    if (!this.nodes.has(nodeId)) return [];
+    const removedEdgeIds: EdgeId[] = [];
+    for (const edge of [...this.edges.values()]) {
+      if (edge.source === nodeId || edge.target === nodeId) {
+        removedEdgeIds.push(edge.id);
+        this.removeEdge(edge.id);
+      }
+    }
+    this.nodes.delete(nodeId);
+    this.outEdgesByNode.delete(nodeId);
+    return removedEdgeIds;
+  }
 }

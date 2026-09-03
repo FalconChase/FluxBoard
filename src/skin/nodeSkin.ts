@@ -121,6 +121,34 @@ export function drawNodeSelectionRing(
   ctx.setLineDash([]);
 }
 
+/** Lock badge (Milestone 5) — a small padlock glyph on the opposite
+ * corner from the counter badge, drawn only when the node is locked.
+ * Pure UI affordance, no logic/floor/skin meaning of its own. */
+export function drawNodeLockBadge(
+  ctx: CanvasRenderingContext2D,
+  center: Point,
+  radius: number,
+  zoom: number,
+): void {
+  const fontSize = Math.max(9, 11 * zoom);
+  const bx = center.x - radius * 0.68;
+  const by = center.y + radius * 0.68;
+
+  ctx.beginPath();
+  ctx.arc(bx, by, fontSize * 0.62, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = '#6b6b73';
+  ctx.lineWidth = Math.max(1, 1.2 * zoom);
+  ctx.stroke();
+
+  ctx.font = `${fontSize}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#3c3c43';
+  ctx.fillText('\u{1F512}', bx, by + 0.5 * zoom);
+}
+
 export function drawNode(
   ctx: CanvasRenderingContext2D,
   node: NodeDef,

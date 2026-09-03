@@ -9,6 +9,12 @@ interface PropertiesPanelProps {
   selection: Selection | null;
   graph: GraphModel;
   skinConfig: SkinConfig;
+  /** Deletes whatever is currently selected (node — cascading to its
+   * edges — or edge). App.tsx owns the actual GraphModel/FloorLayout/
+   * SkinConfig cleanup and the Delete/Backspace shortcut; this panel
+   * only offers the same action as a button, and doesn't need to know
+   * the selection's id since App.tsx already has it. */
+  onDelete: () => void;
 }
 
 const labelStyle: CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b6b73', display: 'block', marginBottom: 3 };
@@ -42,7 +48,7 @@ const sectionTitleStyle: CSSProperties = {
  * field below can hold plain local state without worrying about
  * stale values from a previous selection.
  */
-export function PropertiesPanel({ selection, graph, skinConfig }: PropertiesPanelProps) {
+export function PropertiesPanel({ selection, graph, skinConfig, onDelete }: PropertiesPanelProps) {
   return (
     <div
       style={{
@@ -71,8 +77,12 @@ export function PropertiesPanel({ selection, graph, skinConfig }: PropertiesPane
           Select a node or edge on the canvas to edit it, or choose a kind from the palette to add one.
         </p>
       )}
-      {selection?.type === 'node' && <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} />}
-      {selection?.type === 'edge' && <EdgeProperties edgeId={selection.id} graph={graph} skinConfig={skinConfig} />}
+      {selection?.type === 'node' && (
+        <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
+      )}
+      {selection?.type === 'edge' && (
+        <EdgeProperties edgeId={selection.id} graph={graph} skinConfig={skinConfig} onDelete={onDelete} />
+      )}
     </div>
   );
 }
@@ -108,7 +118,17 @@ const smallButtonStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
-function NodeProperties({ nodeId, graph, skinConfig }: { nodeId: string; graph: GraphModel; skinConfig: SkinConfig }) {
+function NodeProperties({
+  nodeId,
+  graph,
+  skinConfig,
+  onDelete,
+}: {
+  nodeId: string;
+  graph: GraphModel;
+  skinConfig: SkinConfig;
+  onDelete: () => void;
+}) {
   const node = graph.getNode(nodeId);
   if (!node) return <p style={{ fontSize: 12, color: '#c0392b' }}>Node no longer exists.</p>;
 
@@ -132,7 +152,36 @@ function NodeProperties({ nodeId, graph, skinConfig }: { nodeId: string; graph: 
 
       <div style={sectionTitleStyle}>Z-order</div>
       <ZOrderButtons nodeId={nodeId} graph={graph} skinConfig={skinConfig} />
+
+      <div style={sectionTitleStyle}>Position</div>
+      <LockToggle nodeId={nodeId} skinConfig={skinConfig} />
+
+      <div style={sectionTitleStyle}>Danger zone</div>
+      <button
+        type="button"
+        onClick={onDelete}
+        style={{ ...smallButtonStyle, width: '100%', color: '#c0392b', borderColor: '#e3b0aa' }}
+      >
+        Delete node
+      </button>
     </div>
+  );
+}
+
+function LockToggle({ nodeId, skinConfig }: { nodeId: string; skinConfig: SkinConfig }) {
+  const [locked, setLocked] = useState(skinConfig.getNodeLocked(nodeId));
+  return (
+    <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+      <input
+        type="checkbox"
+        checked={locked}
+        onChange={(e) => {
+          setLocked(e.target.checked);
+          skinConfig.setNodeLocked(nodeId, e.target.checked);
+        }}
+      />
+      Locked (drag-to-move disabled)
+    </label>
   );
 }
 
@@ -458,7 +507,17 @@ function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
   );
 }
 
-function EdgeProperties({ edgeId, graph, skinConfig }: { edgeId: string; graph: GraphModel; skinConfig: SkinConfig }) {
+function EdgeProperties({
+  edgeId,
+  graph,
+  skinConfig,
+  onDelete,
+}: {
+  edgeId: string;
+  graph: GraphModel;
+  skinConfig: SkinConfig;
+  onDelete: () => void;
+}) {
   const edge = graph.getEdge(edgeId);
   if (!edge) return <p style={{ fontSize: 12, color: '#c0392b' }}>Edge no longer exists.</p>;
 
@@ -474,6 +533,15 @@ function EdgeProperties({ edgeId, graph, skinConfig }: { edgeId: string; graph: 
 
       <div style={sectionTitleStyle}>Skin (design doc §5.2, §5.3)</div>
       <EdgeSkinFields edgeId={edgeId} skinConfig={skinConfig} />
+
+      <div style={sectionTitleStyle}>Danger zone</div>
+      <button
+        type="button"
+        onClick={onDelete}
+        style={{ ...smallButtonStyle, width: '100%', color: '#c0392b', borderColor: '#e3b0aa' }}
+      >
+        Delete edge
+      </button>
     </div>
   );
 }
