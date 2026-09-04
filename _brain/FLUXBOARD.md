@@ -22,7 +22,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 | ITEM      | VALUE |
 |-----------|-------|
 | Repo path | C:\Users\ACER\Desktop\CORELOGIX\FLUXBOARD\ — git initialized at root, remote set to github.com/FalconChase/FluxBoard (main). Not yet pushed (Falcon pushes manually). |
-| Local data | Plain JSON autosave, `%AppData%/<id>/fluxboard-save.json` (FBD010 rev.3). |
+| Local data | Plain JSON, one file per project under `%AppData%/<id>/projects/`, + a manifest (FBD010 rev.3, FBT018). |
 
 ---
 ## PHASE
@@ -44,17 +44,12 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| —  | —        | Falcon to try the latest build locally (per-socket wiring, direction arrows, badge changes) and decide what's next: spec the OBJECTS registry (FBP011), Milestone 6 (isometric, stretch), or something else entirely. | — |
+| —  | —        | Falcon to verify the FILE tab + persistence end-to-end locally, then decide: Tools tab (multi-select/move, rest of FBP014), spec the OBJECTS registry (FBP011), Milestone 6 (isometric, stretch), or something else. | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
 |----|----------|------|---------|
-| FBT000 | — | Repo + brain scaffold: git init, remote, `src/{core,floor,skin,app}` structure, stubbed brains files, vitest placeholder test, `_brain/` adopted from PATHWORK PRO's pattern | SES001 |
-| FBT001 | — | Milestone 1 — `GraphModel` + `SimEngine` implemented (source/sink node kinds, sourceTrySpawn, sink onItemArrival), verified via vitest (item conservation, no deadlock, edge-gate hold/resume) and `scripts/simHarness.ts` console harness | SES006 |
-| FBT002 | — | Milestone 2 — flat canvas, one path: floor-layer curve/camera math + Vite/React canvas renderer (pan/zoom/culling, item gliding on transparent-style path), 20 vitest cases, visually verified | SES007 |
-| FBT004 | — | Scaffold src-tauri/ (Tauri desktop wrapper) via `tauri init` — devUrl/frontendDist wired to the existing Vite app, identifier set, Cargo.toml details filled in | SES008 |
-| FBT005 | — | Verified `npm run tauri:dev` opens the actual FluxBoard PC desktop window on Falcon's machine, rendering the Milestone 2 canvas correctly. Cargo.lock committed. | SES009 |
-| FBT006 | — | RUN/HOLD button on the canvas: `InterpolatedSimDriver.pause()/resume()/isRunning()`, freezes items in place, resumes without a jump. | SES010 |
+| FBT000 | — | Repo+brain scaffold (SES001); Milestone 1 GraphModel+SimEngine (source/sink, item conservation, SES006); Milestone 2 flat canvas (curve/camera math, pan/zoom, SES007); src-tauri/ scaffolded + verified `tauri:dev` opens the real desktop window (SES008/009); RUN/HOLD button (SES010). | SES001-010 |
 | FBT003 | — | Milestone 3 — full node registry: `distributor` (round-robin/broadcast), `sorter` (first-match rules + unmatchedPolicy, resolves FBP003), `mixer` (per-port buffered recipe matching), `buffer` (capacity + block/divert overflow + continuous tryDrain). Extended the shared contract (`accepted?`, `'forward'` action, `arrivalEdge`+`makeItemId` params, `tryDrain` hook). 17 new vitest cases (verified via `npm test`, SES012). | SES011 |
 | FBT007 | — | Milestone 4 — skin layer: octagon shapes (edge-aligned ports, §4.1), per-kind icons + unbounded counter badges (§4.5, read each node's own existing runtime counters, no separate tally), z-order-sortable node draw, three-pass conveyor/glass-tube/transparent path stack + static/parallel/circling item orientation (§5.2, §5.3). Small counters added to source/distributor/sorter/mixer state; `GraphModel.getAllEdges()`. Demo graph expanded to exercise all edge styles + orientation modes. | SES013 |
 | FBT008 | — | Milestone 5, minimal-chrome scope (FBP008 resolved): selection + hit-testing (`isPointInOctagon`), left-docked node palette (click-to-place), right-docked properties panel (kind-specific logic config, edge ports/flowRate/gate, edge skin, node z-order), body-to-body drag wiring. `GraphModel.updateNodeConfig`/`setEdgeFlowRate`/`updateEdgePorts` added. Precise per-socket wiring + node/edge deletion deferred (FBP009). | SES016 |
@@ -67,6 +62,7 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 | FBT015 | — | New node kind `merger` — opposite of distributor: many inputs (uncapped) merge into one output (capped, `portCapacity.ts`). Pure pass-through, no config, no badge (not a silo). `core/nodes/merger.ts`. | SES023 |
 | FBT016 | — | Autosave persistence (FBD010 rev.3): `app/persistence.ts` serializes the 4 stores to plain JSON, `saveToDisk`/`loadFromDisk` via Tauri fs plugin (AppData dir). App.tsx keeps its stable store singletons, load clears+repopulates them in place; autosaves every 3s + on tab-hidden/pagehide. | SES024 |
 | FBT017 | — | Edge properties gained a "Speed" field (world units/sec), converted to/from `flowRate` using the edge's current path length (UI-layer only, no stored field/SimEngine change) — explains/fixes "longer path looks faster" (`flowRate` is length-independent progress/sec by design, §5.1). Grid spacing now defaults to 8 (was 64), snap-to-grid on by default (was off). | SES025 |
+| FBT018 | — | FILE tab (FBP014 half-resolved): persistence.ts's single fixed save file becomes a manifest + one JSON file per project (`projects/<id>.json`) — create/switch/rename/delete, legacy autosave migrated into a project on first load under this. Tools tab (multi-select/move) still deferred. | SES026 |
 
 ---
 ## DECISIONS
@@ -99,4 +95,4 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 102 / 120 — Budget remaining: 18
+# Lines: 98 / 120 — Budget remaining: 22
