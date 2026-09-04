@@ -6,8 +6,12 @@ import { hexWithAlpha } from './canvasUtil';
 /** Skin-owned edge style (design doc §5.2, §5.4). "Transparent" is not
  * a distinct style in its own right — it's the base state with no
  * skin applied on top of the always-present, style-agnostic item
- * movement layer. */
-export type EdgeStyle = 'transparent' | 'conveyor' | 'glassTube';
+ * movement layer. 'trace' (Falcon, 2026-09-04, comparing the ribbon
+ * port against the approved mockup): a thin single line with the
+ * path's own color, no belt/tube band at all — the clean PCB-trace
+ * look the mockup's paths used, now a real selectable style rather
+ * than an artifact of how that mockup happened to render. */
+export type EdgeStyle = 'transparent' | 'conveyor' | 'glassTube' | 'trace';
 
 /** Skin-owned item orientation mode (design doc §5.3) — edge-owned for
  * v1, not item-owned. */
@@ -144,6 +148,13 @@ export function drawPathUnder(
     drawConveyorTicks(ctx, curve, camera, viewport, skin, beltPhaseDistance);
   } else if (skin.style === 'glassTube') {
     strokeCurve(ctx, curve, camera, viewport, skin.strokeWidth * zoom, hexWithAlpha(skin.color, 0.16));
+  } else if (skin.style === 'trace') {
+    // Deliberately ignores skin.strokeWidth (that's a belt/tube BAND
+    // width — a trace is always a thin line regardless of what a
+    // conveyor/glassTube on the same edge was last configured to) and
+    // uses the color at full opacity, not hexWithAlpha, so it reads
+    // crisp at any zoom.
+    strokeCurve(ctx, curve, camera, viewport, Math.max(1.5, 2.2 * zoom), skin.color);
   }
   // 'transparent': nothing drawn — the base state (§5.2).
 }

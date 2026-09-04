@@ -17,6 +17,7 @@ export type RibbonTab = 'home' | 'insert' | 'view' | 'manage' | 'layers' | 'tool
 const NODE_KINDS: NodeKind[] = ['source', 'distributor', 'merger', 'sorter', 'mixer', 'buffer', 'sink'];
 const EDGE_STYLES: { style: EdgeStyle; label: string; color: string }[] = [
   { style: 'transparent', label: 'Transparent', color: theme.text3 },
+  { style: 'trace', label: 'Trace', color: '#9aa1ad' },
   { style: 'conveyor', label: 'Conveyor', color: '#3d7fff' },
   { style: 'glassTube', label: 'Glass tube', color: '#17b3a3' },
 ];
@@ -407,6 +408,23 @@ function PathSwatchButton({
       ctx.moveTo(4, midY + 5);
       ctx.lineTo(w - 4, midY + 5);
       ctx.stroke();
+    } else if (edgeStyle === 'trace') {
+      // Matches the real drawPathUnder 'trace' render: a thin solid
+      // line at full color opacity, plus a small arrowhead like
+      // drawPathDirectionArrow draws on every real path.
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(4, midY);
+      ctx.lineTo(w - 7, midY);
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(w - 4, midY);
+      ctx.lineTo(w - 9, midY - 3);
+      ctx.lineTo(w - 9, midY + 3);
+      ctx.closePath();
+      ctx.fill();
     } else {
       ctx.strokeStyle = theme.borderStrong;
       ctx.lineWidth = 1.3;

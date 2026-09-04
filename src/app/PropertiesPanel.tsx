@@ -886,6 +886,7 @@ function EdgeSkinFields({ edgeId, skinConfig }: { edgeId: string; skinConfig: Sk
           <option value="transparent">Transparent</option>
           <option value="conveyor">Conveyor</option>
           <option value="glassTube">Glass tube</option>
+          <option value="trace">Trace</option>
         </select>
       </div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
