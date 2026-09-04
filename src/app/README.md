@@ -42,10 +42,12 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   via `forwardRef`/`useImperativeHandle` since App.tsx's Run/Hold button
   lives outside this component but the sim driver only exists inside
   its own effect.
-- `LeftPanel.tsx` — NODES/PATHS/OBJECTS tab row; swaps in
-  `NodePalette`/`PathPalette`/a "coming soon" OBJECTS placeholder
-  below it (Falcon's wireframe: one dynamic content area, not three
-  separate palettes).
+- `LeftPanel.tsx` — NODES/PATHS/OBJECTS/FILE tab row; swaps in
+  `NodePalette`/`PathPalette`/a "coming soon" OBJECTS placeholder/
+  `FileTab` below it (Falcon's wireframe: one dynamic content area,
+  not separate palettes per tab). FILE added SES026 (FBP014, half-
+  resolved — see `FileTab.tsx` below; the Tools tab, the other half
+  of FBP014, is still deferred).
 - `NodePalette.tsx` — the 7 node kinds (source, distributor, merger,
   sorter, mixer, buffer, sink); click to arm placement mode.
 - `PathPalette.tsx` — the 3 edge styles (transparent/conveyor/
@@ -73,11 +75,19 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   live stores into one plain-JSON snapshot; `clearAllStores`/
   `populateState` empty and refill those SAME instances in place
   (never fresh ones — App.tsx keeps its stable singletons across a
-  load); `saveToDisk`/`loadFromDisk` wrap `@tauri-apps/plugin-fs`,
-  scoped to the app's own AppData dir, no-op outside the real Tauri
-  shell (plain `npm run dev`). One fixed save file today
-  (`fluxboard-save.json`) — multiple named projects is a future File
-  tab (PLANS.md FBP014), not this.
+  load). SES026 (FBP014, "the file tab... create new projects,
+  manages, and contains the existing/saved projects") turned the
+  original single fixed-filename autosave into a small manifest
+  (`fluxboard-projects.json` — which projects exist, their names,
+  last-opened time, which one is active) plus one JSON save file per
+  project (`projects/<id>.json`): `loadManifest`/`saveManifest`,
+  `loadProjectFile`/`saveProjectFile`/`deleteProjectFile`,
+  `makeBlankProjectData` (a genuinely empty graph for "+ New
+  project," not the demo graph), `newProjectId`. `loadLegacySave`
+  reads the old fixed filename ONLY once, to migrate a pre-SES026
+  autosave into the new system's first project on load. All of it
+  wraps `@tauri-apps/plugin-fs`, scoped to the app's own AppData dir,
+  no-op outside the real Tauri shell (plain `npm run dev`).
 - `sketchLayer.ts` — pure visual planning sketches (Falcon, 2026-09-03:
   "draw paths without really needing node... freedom to plan the
   paths"). `Sketch {id, from, to}` + `SketchLayer` CRUD, deliberately
@@ -86,6 +96,15 @@ per-socket wiring/direction arrows/storage-only badges — SES019) done.
   committed only by an actual drag on the canvas (a plain click while
   armed draws nothing), rendered as a dashed purple/violet line so it
   reads as a background guide rather than a real path.
+- `FileTab.tsx` — the FILE tab (SES026, FBP014 half-resolved). Lists
+  every project the manifest knows about (`persistence.ts`), newest-
+  opened first; "+ New project" (`window.prompt` for a name) creates a
+  genuinely blank project via `makeBlankProjectData`; clicking a
+  non-active project switches to it (App.tsx flushes the current
+  project's autosave first via `handleSwitchProject`); rename/delete
+  use `window.prompt`/`window.confirm`. Delete is disabled for the
+  currently active project so App.tsx never has to handle "what
+  replaces the open canvas mid-delete."
 
 Per-socket wiring lives mostly in `src/floor/floorLayout.ts`, not here
 — see that file's own header comment for the anchor-booking design
@@ -107,5 +126,9 @@ it's built). Object-type -> path-style taxonomy (FBP012) and the
 wireframe's "LAYER 1-5" z-axis floor-stacking concept (FBP013) are
 both future-only per Falcon. Lock blocking deletion (FBP010) is also
 still deferred. Ribbon/tabs chrome (FBP008) resolved as out of scope
-beyond LeftPanel's own NODES/PATHS/OBJECTS tabs. FBP009 (per-socket
-wiring + deletion) is now fully resolved.
+beyond LeftPanel's own NODES/PATHS/OBJECTS/FILE tabs. FBP009
+(per-socket wiring + deletion) is now fully resolved. FBP014 is half-
+resolved: the FILE tab (multi-project persistence) is done (SES026);
+a Tools tab (multiple-selection tool, move tool) remains deferred,
+not started, per Falcon's own "we can introduce more on later
+builds" — do not build it without an explicit further request.
