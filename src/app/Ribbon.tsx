@@ -31,6 +31,18 @@ const TABS: { tab: RibbonTab; label: string }[] = [
 ];
 
 interface RibbonProps {
+  /** Title-strip project name (Falcon, 2026-09-04, comparing the port
+   * against the mockup: "the rest are kind of missing" — the mockup's
+   * title strip reads "FluxBoard — <project name>", centered). Null
+   * while the manifest hasn't resolved yet (same brief window every
+   * other project-aware UI already tolerates). */
+  projectName: string | null;
+  /** Quick-access Save (title strip). The real save is autosave every
+   * 3s (App.tsx) — this just flushes it immediately on demand, same
+   * function the project-switch/create flow already calls before
+   * swapping projects. */
+  onSaveNow: () => void;
+
   activeTab: RibbonTab;
   onTabChange: (tab: RibbonTab) => void;
 
@@ -70,6 +82,8 @@ interface RibbonProps {
  * "placeholder until asked for" treatment OBJECTS already had.
  */
 export function Ribbon({
+  projectName,
+  onSaveNow,
   activeTab,
   onTabChange,
   armedKind,
@@ -93,15 +107,23 @@ export function Ribbon({
     <div style={{ flexShrink: 0, background: theme.bgPanel, borderBottom: `1px solid ${theme.border}` }}>
       <div
         style={{
-          padding: '6px 12px',
-          fontSize: 13,
-          fontWeight: 700,
-          color: theme.text1,
-          letterSpacing: 0.2,
+          display: 'flex',
+          alignItems: 'center',
+          padding: '5px 10px',
           borderBottom: `1px solid ${theme.borderSoft}`,
         }}
       >
-        FluxBoard
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
+          <QatIconButton title="Save now" onClick={onSaveNow} icon={<SaveIcon />} />
+          <QatIconButton title="Export — coming soon" disabled icon={<ExportIcon />} />
+          <span style={{ width: 1, height: 16, background: theme.borderSoft, margin: '0 4px' }} />
+          <QatIconButton title="Undo — coming soon" disabled icon={<UndoIcon />} />
+          <QatIconButton title="Redo — coming soon" disabled icon={<RedoIcon />} />
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: theme.text1, letterSpacing: 0.2, textAlign: 'center' }}>
+          FluxBoard{projectName ? ` — ${projectName}` : ''}
+        </div>
+        <div style={{ flex: 1 }} />
       </div>
       <div style={{ display: 'flex', borderBottom: `1px solid ${theme.borderSoft}` }}>
         {TABS.map(({ tab, label }) => (
@@ -637,6 +659,80 @@ function ObjectsIcon() {
   return (
     <svg {...iconProps()}>
       <circle cx="8" cy="8" r="5" />
+    </svg>
+  );
+}
+
+/** Title-strip icon button — smaller/flatter than the ribbon-group
+ * swatch buttons below (`swatchButtonStyle`), no label underneath,
+ * matching the mockup's QAT row. */
+function QatIconButton({
+  title,
+  icon,
+  disabled,
+  onClick,
+}: {
+  title: string;
+  icon: ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        width: 26,
+        height: 26,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        border: 'none',
+        borderRadius: 5,
+        background: 'transparent',
+        color: theme.text2,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.4 : 1,
+      }}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function SaveIcon() {
+  return (
+    <svg {...iconProps(14)}>
+      <path d="M2.5 2.5h9l2 2v9h-11z" />
+      <path d="M4.5 2.5v4h6v-4" />
+      <path d="M4.5 13.5v-4h7v4" />
+    </svg>
+  );
+}
+function ExportIcon() {
+  return (
+    <svg {...iconProps(14)}>
+      <path d="M8 10.5V2.5" />
+      <path d="M5 5.5 8 2.5l3 3" />
+      <path d="M2.5 10.5v2.2a.8.8 0 0 0 .8.8h9.4a.8.8 0 0 0 .8-.8v-2.2" />
+    </svg>
+  );
+}
+function UndoIcon() {
+  return (
+    <svg {...iconProps(14)}>
+      <path d="M4 4.5H10.5a3.5 3.5 0 0 1 0 7H7" />
+      <path d="M6 2 3.5 4.5 6 7" />
+    </svg>
+  );
+}
+function RedoIcon() {
+  return (
+    <svg {...iconProps(14)}>
+      <path d="M12 4.5H5.5a3.5 3.5 0 0 0 0 7H9" />
+      <path d="M10 2l2.5 2.5L10 7" />
     </svg>
   );
 }

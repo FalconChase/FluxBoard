@@ -10,12 +10,12 @@ import type { SketchLayer } from './sketchLayer';
 import { theme } from './theme';
 
 interface PropertiesPanelProps {
-  /** App.tsx only mounts this component while something is selected
-   * (Falcon, 2026-09-04, ribbon port: "ribbon-docked Properties...
-   * auto-shown on selection") — so this is never null here; the old
-   * "nothing selected" placeholder text lived in this component when
-   * it was a permanent 260px dock, and moved out along with it. */
-  selection: Selection;
+  /** Falcon, 2026-09-04 (comparing the real port against the approved
+   * mockup): "the rest are kind of missing in the UI" — the mockup's
+   * PROPERTIES panel is a permanent right-docked column with an idle
+   * placeholder, not a floating overlay that vanishes when nothing is
+   * selected. Reverted to that; null means show the placeholder. */
+  selection: Selection | null;
   graph: GraphModel;
   skinConfig: SkinConfig;
   floorLayout: FloorLayout;
@@ -69,26 +69,21 @@ export function PropertiesPanel({
   sketchLayer,
   onDelete,
 }: PropertiesPanelProps) {
-  // Keys the whole editing block on the selection identity — every
-  // field inside NodeProperties/EdgeProperties can then hold plain
+  // Keys just the selection-editing block, not the whole panel — so
+  // every field inside NodeProperties/EdgeProperties can hold plain
   // local state without worrying about stale values from a previous
-  // selection.
-  const selectionKey = `${selection.type}:${selection.id}`;
+  // selection, while the panel itself (and its idle placeholder)
+  // stays permanently mounted.
+  const selectionKey = selection ? `${selection.type}:${selection.id}` : 'none';
 
   return (
     <div
-      key={selectionKey}
       style={{
-        position: 'absolute',
-        top: 12,
-        right: 12,
         width: 260,
-        maxHeight: 'calc(100% - 24px)',
+        flexShrink: 0,
         overflowY: 'auto',
         background: theme.bgPanel,
-        border: `1px solid ${theme.border}`,
-        borderRadius: 10,
-        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+        borderLeft: `1px solid ${theme.border}`,
         padding: '12px 14px',
         fontFamily: 'system-ui, sans-serif',
       }}
@@ -105,21 +100,28 @@ export function PropertiesPanel({
       >
         Properties
       </div>
-      {selection.type === 'node' && (
-        <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} floorLayout={floorLayout} onDelete={onDelete} />
-      )}
-      {selection.type === 'edge' && (
-        <EdgeProperties
-          edgeId={selection.id}
-          graph={graph}
-          skinConfig={skinConfig}
-          floorLayout={floorLayout}
-          onDelete={onDelete}
-        />
-      )}
-      {selection.type === 'sketch' && (
-        <SketchProperties sketchId={selection.id} sketchLayer={sketchLayer} onDelete={onDelete} />
-      )}
+      <div key={selectionKey}>
+        {selection === null && (
+          <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
+            Select a node or path to edit its properties.
+          </p>
+        )}
+        {selection?.type === 'node' && (
+          <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} floorLayout={floorLayout} onDelete={onDelete} />
+        )}
+        {selection?.type === 'edge' && (
+          <EdgeProperties
+            edgeId={selection.id}
+            graph={graph}
+            skinConfig={skinConfig}
+            floorLayout={floorLayout}
+            onDelete={onDelete}
+          />
+        )}
+        {selection?.type === 'sketch' && (
+          <SketchProperties sketchId={selection.id} sketchLayer={sketchLayer} onDelete={onDelete} />
+        )}
+      </div>
     </div>
   );
 }

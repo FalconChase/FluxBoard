@@ -628,6 +628,8 @@ export function App() {
       }}
     >
       <Ribbon
+        projectName={projects.find((p) => p.id === activeProjectId)?.name ?? null}
+        onSaveNow={() => void flushActiveProjectSave()}
         activeTab={activeRibbonTab}
         onTabChange={setActiveRibbonTab}
         armedKind={placementKind}
@@ -679,17 +681,15 @@ export function App() {
             canvasBackground={canvasBackground}
             onCursorWorldPositionChange={setCursorWorldPosition}
           />
-          {selection !== null && (
-            <PropertiesPanel
-              selection={selection}
-              graph={graph}
-              skinConfig={skinConfig}
-              floorLayout={floorLayout}
-              sketchLayer={sketchLayer}
-              onDelete={handleDeleteSelection}
-            />
-          )}
         </div>
+        <PropertiesPanel
+          selection={selection}
+          graph={graph}
+          skinConfig={skinConfig}
+          floorLayout={floorLayout}
+          sketchLayer={sketchLayer}
+          onDelete={handleDeleteSelection}
+        />
       </div>
       <StatusBar
         isRunning={isRunning}
