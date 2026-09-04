@@ -3,14 +3,18 @@ import { GraphModel } from '../../core/GraphModel';
 import { FloorLayout } from '../../floor/floorLayout';
 import { SkinConfig } from '../../skin/SkinConfig';
 import { SketchLayer } from '../sketchLayer';
-import { serializeState, clearAllStores, populateState, type CanvasSettings } from '../persistence';
+import { serializeState, clearAllStores, populateState, makeBlankProjectData, newProjectId, type CanvasSettings } from '../persistence';
 
 /**
  * Save/load (Falcon, 2026-09-03: "my progress lost or gets unsaved
- * like when i minimised the app... why is this?"). These tests cover
- * the pure serialize/clear/populate logic — the part that's testable
- * without the real Tauri fs plugin (saveToDisk/loadFromDisk are
- * thin, no-op-outside-Tauri wrappers around it, verified separately
+ * like when i minimised the app... why is this?", later the same day:
+ * "the file tab... create new projects, manages, and contains the
+ * existing/saved projects"). These tests cover the pure serialize/
+ * clear/populate logic shared by both the single-project and multi-
+ * project code paths — the part that's testable without the real
+ * Tauri fs plugin (loadManifest/saveManifest/loadProjectFile/
+ * saveProjectFile/deleteProjectFile/loadLegacySave are thin, no-op-
+ * outside-Tauri wrappers around actual disk I/O, verified separately
  * by Falcon via `npm run tauri:dev`).
  */
 
@@ -137,5 +141,39 @@ describe('persistence', () => {
     expect(graph.getNode('src')).toBeUndefined(); // old demo node gone
     expect(sketchLayer.getAll()).toHaveLength(0); // old sketch gone
     expect(restoredSettings).toEqual({ gridSpacing: 32, tickIntervalMs: 250 });
+  });
+
+  // Multiple named projects (Falcon, 2026-09-03: "the file tab...
+  // create new projects, manages, and contains the existing/saved
+  // projects"). Actual disk I/O (loadManifest/saveProjectFile/etc.)
+  // is Tauri-only and untestable here (same as saveToDisk/loadFromDisk
+  // always were) — these cover the pure logic each of those wraps.
+  describe('multi-project helpers', () => {
+    it('makeBlankProjectData produces an empty graph with the given settings', () => {
+      const settings: CanvasSettings = { gridSpacing: 8, tickIntervalMs: 400 };
+      const blank = makeBlankProjectData(settings);
+
+      expect(blank.nodes).toHaveLength(0);
+      expect(blank.edges).toHaveLength(0);
+      expect(blank.sketches).toHaveLength(0);
+      expect(blank.settings).toEqual(settings);
+    });
+
+    it('a blank project round-trips through populateState just like any other saved graph', () => {
+      const { graph, floorLayout, skinConfig, sketchLayer } = buildSampleState();
+      const blank = makeBlankProjectData({ gridSpacing: 8, tickIntervalMs: 400 });
+
+      clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+      const settings = populateState(blank, graph, floorLayout, skinConfig, sketchLayer);
+
+      expect(graph.getAllNodes()).toHaveLength(0);
+      expect(settings).toEqual({ gridSpacing: 8, tickIntervalMs: 400 });
+    });
+
+    it('newProjectId generates unique, non-empty ids', () => {
+      const ids = new Set(Array.from({ length: 500 }, () => newProjectId()));
+      expect(ids.size).toBe(500);
+      for (const id of ids) expect(id.length).toBeGreaterThan(0);
+    });
   });
 });

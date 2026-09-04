@@ -11,7 +11,22 @@ import { LeftPanel, type LeftPanelTab } from './LeftPanel';
 import { PropertiesPanel } from './PropertiesPanel';
 import type { Selection } from './selection';
 import { SketchLayer } from './sketchLayer';
-import { clearAllStores, loadFromDisk, populateState, saveToDisk, serializeState, type CanvasSettings } from './persistence';
+import {
+  clearAllStores,
+  deleteProjectFile,
+  loadLegacySave,
+  loadManifest,
+  loadProjectFile,
+  makeBlankProjectData,
+  newProjectId,
+  populateState,
+  saveManifest,
+  saveProjectFile,
+  serializeState,
+  type CanvasSettings,
+  type ProjectMeta,
+  type ProjectsManifest,
+} from './persistence';
 
 /**
  * Milestone 4 demo graph (design doc §9 step 4): source -> distributor
@@ -207,6 +222,17 @@ export function App() {
   const tickIntervalMsRef = useRef(tickIntervalMs);
   tickIntervalMsRef.current = tickIntervalMs;
 
+  // Multiple named projects (Falcon, 2026-09-03: "the file tab...
+  // create new projects, manages, and contains the existing/saved
+  // projects"). `projects`/`activeProjectId` are React state so the
+  // FILE tab re-renders; `activeProjectIdRef` mirrors activeProjectId
+  // for the autosave effect below (same ref convention as gridSpacing/
+  // tickIntervalMs) so autosave always targets whichever project is
+  // CURRENTLY open without needing to restart its interval.
+  const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const activeProjectIdRef = useRef<string | null>(null);
+
   // Move/delete/snap feature set: Delete/Backspace removes whatever is
   // selected, F8 toggles snap-to-grid. Both are window-level so they
   // work with focus anywhere on the canvas (which isn't a focusable
@@ -242,36 +268,77 @@ export function App() {
   }, []);
 
   // Persistence (Falcon, 2026-09-03: "my progress lost or gets
-  // unsaved... why is this?"). On mount, load whatever was autosaved
-  // last time and replace the demo graph with it IN PLACE —
-  // clearAllStores empties, then populateState refills, the SAME
-  // graph/floorLayout/skinConfig/sketchLayer instances every other
-  // component already holds a reference to, rather than swapping in
-  // new ones (deliberate: avoids a null/loading React-state window and
-  // any risk to the keydown effect just above, which closes over these
-  // instances once at mount). No save yet — first run ever, or running
-  // outside the real Tauri shell via plain `npm run dev` — leaves the
-  // demo graph exactly as it was.
+  // unsaved... why is this?", then later the same day: "the file
+  // tab... create new projects, manages, and contains the existing/
+  // saved projects"). On mount: read the project manifest; if there
+  // isn't one yet, either migrate the ORIGINAL pre-multi-project
+  // fixed save file (an install that already had autosave running
+  // before this shipped) or bootstrap a fresh project from whatever's
+  // currently showing (the demo graph, or a blank canvas outside
+  // Tauri) — either way, exactly one project now exists and is
+  // active. Then load that active project's data and replace the
+  // demo graph with it IN PLACE — clearAllStores empties, then
+  // populateState refills, the SAME graph/floorLayout/skinConfig/
+  // sketchLayer instances every other component already holds a
+  // reference to, rather than swapping in new ones (deliberate:
+  // avoids a null/loading React-state window and any risk to the
+  // keydown effect just above, which closes over these instances once
+  // at mount). Outside Tauri, every read/write below silently no-ops
+  // (persistence.ts's isTauri guard) — projects/activeProjectId still
+  // get set from an in-memory-only manifest, so the FILE tab still
+  // works for organizing within the session, it just doesn't survive
+  // a reload there.
   useEffect(() => {
     let cancelled = false;
-    loadFromDisk().then((saved) => {
-      if (cancelled || !saved) return;
-      clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
-      const settings = populateState(saved, graph, floorLayout, skinConfig, sketchLayer);
-      setGridSpacing(settings.gridSpacing);
-      setTickIntervalMs(settings.tickIntervalMs);
-      advanceNextIdPast(nextIdRef, [
-        ...saved.nodes.map((n) => n.id),
-        ...saved.edges.map((e) => e.id),
-        ...saved.sketches.map((s) => s.id),
-      ]);
-    });
+    (async () => {
+      let manifest = await loadManifest();
+
+      if (!manifest) {
+        const legacy = await loadLegacySave();
+        const id = newProjectId();
+        const settings: CanvasSettings = {
+          gridSpacing: gridSpacingRef.current,
+          tickIntervalMs: tickIntervalMsRef.current,
+        };
+        const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+        await saveProjectFile(id, data);
+        manifest = {
+          activeProjectId: id,
+          projects: [{ id, name: legacy ? 'My Project' : 'My First Project', lastOpenedAt: Date.now() }],
+        };
+        await saveManifest(manifest);
+      }
+
+      if (cancelled) return;
+
+      const activeData = await loadProjectFile(manifest.activeProjectId);
+      if (activeData) {
+        clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+        const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer);
+        setGridSpacing(settings.gridSpacing);
+        setTickIntervalMs(settings.tickIntervalMs);
+        advanceNextIdPast(nextIdRef, [
+          ...activeData.nodes.map((n) => n.id),
+          ...activeData.edges.map((e) => e.id),
+          ...activeData.sketches.map((s) => s.id),
+        ]);
+      }
+      // else: the active project's file is missing (outside Tauri, or
+      // deleted out from under us) — leave whatever's currently live
+      // (the demo graph) untouched, same as before this feature.
+
+      if (cancelled) return;
+      activeProjectIdRef.current = manifest.activeProjectId;
+      setActiveProjectId(manifest.activeProjectId);
+      setProjects(manifest.projects);
+    })();
     return () => {
       cancelled = true;
     };
     // graph/floorLayout/skinConfig/sketchLayer are stable useMemo
-    // singletons (never reassigned) and nextIdRef is a ref — safe to
-    // omit, same reasoning the keydown effect above documents.
+    // singletons (never reassigned) and nextIdRef/activeProjectIdRef
+    // are refs — safe to omit, same reasoning the keydown effect
+    // above documents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -280,15 +347,20 @@ export function App() {
   // case Falcon reported — and the page actually closing). Settings
   // are read through the refs above so this effect never needs
   // gridSpacing/tickIntervalMs in its deps and the interval never has
-  // to be torn down and restarted when they change.
+  // to be torn down and restarted when they change. Targets whichever
+  // project is CURRENTLY active via activeProjectIdRef, same reason —
+  // switching projects doesn't need to restart this effect either.
+  // Skips silently until the mount effect above has resolved an
+  // active project (a few ticks at most).
   useEffect(() => {
     function doSave(): void {
+      if (!activeProjectIdRef.current) return;
       const settings: CanvasSettings = {
         gridSpacing: gridSpacingRef.current,
         tickIntervalMs: tickIntervalMsRef.current,
       };
       const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
-      void saveToDisk(saved);
+      void saveProjectFile(activeProjectIdRef.current, saved);
     }
 
     const intervalId = window.setInterval(doSave, 3000);
@@ -308,6 +380,103 @@ export function App() {
     // safe to omit, same reasoning as the load effect just above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Writes the CURRENTLY active project's data immediately (not
+   * waiting for the next autosave tick) — called right before
+   * switching/creating a project so nothing typed in the last few
+   * seconds is lost to the interval's own timing. No-op if no project
+   * is active yet (mount effect above hasn't resolved). */
+  async function flushActiveProjectSave(): Promise<void> {
+    if (!activeProjectIdRef.current) return;
+    const settings: CanvasSettings = { gridSpacing: gridSpacingRef.current, tickIntervalMs: tickIntervalMsRef.current };
+    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+    await saveProjectFile(activeProjectIdRef.current, saved);
+  }
+
+  /** Writes the manifest with a given active id + project list, and
+   * mirrors the list into React state in the same call — every FILE
+   * tab action below goes through this so the on-disk manifest and
+   * the on-screen list never drift apart. */
+  function persistManifest(activeId: string, nextProjects: ProjectMeta[]): void {
+    setProjects(nextProjects);
+    const manifest: ProjectsManifest = { activeProjectId: activeId, projects: nextProjects };
+    void saveManifest(manifest);
+  }
+
+  /** FILE tab: switch to a different existing project. Flushes the
+   * outgoing project's save first (so a switch never loses recent
+   * work), then clears/repopulates the SAME live store instances from
+   * the target project's data — identical in spirit to the mount
+   * effect's initial load, just triggered by a click instead of
+   * startup. */
+  async function handleSwitchProject(id: string): Promise<void> {
+    if (id === activeProjectIdRef.current) return;
+    await flushActiveProjectSave();
+    const data = await loadProjectFile(id);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+    if (data) {
+      const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer);
+      setGridSpacing(settings.gridSpacing);
+      setTickIntervalMs(settings.tickIntervalMs);
+      advanceNextIdPast(nextIdRef, [
+        ...data.nodes.map((n) => n.id),
+        ...data.edges.map((e) => e.id),
+        ...data.sketches.map((s) => s.id),
+      ]);
+    } else {
+      nextIdRef.current = 1;
+    }
+    setSelection(null);
+    activeProjectIdRef.current = id;
+    setActiveProjectId(id);
+    persistManifest(
+      id,
+      projects.map((p) => (p.id === id ? { ...p, lastOpenedAt: Date.now() } : p)),
+    );
+  }
+
+  /** FILE tab: "+ New project" — flushes the outgoing project, then
+   * clears the canvas down to a genuinely blank one (no demo content)
+   * for the new project, using today's grid-spacing/snap defaults
+   * (SES025) rather than whatever the previous project happened to
+   * have set. */
+  async function handleCreateProject(name: string): Promise<void> {
+    await flushActiveProjectSave();
+    const id = newProjectId();
+    const settings: CanvasSettings = { gridSpacing: 8, tickIntervalMs: 400 };
+    const data = makeBlankProjectData(settings);
+    await saveProjectFile(id, data);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+    setGridSpacing(settings.gridSpacing);
+    setTickIntervalMs(settings.tickIntervalMs);
+    nextIdRef.current = 1;
+    setSelection(null);
+    activeProjectIdRef.current = id;
+    setActiveProjectId(id);
+    persistManifest(id, [...projects, { id, name, lastOpenedAt: Date.now() }]);
+  }
+
+  /** FILE tab: rename — manifest-only, doesn't touch the project's
+   * own saved graph data at all. */
+  function handleRenameProject(id: string, name: string): void {
+    if (!activeProjectIdRef.current) return;
+    persistManifest(
+      activeProjectIdRef.current,
+      projects.map((p) => (p.id === id ? { ...p, name } : p)),
+    );
+  }
+
+  /** FILE tab: delete — the panel itself disables this for whichever
+   * project is currently active, so there's never a question of what
+   * replaces the open canvas as a result of this call. */
+  async function handleDeleteProject(id: string): Promise<void> {
+    if (!activeProjectIdRef.current || id === activeProjectIdRef.current) return;
+    await deleteProjectFile(id);
+    persistManifest(
+      activeProjectIdRef.current,
+      projects.filter((p) => p.id !== id),
+    );
+  }
 
   function handleDeleteSelection(): void {
     if (!selection) return;
@@ -481,6 +650,12 @@ export function App() {
           onArmEdgeStyle={handleArmEdgeStyle}
           sketchArmed={sketchArmed}
           onArmSketch={handleArmSketch}
+          projects={projects}
+          activeProjectId={activeProjectId}
+          onSwitchProject={handleSwitchProject}
+          onCreateProject={handleCreateProject}
+          onRenameProject={handleRenameProject}
+          onDeleteProject={handleDeleteProject}
         />
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
           <FluxCanvas

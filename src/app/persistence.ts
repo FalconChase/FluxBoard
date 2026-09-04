@@ -13,9 +13,21 @@ import type { Point } from '../floor/bezier';
  * persistence layer — App.tsx built a fresh in-memory graph every
  * mount. This module is the fix: serialize the four mutable stores
  * (GraphModel/FloorLayout/SkinConfig/SketchLayer) plus the small bit
- * of App-level canvas/sim state, to and from one plain-JSON file on
- * disk via Tauri's fs plugin (FBD010 rev.2's "or plain JSON" option
- * — Falcon confirmed JSON over SQLite, 2026-09-03).
+ * of App-level canvas/sim state, to and from plain-JSON files on disk
+ * via Tauri's fs plugin (FBD010 rev.3 — Falcon confirmed autosave +
+ * plain JSON over SQLite, 2026-09-03).
+ *
+ * Multiple named projects (Falcon, same day: "the file tab... create
+ * new projects, manages, and contains the existing/saved projects").
+ * Each project is its own file at `projects/<id>.json`; a small
+ * manifest file (`fluxbord-projects.json` — MANIFEST_FILE_NAME) lists
+ * every known project (id, display name, last-opened time) and which
+ * one is currently active, so reopening the app returns to the same
+ * project rather than always some fixed one. `loadLegacySave` reads
+ * the ORIGINAL single fixed-filename save (pre-multi-project) purely
+ * for one-time migration — App.tsx wraps it as a new project the
+ * first time this ships to an install that already had one, so
+ * nobody's existing autosaved work goes missing.
  *
  * Deliberately does NOT touch NodeRuntimeState (spawn timers, queues,
  * counters) — that's live simulation state, not saved design, the
@@ -24,8 +36,21 @@ import type { Point } from '../floor/bezier';
  * of the simulation moment it was saved at.
  */
 
-const SAVE_FILE_NAME = 'fluxboard-save.json';
+const LEGACY_SAVE_FILE_NAME = 'fluxboard-save.json';
+const PROJECTS_DIR_NAME = 'projects';
+const MANIFEST_FILE_NAME = 'fluxboard-projects.json';
 const SAVE_VERSION = 1;
+
+export interface ProjectMeta {
+  id: string;
+  name: string;
+  lastOpenedAt: number;
+}
+
+export interface ProjectsManifest {
+  activeProjectId: string;
+  projects: ProjectMeta[];
+}
 
 export interface CanvasSettings {
   gridSpacing: number;
@@ -196,50 +221,149 @@ function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-/** Writes the save file to the app's own AppData directory (Tauri's
- * fs plugin, scoped there via src-tauri/capabilities/default.json —
- * never anywhere else on disk). Failures are logged, not thrown —
- * autosave running in the background shouldn't ever crash the app or
- * interrupt what the person is doing. */
-export async function saveToDisk(saved: SavedFile): Promise<void> {
-  if (!isTauri()) return;
-  try {
-    const fs = await import('@tauri-apps/plugin-fs');
-    // The app's AppData directory isn't guaranteed to exist yet on a
-    // brand-new install (Tauri doesn't pre-create it just because
-    // tauri.conf.json declares an identifier) — create it if missing
-    // before the first write ever happens. '' addresses the base
-    // directory itself, not a subfolder of it.
-    const dirExists = await fs.exists('', { baseDir: fs.BaseDirectory.AppData });
-    if (!dirExists) {
-      await fs.mkdir('', { baseDir: fs.BaseDirectory.AppData, recursive: true });
-    }
-    await fs.writeTextFile(SAVE_FILE_NAME, JSON.stringify(saved), { baseDir: fs.BaseDirectory.AppData });
-  } catch (err) {
-    console.error('FluxBoard: autosave failed', err);
+/** Loads Tauri's fs plugin and makes sure the app's own AppData
+ * directory exists (not guaranteed on a brand-new install — Tauri
+ * doesn't pre-create it just because tauri.conf.json declares an
+ * identifier) before any write happens. Shared by every write path
+ * below so that check only lives in one place. '' addresses the base
+ * directory itself, not a subfolder of it. */
+async function readyFs() {
+  const fs = await import('@tauri-apps/plugin-fs');
+  const dirExists = await fs.exists('', { baseDir: fs.BaseDirectory.AppData });
+  if (!dirExists) {
+    await fs.mkdir('', { baseDir: fs.BaseDirectory.AppData, recursive: true });
   }
+  return fs;
 }
 
-/** Reads the save file back, or returns undefined if there isn't one
- * yet (first run ever, or running outside Tauri) — the caller falls
- * back to the built-in demo graph in that case. A corrupt/unreadable
- * file is treated the same as "none" (logged, not thrown) rather than
- * blocking the app from starting at all. */
-export async function loadFromDisk(): Promise<SavedFile | undefined> {
+function projectFilePath(id: string): string {
+  return `${PROJECTS_DIR_NAME}/${id}.json`;
+}
+
+/** A fresh, empty project's starting content — no nodes/edges/
+ * sketches, just the given canvas settings. What "+ New project"
+ * (the File tab) creates. */
+export function makeBlankProjectData(settings: CanvasSettings): SavedFile {
+  return {
+    version: SAVE_VERSION,
+    nodes: [],
+    edges: [],
+    nodePositions: {},
+    edgeGeometry: {},
+    nodeSkin: {},
+    edgeSkin: {},
+    sketches: [],
+    settings,
+  };
+}
+
+/** Short, unique-enough id for a new project's filename — not a
+ * user-facing name (that's ProjectMeta.name, freely editable). */
+export function newProjectId(): string {
+  return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Reads the project manifest (which projects exist, which is
+ * active), or undefined if there isn't one yet (first run ever, a
+ * pre-multi-project install that hasn't migrated yet, or running
+ * outside Tauri). Corrupt/unreadable is treated the same as "none". */
+export async function loadManifest(): Promise<ProjectsManifest | undefined> {
   if (!isTauri()) return undefined;
   try {
     const fs = await import('@tauri-apps/plugin-fs');
-    const exists = await fs.exists(SAVE_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
+    const exists = await fs.exists(MANIFEST_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
     if (!exists) return undefined;
-    const text = await fs.readTextFile(SAVE_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
+    const text = await fs.readTextFile(MANIFEST_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
+    return JSON.parse(text) as ProjectsManifest;
+  } catch (err) {
+    console.error('FluxBoard: reading the project list failed', err);
+    return undefined;
+  }
+}
+
+/** Writes the project manifest. Failures are logged, not thrown —
+ * same "never crash the app over a save" convention as every other
+ * write here. */
+export async function saveManifest(manifest: ProjectsManifest): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const fs = await readyFs();
+    await fs.writeTextFile(MANIFEST_FILE_NAME, JSON.stringify(manifest), { baseDir: fs.BaseDirectory.AppData });
+  } catch (err) {
+    console.error('FluxBoard: saving the project list failed', err);
+  }
+}
+
+/** Reads one project's saved graph, or undefined if it's missing/
+ * unreadable/running outside Tauri — same "treat as none" convention
+ * as every other read here. */
+export async function loadProjectFile(id: string): Promise<SavedFile | undefined> {
+  if (!isTauri()) return undefined;
+  try {
+    const fs = await import('@tauri-apps/plugin-fs');
+    const path = projectFilePath(id);
+    const exists = await fs.exists(path, { baseDir: fs.BaseDirectory.AppData });
+    if (!exists) return undefined;
+    const text = await fs.readTextFile(path, { baseDir: fs.BaseDirectory.AppData });
     const parsed = JSON.parse(text) as SavedFile;
     if (parsed.version !== SAVE_VERSION) {
-      console.warn(`FluxBoard: save file is version ${parsed.version}, expected ${SAVE_VERSION} — ignoring it`);
+      console.warn(`FluxBoard: project "${id}" is save version ${parsed.version}, expected ${SAVE_VERSION} — ignoring it`);
       return undefined;
     }
     return parsed;
   } catch (err) {
-    console.error('FluxBoard: loading the save file failed, starting fresh', err);
+    console.error(`FluxBoard: loading project "${id}" failed`, err);
+    return undefined;
+  }
+}
+
+/** Writes one project's graph — this is what autosave calls every
+ * tick, targeting whichever project is currently active. */
+export async function saveProjectFile(id: string, saved: SavedFile): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const fs = await readyFs();
+    await fs.mkdir(PROJECTS_DIR_NAME, { baseDir: fs.BaseDirectory.AppData, recursive: true });
+    await fs.writeTextFile(projectFilePath(id), JSON.stringify(saved), { baseDir: fs.BaseDirectory.AppData });
+  } catch (err) {
+    console.error(`FluxBoard: saving project "${id}" failed`, err);
+  }
+}
+
+/** Deletes one project's file from disk (the manifest entry is the
+ * caller's own responsibility — App.tsx removes it and rewrites the
+ * manifest right after this succeeds). Never called on the currently
+ * ACTIVE project — the File tab disables that button — so there's
+ * always something left open in the UI regardless of outcome here. */
+export async function deleteProjectFile(id: string): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const fs = await import('@tauri-apps/plugin-fs');
+    await fs.remove(projectFilePath(id), { baseDir: fs.BaseDirectory.AppData });
+  } catch (err) {
+    console.error(`FluxBoard: deleting project "${id}" failed`, err);
+  }
+}
+
+/** Reads the ORIGINAL pre-multi-project fixed save file
+ * (`fluxboard-save.json`, SES024) — migration-only. App.tsx calls
+ * this exactly once, the first time loadManifest() comes back empty,
+ * so an install that already had SES024's single autosaved file gets
+ * it wrapped into a new project instead of silently losing it. Once
+ * the manifest exists this is never read again; the file itself is
+ * left on disk untouched (harmless orphan) rather than deleted. */
+export async function loadLegacySave(): Promise<SavedFile | undefined> {
+  if (!isTauri()) return undefined;
+  try {
+    const fs = await import('@tauri-apps/plugin-fs');
+    const exists = await fs.exists(LEGACY_SAVE_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
+    if (!exists) return undefined;
+    const text = await fs.readTextFile(LEGACY_SAVE_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
+    const parsed = JSON.parse(text) as SavedFile;
+    if (parsed.version !== SAVE_VERSION) return undefined;
+    return parsed;
+  } catch (err) {
+    console.error('FluxBoard: reading the legacy save file failed', err);
     return undefined;
   }
 }

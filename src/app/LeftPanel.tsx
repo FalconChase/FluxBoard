@@ -3,8 +3,10 @@ import type { NodeKind } from '../core/types';
 import type { EdgeStyle } from '../skin/pathSkin';
 import { NodePalette } from './NodePalette';
 import { PathPalette } from './PathPalette';
+import { FileTab } from './FileTab';
+import type { ProjectMeta } from './persistence';
 
-export type LeftPanelTab = 'nodes' | 'paths' | 'objects';
+export type LeftPanelTab = 'nodes' | 'paths' | 'objects' | 'file';
 
 interface LeftPanelProps {
   activeTab: LeftPanelTab;
@@ -18,23 +20,38 @@ interface LeftPanelProps {
 
   sketchArmed: boolean;
   onArmSketch: (armed: boolean) => void;
+
+  /** FILE tab (Falcon, 2026-09-03: "the file tab... on the top") —
+   * create/manage/switch between multiple saved projects. State and
+   * the actual disk I/O both live in App.tsx (persistence.ts); this
+   * panel is purely a view over it, same pattern as everything else
+   * here. */
+  projects: ProjectMeta[];
+  activeProjectId: string | null;
+  onSwitchProject: (id: string) => void;
+  onCreateProject: (name: string) => void;
+  onRenameProject: (id: string, name: string) => void;
+  onDeleteProject: (id: string) => void;
 }
 
 const TABS: { tab: LeftPanelTab; label: string }[] = [
   { tab: 'nodes', label: 'Nodes' },
   { tab: 'paths', label: 'Paths' },
   { tab: 'objects', label: 'Objects' },
+  { tab: 'file', label: 'File' },
 ];
 
 /**
  * Left-docked chrome from Falcon's wireframe (claude/build-log.md):
- * the NODES / PATHS / OBJECTS row are tabs for THIS panel's content,
- * not three separate palettes on screen at once — clicking a tab
- * swaps what's shown below it. NODES shows the existing NodePalette;
- * PATHS shows the new PathPalette (arm an edge style, click an
- * existing edge to apply it); OBJECTS is a placeholder — Falcon
- * explicitly said the item-type registry it should hold still needs
- * more spec before it's buildable.
+ * the NODES / PATHS / OBJECTS / FILE row are tabs for THIS panel's
+ * content, not four separate palettes on screen at once — clicking a
+ * tab swaps what's shown below it. NODES shows the existing
+ * NodePalette; PATHS shows the new PathPalette (arm an edge style,
+ * click an existing edge to apply it); OBJECTS is a placeholder —
+ * Falcon explicitly said the item-type registry it should hold still
+ * needs more spec before it's buildable; FILE shows the project list
+ * (create/switch/rename/delete — persistence.ts's multi-project
+ * layer).
  */
 export function LeftPanel({
   activeTab,
@@ -45,6 +62,12 @@ export function LeftPanel({
   onArmEdgeStyle,
   sketchArmed,
   onArmSketch,
+  projects,
+  activeProjectId,
+  onSwitchProject,
+  onCreateProject,
+  onRenameProject,
+  onDeleteProject,
 }: LeftPanelProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%' }}>
@@ -76,6 +99,16 @@ export function LeftPanel({
           />
         )}
         {activeTab === 'objects' && <ObjectsComingSoon />}
+        {activeTab === 'file' && (
+          <FileTab
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSwitch={onSwitchProject}
+            onCreate={onCreateProject}
+            onRename={onRenameProject}
+            onDelete={onDeleteProject}
+          />
+        )}
       </div>
     </div>
   );
