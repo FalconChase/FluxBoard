@@ -7,9 +7,15 @@ import type { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
 import type { Selection } from './selection';
 import type { SketchLayer } from './sketchLayer';
+import { theme } from './theme';
 
 interface PropertiesPanelProps {
-  selection: Selection | null;
+  /** App.tsx only mounts this component while something is selected
+   * (Falcon, 2026-09-04, ribbon port: "ribbon-docked Properties...
+   * auto-shown on selection") — so this is never null here; the old
+   * "nothing selected" placeholder text lived in this component when
+   * it was a permanent 260px dock, and moved out along with it. */
+  selection: Selection;
   graph: GraphModel;
   skinConfig: SkinConfig;
   floorLayout: FloorLayout;
@@ -20,32 +26,24 @@ interface PropertiesPanelProps {
    * only offers the same action as a button, and doesn't need to know
    * the selection's id since App.tsx already has it. */
   onDelete: () => void;
-
-  /** Canvas & Simulation section (wireframe's second properties-panel
-   * zone): global settings, not tied to any selection — App.tsx owns
-   * the actual state (FluxCanvas/App-level, not GraphModel/SkinConfig,
-   * since neither the grid nor the tick rate is part of the saved
-   * graph). Always rendered, regardless of what's selected. */
-  gridSpacing: number;
-  onGridSpacingChange: (spacing: number) => void;
-  tickIntervalMs: number;
-  onTickIntervalMsChange: (ms: number) => void;
 }
 
-const labelStyle: CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b6b73', display: 'block', marginBottom: 3 };
+const labelStyle: CSSProperties = { fontSize: 11, fontWeight: 600, color: theme.text2, display: 'block', marginBottom: 3 };
 const inputStyle: CSSProperties = {
   width: '100%',
   fontSize: 13,
   padding: '5px 7px',
   borderRadius: 5,
-  border: '1px solid #d8d7dd',
+  border: `1px solid ${theme.borderStrong}`,
+  background: theme.bgPanel2,
+  color: theme.text1,
   boxSizing: 'border-box',
 };
 const rowStyle: CSSProperties = { marginBottom: 10 };
 const sectionTitleStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
-  color: '#8a8a93',
+  color: theme.text3,
   textTransform: 'uppercase',
   letterSpacing: 0.4,
   margin: '14px 0 8px',
@@ -70,27 +68,28 @@ export function PropertiesPanel({
   floorLayout,
   sketchLayer,
   onDelete,
-  gridSpacing,
-  onGridSpacingChange,
-  tickIntervalMs,
-  onTickIntervalMsChange,
 }: PropertiesPanelProps) {
-  // Keys just the selection-editing block below, not this whole
-  // component — so every field inside NodeProperties/EdgeProperties
-  // can hold plain local state without worrying about stale values
-  // from a previous selection (the reason this key exists at all),
-  // while the CanvasSettingsSection underneath stays mounted and
-  // doesn't lose focus/scroll position every time selection changes.
-  const selectionKey = selection ? `${selection.type}:${selection.id}` : 'none';
+  // Keys the whole editing block on the selection identity — every
+  // field inside NodeProperties/EdgeProperties can then hold plain
+  // local state without worrying about stale values from a previous
+  // selection.
+  const selectionKey = `${selection.type}:${selection.id}`;
 
   return (
     <div
+      key={selectionKey}
       style={{
+        position: 'absolute',
+        top: 12,
+        right: 12,
         width: 260,
-        flexShrink: 0,
-        borderLeft: '1px solid #e5e4e7',
-        padding: '12px 14px',
+        maxHeight: 'calc(100% - 24px)',
         overflowY: 'auto',
+        background: theme.bgPanel,
+        border: `1px solid ${theme.border}`,
+        borderRadius: 10,
+        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+        padding: '12px 14px',
         fontFamily: 'system-ui, sans-serif',
       }}
     >
@@ -98,7 +97,7 @@ export function PropertiesPanel({
         style={{
           fontSize: 11,
           fontWeight: 700,
-          color: '#8a8a93',
+          color: theme.text3,
           textTransform: 'uppercase',
           letterSpacing: 0.4,
           marginBottom: 10,
@@ -106,87 +105,22 @@ export function PropertiesPanel({
       >
         Properties
       </div>
-      <div key={selectionKey}>
-        {selection === null && (
-          <p style={{ fontSize: 12, color: '#8a8a93', lineHeight: 1.5 }}>
-            Select a node or edge on the canvas to edit it, or choose a kind from the palette to add one.
-          </p>
-        )}
-        {selection?.type === 'node' && (
-          <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} floorLayout={floorLayout} onDelete={onDelete} />
-        )}
-        {selection?.type === 'edge' && (
-          <EdgeProperties
-            edgeId={selection.id}
-            graph={graph}
-            skinConfig={skinConfig}
-            floorLayout={floorLayout}
-            onDelete={onDelete}
-          />
-        )}
-        {selection?.type === 'sketch' && (
-          <SketchProperties sketchId={selection.id} sketchLayer={sketchLayer} onDelete={onDelete} />
-        )}
-      </div>
-
-      <div style={{ borderTop: '1px solid #e5e4e7', marginTop: 16, paddingTop: 4 }}>
-        <div style={sectionTitleStyle}>Canvas & simulation</div>
-        <CanvasSettingsSection
-          gridSpacing={gridSpacing}
-          onGridSpacingChange={onGridSpacingChange}
-          tickIntervalMs={tickIntervalMs}
-          onTickIntervalMsChange={onTickIntervalMsChange}
+      {selection.type === 'node' && (
+        <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} floorLayout={floorLayout} onDelete={onDelete} />
+      )}
+      {selection.type === 'edge' && (
+        <EdgeProperties
+          edgeId={selection.id}
+          graph={graph}
+          skinConfig={skinConfig}
+          floorLayout={floorLayout}
+          onDelete={onDelete}
         />
-      </div>
+      )}
+      {selection.type === 'sketch' && (
+        <SketchProperties sketchId={selection.id} sketchLayer={sketchLayer} onDelete={onDelete} />
+      )}
     </div>
-  );
-}
-
-/** Global canvas/simulation controls — not tied to any node or edge
- * selection, so this section stays visible and doesn't remount when
- * selection changes (see the selectionKey comment above). */
-function CanvasSettingsSection({
-  gridSpacing,
-  onGridSpacingChange,
-  tickIntervalMs,
-  onTickIntervalMsChange,
-}: {
-  gridSpacing: number;
-  onGridSpacingChange: (spacing: number) => void;
-  tickIntervalMs: number;
-  onTickIntervalMsChange: (ms: number) => void;
-}) {
-  return (
-    <>
-      <div style={rowStyle}>
-        <label style={labelStyle}>Grid spacing (world units)</label>
-        <input
-          type="number"
-          min={4}
-          step={4}
-          value={gridSpacing}
-          style={inputStyle}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            if (v > 0) onGridSpacingChange(v);
-          }}
-        />
-      </div>
-      <div style={rowStyle}>
-        <label style={labelStyle}>Sim tick interval (ms)</label>
-        <input
-          type="number"
-          min={10}
-          step={10}
-          value={tickIntervalMs}
-          style={inputStyle}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            if (v > 0) onTickIntervalMsChange(v);
-          }}
-        />
-      </div>
-    </>
   );
 }
 
@@ -216,8 +150,8 @@ const smallButtonStyle: CSSProperties = {
   fontSize: 11,
   padding: '5px 6px',
   borderRadius: 5,
-  border: '1px solid #d8d7dd',
-  background: '#f6f6f8',
+  border: '1px solid ' + theme.borderStrong,
+  background: theme.bgPanel2,
   cursor: 'pointer',
 };
 
@@ -235,7 +169,7 @@ function NodeProperties({
   onDelete: () => void;
 }) {
   const node = graph.getNode(nodeId);
-  if (!node) return <p style={{ fontSize: 12, color: '#c0392b' }}>Node no longer exists.</p>;
+  if (!node) return <p style={{ fontSize: 12, color: theme.danger }}>Node no longer exists.</p>;
 
   function patch(fields: Record<string, unknown>): void {
     graph.updateNodeConfig(nodeId, fields);
@@ -244,12 +178,12 @@ function NodeProperties({
   return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'capitalize', marginBottom: 2 }}>{node.kind}</div>
-      <div style={{ fontSize: 11, color: '#8a8a93', marginBottom: 4 }}>{node.id}</div>
+      <div style={{ fontSize: 11, color: theme.text3, marginBottom: 4 }}>{node.id}</div>
 
       {node.kind === 'source' && <SourceFields node={node} onChange={patch} />}
       {node.kind === 'distributor' && <DistributorFields node={node} onChange={patch} />}
       {node.kind === 'merger' && (
-        <p style={{ fontSize: 12, color: '#8a8a93' }}>
+        <p style={{ fontSize: 12, color: theme.text3 }}>
           Merger has nothing to configure — every arriving item forwards straight out its one output.
         </p>
       )}
@@ -257,7 +191,7 @@ function NodeProperties({
       {node.kind === 'mixer' && <MixerFields node={node} onChange={patch} />}
       {node.kind === 'buffer' && <BufferFields node={node} onChange={patch} />}
       {node.kind === 'sink' && (
-        <p style={{ fontSize: 12, color: '#8a8a93' }}>Sink has nothing to configure — it just consumes.</p>
+        <p style={{ fontSize: 12, color: theme.text3 }}>Sink has nothing to configure — it just consumes.</p>
       )}
 
       <SingleOutputSidePicker nodeId={nodeId} kind={node.kind} graph={graph} floorLayout={floorLayout} />
@@ -272,7 +206,7 @@ function NodeProperties({
       <button
         type="button"
         onClick={onDelete}
-        style={{ ...smallButtonStyle, width: '100%', color: '#c0392b', borderColor: '#e3b0aa' }}
+        style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
       >
         Delete node
       </button>
@@ -339,9 +273,9 @@ function SingleOutputSidePicker({
                 fontSize: 10,
                 fontWeight: 700,
                 borderRadius: 5,
-                border: '1px solid ' + (active ? '#2563eb' : '#d8d7dd'),
-                background: active ? '#2563eb' : '#f6f6f8',
-                color: active ? '#fff' : '#3c3c43',
+                border: '1px solid ' + (active ? theme.accent : theme.borderStrong),
+                background: active ? theme.accent : theme.bgPanel2,
+                color: active ? theme.text1 : theme.text1,
                 cursor: 'pointer',
               }}
             >
@@ -706,12 +640,12 @@ function SketchProperties({
   onDelete: () => void;
 }) {
   const sketch = sketchLayer.get(sketchId);
-  if (!sketch) return <p style={{ fontSize: 12, color: '#c0392b' }}>Sketch no longer exists.</p>;
+  if (!sketch) return <p style={{ fontSize: 12, color: theme.danger }}>Sketch no longer exists.</p>;
 
   return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Sketch</div>
-      <p style={{ fontSize: 12, color: '#8a8a93', lineHeight: 1.5 }}>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
         A planning guide only — no simulation meaning, not connected to any node. Replace it with a real path once
         the nodes it connects exist.
       </p>
@@ -720,7 +654,7 @@ function SketchProperties({
       <button
         type="button"
         onClick={onDelete}
-        style={{ ...smallButtonStyle, width: '100%', color: '#c0392b', borderColor: '#e3b0aa' }}
+        style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
       >
         Delete sketch
       </button>
@@ -742,12 +676,12 @@ function EdgeProperties({
   onDelete: () => void;
 }) {
   const edge = graph.getEdge(edgeId);
-  if (!edge) return <p style={{ fontSize: 12, color: '#c0392b' }}>Edge no longer exists.</p>;
+  if (!edge) return <p style={{ fontSize: 12, color: theme.danger }}>Edge no longer exists.</p>;
 
   return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Edge</div>
-      <div style={{ fontSize: 11, color: '#8a8a93', marginBottom: 4 }}>
+      <div style={{ fontSize: 11, color: theme.text3, marginBottom: 4 }}>
         {edge.source} → {edge.target}
       </div>
 
@@ -764,7 +698,7 @@ function EdgeProperties({
       <button
         type="button"
         onClick={onDelete}
-        style={{ ...smallButtonStyle, width: '100%', color: '#c0392b', borderColor: '#e3b0aa' }}
+        style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
       >
         Delete edge
       </button>
@@ -906,7 +840,7 @@ function EdgeLogicFields({
           }}
         />
       </div>
-      <div style={{ fontSize: 10, color: '#8a8a93', marginTop: -6, marginBottom: 10 }}>
+      <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
         Speed is converted to flow rate using this path's current length —
         if you drag a connected node afterward, the path's length changes
         but flow rate doesn't auto-adjust, so re-enter speed to keep it pinned.

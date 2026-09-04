@@ -7,10 +7,13 @@ import type { Point } from '../floor/bezier';
 import { SkinConfig } from '../skin/SkinConfig';
 import { getPortCapacity } from '../core/nodes/portCapacity';
 import type { EdgeStyle } from '../skin/pathSkin';
-import { LeftPanel, type LeftPanelTab } from './LeftPanel';
+import { LeftPanel } from './LeftPanel';
+import { Ribbon, type RibbonTab } from './Ribbon';
+import { StatusBar } from './StatusBar';
 import { PropertiesPanel } from './PropertiesPanel';
 import type { Selection } from './selection';
 import { SketchLayer } from './sketchLayer';
+import { theme, type CanvasBackground } from './theme';
 import {
   clearAllStores,
   deleteProjectFile,
@@ -186,24 +189,23 @@ export function App() {
   // are mutated directly (they're the single source of truth, design
   // doc §4.6) — the canvas picks up any change on its next animation
   // frame with no extra plumbing; only selection/placement state needs
-  // to be real React state, since the palette/properties panel need to
+  // to be real React state, since the ribbon/properties panel need to
   // re-render on those.
   const [selection, setSelection] = useState<Selection | null>(null);
   const [placementKind, setPlacementKind] = useState<NodeKind | null>(null);
   // Falcon, 2026-09-03: wants an 8-unit grid, on by default (was
-  // 64/off) — snap-to-grid is still an F8/header toggle, just starts
+  // 64/off) — snap-to-grid is still an F8/ribbon toggle, just starts
   // enabled instead of needing a manual first press.
   const [snapToGrid, setSnapToGrid] = useState(true);
   const nextIdRef = useRef(1);
 
-  // UI chrome (Falcon's wireframe, claude/build-log.md): left-panel
-  // tabs, the PATHS palette's armed style, and the canvas/simulation
-  // settings the properties panel's new second section edits. isRunning
-  // mirrors FluxCanvas's own RUN/HOLD state so the bottom bar's
-  // Play/Pause button can show the right label — the actual toggle is
-  // called through fluxCanvasRef since the sim driver only exists
-  // inside FluxCanvas's own effect.
-  const [leftTab, setLeftTab] = useState<LeftPanelTab>('nodes');
+  // UI chrome: which ribbon tab is showing, the PATHS group's armed
+  // style, and the canvas/simulation settings the ribbon's VIEW tab
+  // edits. isRunning mirrors FluxCanvas's own RUN/HOLD state so the
+  // status bar's Play/Pause button can show the right label — the
+  // actual toggle is called through fluxCanvasRef since the sim
+  // driver only exists inside FluxCanvas's own effect.
+  const [activeRibbonTab, setActiveRibbonTab] = useState<RibbonTab>('home');
   const [armedEdgeStyle, setArmedEdgeStyle] = useState<EdgeStyle | null>(null);
   // Planning sketches (Falcon, 2026-09-03): pure visual scratch lines,
   // no simulation meaning, not tied to any node — sketchArmed mirrors
@@ -212,20 +214,29 @@ export function App() {
   const [sketchArmed, setSketchArmed] = useState(false);
   const [gridSpacing, setGridSpacing] = useState(8);
   const [tickIntervalMs, setTickIntervalMs] = useState(400);
+  // Falcon, 2026-09-04: "I WANT THE BOARD OR THE WORKSPACE BE SET TO
+  // WHITE ALSO MAYBE WE NEED SETTINGS ON VIEW FOR WORKSPACE THEME OR
+  // BACKGROUND COLOR" — per-project, persisted alongside gridSpacing/
+  // tickIntervalMs in CanvasSettings.
+  const [canvasBackground, setCanvasBackground] = useState<CanvasBackground>('white');
+  const [cursorWorldPosition, setCursorWorldPosition] = useState<Point | null>(null);
   const [isRunning, setIsRunning] = useState(true);
   const fluxCanvasRef = useRef<FluxCanvasHandle | null>(null);
   // Read inside the autosave effect below without needing gridSpacing/
-  // tickIntervalMs in its deps (same "ref mirrors current state"
-  // convention FluxCanvas already uses for its interaction props).
+  // tickIntervalMs/canvasBackground in its deps (same "ref mirrors
+  // current state" convention FluxCanvas already uses for its
+  // interaction props).
   const gridSpacingRef = useRef(gridSpacing);
   gridSpacingRef.current = gridSpacing;
   const tickIntervalMsRef = useRef(tickIntervalMs);
   tickIntervalMsRef.current = tickIntervalMs;
+  const canvasBackgroundRef = useRef(canvasBackground);
+  canvasBackgroundRef.current = canvasBackground;
 
   // Multiple named projects (Falcon, 2026-09-03: "the file tab...
   // create new projects, manages, and contains the existing/saved
   // projects"). `projects`/`activeProjectId` are React state so the
-  // FILE tab re-renders; `activeProjectIdRef` mirrors activeProjectId
+  // left rail re-renders; `activeProjectIdRef` mirrors activeProjectId
   // for the autosave effect below (same ref convention as gridSpacing/
   // tickIntervalMs) so autosave always targets whichever project is
   // CURRENTLY open without needing to restart its interval.
@@ -285,7 +296,7 @@ export function App() {
   // keydown effect just above, which closes over these instances once
   // at mount). Outside Tauri, every read/write below silently no-ops
   // (persistence.ts's isTauri guard) — projects/activeProjectId still
-  // get set from an in-memory-only manifest, so the FILE tab still
+  // get set from an in-memory-only manifest, so the left rail still
   // works for organizing within the session, it just doesn't survive
   // a reload there.
   useEffect(() => {
@@ -299,6 +310,7 @@ export function App() {
         const settings: CanvasSettings = {
           gridSpacing: gridSpacingRef.current,
           tickIntervalMs: tickIntervalMsRef.current,
+          canvasBackground: canvasBackgroundRef.current,
         };
         const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
         await saveProjectFile(id, data);
@@ -317,6 +329,7 @@ export function App() {
         const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer);
         setGridSpacing(settings.gridSpacing);
         setTickIntervalMs(settings.tickIntervalMs);
+        setCanvasBackground(settings.canvasBackground ?? 'white');
         advanceNextIdPast(nextIdRef, [
           ...activeData.nodes.map((n) => n.id),
           ...activeData.edges.map((e) => e.id),
@@ -346,18 +359,20 @@ export function App() {
   // to lose this" moment (tab/window hidden — covers minimizing, the
   // case Falcon reported — and the page actually closing). Settings
   // are read through the refs above so this effect never needs
-  // gridSpacing/tickIntervalMs in its deps and the interval never has
-  // to be torn down and restarted when they change. Targets whichever
-  // project is CURRENTLY active via activeProjectIdRef, same reason —
-  // switching projects doesn't need to restart this effect either.
-  // Skips silently until the mount effect above has resolved an
-  // active project (a few ticks at most).
+  // gridSpacing/tickIntervalMs/canvasBackground in its deps and the
+  // interval never has to be torn down and restarted when they
+  // change. Targets whichever project is CURRENTLY active via
+  // activeProjectIdRef, same reason — switching projects doesn't need
+  // to restart this effect either. Skips silently until the mount
+  // effect above has resolved an active project (a few ticks at
+  // most).
   useEffect(() => {
     function doSave(): void {
       if (!activeProjectIdRef.current) return;
       const settings: CanvasSettings = {
         gridSpacing: gridSpacingRef.current,
         tickIntervalMs: tickIntervalMsRef.current,
+        canvasBackground: canvasBackgroundRef.current,
       };
       const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
       void saveProjectFile(activeProjectIdRef.current, saved);
@@ -388,14 +403,18 @@ export function App() {
    * is active yet (mount effect above hasn't resolved). */
   async function flushActiveProjectSave(): Promise<void> {
     if (!activeProjectIdRef.current) return;
-    const settings: CanvasSettings = { gridSpacing: gridSpacingRef.current, tickIntervalMs: tickIntervalMsRef.current };
+    const settings: CanvasSettings = {
+      gridSpacing: gridSpacingRef.current,
+      tickIntervalMs: tickIntervalMsRef.current,
+      canvasBackground: canvasBackgroundRef.current,
+    };
     const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
     await saveProjectFile(activeProjectIdRef.current, saved);
   }
 
   /** Writes the manifest with a given active id + project list, and
-   * mirrors the list into React state in the same call — every FILE
-   * tab action below goes through this so the on-disk manifest and
+   * mirrors the list into React state in the same call — every left-
+   * rail action below goes through this so the on-disk manifest and
    * the on-screen list never drift apart. */
   function persistManifest(activeId: string, nextProjects: ProjectMeta[]): void {
     setProjects(nextProjects);
@@ -403,7 +422,7 @@ export function App() {
     void saveManifest(manifest);
   }
 
-  /** FILE tab: switch to a different existing project. Flushes the
+  /** Left rail: switch to a different existing project. Flushes the
    * outgoing project's save first (so a switch never loses recent
    * work), then clears/repopulates the SAME live store instances from
    * the target project's data — identical in spirit to the mount
@@ -418,6 +437,7 @@ export function App() {
       const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer);
       setGridSpacing(settings.gridSpacing);
       setTickIntervalMs(settings.tickIntervalMs);
+      setCanvasBackground(settings.canvasBackground ?? 'white');
       advanceNextIdPast(nextIdRef, [
         ...data.nodes.map((n) => n.id),
         ...data.edges.map((e) => e.id),
@@ -435,20 +455,21 @@ export function App() {
     );
   }
 
-  /** FILE tab: "+ New project" — flushes the outgoing project, then
+  /** Left rail: "+ New project" — flushes the outgoing project, then
    * clears the canvas down to a genuinely blank one (no demo content)
-   * for the new project, using today's grid-spacing/snap defaults
-   * (SES025) rather than whatever the previous project happened to
-   * have set. */
+   * for the new project, using today's grid-spacing/snap/background
+   * defaults (SES025, then the ribbon port) rather than whatever the
+   * previous project happened to have set. */
   async function handleCreateProject(name: string): Promise<void> {
     await flushActiveProjectSave();
     const id = newProjectId();
-    const settings: CanvasSettings = { gridSpacing: 8, tickIntervalMs: 400 };
+    const settings: CanvasSettings = { gridSpacing: 8, tickIntervalMs: 400, canvasBackground: 'white' };
     const data = makeBlankProjectData(settings);
     await saveProjectFile(id, data);
     clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
     setGridSpacing(settings.gridSpacing);
     setTickIntervalMs(settings.tickIntervalMs);
+    setCanvasBackground(settings.canvasBackground ?? 'white');
     nextIdRef.current = 1;
     setSelection(null);
     activeProjectIdRef.current = id;
@@ -456,7 +477,7 @@ export function App() {
     persistManifest(id, [...projects, { id, name, lastOpenedAt: Date.now() }]);
   }
 
-  /** FILE tab: rename — manifest-only, doesn't touch the project's
+  /** Left rail: rename — manifest-only, doesn't touch the project's
    * own saved graph data at all. */
   function handleRenameProject(id: string, name: string): void {
     if (!activeProjectIdRef.current) return;
@@ -466,7 +487,7 @@ export function App() {
     );
   }
 
-  /** FILE tab: delete — the panel itself disables this for whichever
+  /** Left rail: delete — the panel itself disables this for whichever
    * project is currently active, so there's never a question of what
    * replaces the open canvas as a result of this call. */
   async function handleDeleteProject(id: string): Promise<void> {
@@ -593,7 +614,7 @@ export function App() {
             ? 'Path selected — edit it in the properties panel, Delete to remove.'
             : selection?.type === 'sketch'
               ? 'Sketch selected — Delete to remove. Planning guide only, no simulation meaning.'
-              : 'Click a node or path to select it, choose something from the left panel to add, or Shift+drag from one node to another to connect them.';
+              : 'Click a node or path to select it, choose something from the ribbon to add, or Shift+drag from one node to another to connect them.';
 
   return (
     <div
@@ -603,53 +624,31 @@ export function App() {
         display: 'flex',
         flexDirection: 'column',
         fontFamily: 'system-ui, sans-serif',
+        background: theme.bgApp,
       }}
     >
-      <header
-        style={{
-          padding: '0.6rem 1rem',
-          borderBottom: '1px solid #e5e4e7',
-          fontSize: 14,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}
-      >
-        <span>
-          <strong>FluxBoard</strong> — node/path/object registry, properties panel, wiring, drag-to-move. See the
-          instruction strip at the bottom for what to do next.
-        </span>
-        <button
-          type="button"
-          onClick={() => setSnapToGrid((v) => !v)}
-          title="Toggle snap-to-grid (F8)"
-          style={{
-            flexShrink: 0,
-            padding: '5px 12px',
-            fontSize: 12,
-            fontWeight: 600,
-            fontFamily: 'system-ui, sans-serif',
-            borderRadius: 6,
-            border: '1px solid ' + (snapToGrid ? '#2563eb' : '#d8d7dd'),
-            background: snapToGrid ? '#2563eb' : '#f6f6f8',
-            color: snapToGrid ? '#fff' : '#3c3c43',
-            cursor: 'pointer',
-          }}
-        >
-          ⌗ Snap to grid (F8) {snapToGrid ? 'ON' : 'OFF'}
-        </button>
-      </header>
+      <Ribbon
+        activeTab={activeRibbonTab}
+        onTabChange={setActiveRibbonTab}
+        armedKind={placementKind}
+        onArmKind={handleArmNodeKind}
+        armedEdgeStyle={armedEdgeStyle}
+        onArmEdgeStyle={handleArmEdgeStyle}
+        sketchArmed={sketchArmed}
+        onArmSketch={handleArmSketch}
+        canDelete={selection !== null}
+        onDeleteSelection={handleDeleteSelection}
+        snapToGrid={snapToGrid}
+        onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}
+        gridSpacing={gridSpacing}
+        onGridSpacingChange={setGridSpacing}
+        tickIntervalMs={tickIntervalMs}
+        onTickIntervalMsChange={setTickIntervalMs}
+        canvasBackground={canvasBackground}
+        onCanvasBackgroundChange={setCanvasBackground}
+      />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <LeftPanel
-          activeTab={leftTab}
-          onTabChange={setLeftTab}
-          armedKind={placementKind}
-          onArmKind={handleArmNodeKind}
-          armedEdgeStyle={armedEdgeStyle}
-          onArmEdgeStyle={handleArmEdgeStyle}
-          sketchArmed={sketchArmed}
-          onArmSketch={handleArmSketch}
           projects={projects}
           activeProjectId={activeProjectId}
           onSwitchProject={handleSwitchProject}
@@ -677,51 +676,29 @@ export function App() {
             sketchLayer={sketchLayer}
             sketchArmed={sketchArmed}
             onCreateSketch={handleCreateSketch}
+            canvasBackground={canvasBackground}
+            onCursorWorldPositionChange={setCursorWorldPosition}
           />
+          {selection !== null && (
+            <PropertiesPanel
+              selection={selection}
+              graph={graph}
+              skinConfig={skinConfig}
+              floorLayout={floorLayout}
+              sketchLayer={sketchLayer}
+              onDelete={handleDeleteSelection}
+            />
+          )}
         </div>
-        <PropertiesPanel
-          selection={selection}
-          graph={graph}
-          skinConfig={skinConfig}
-          floorLayout={floorLayout}
-          sketchLayer={sketchLayer}
-          onDelete={handleDeleteSelection}
-          gridSpacing={gridSpacing}
-          onGridSpacingChange={setGridSpacing}
-          tickIntervalMs={tickIntervalMs}
-          onTickIntervalMsChange={setTickIntervalMs}
-        />
       </div>
-      <footer
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '0.5rem 1rem',
-          borderTop: '1px solid #e5e4e7',
-          fontSize: 12,
-        }}
-      >
-        <button
-          type="button"
-          onClick={handlePlayPauseClick}
-          style={{
-            flexShrink: 0,
-            padding: '5px 14px',
-            fontSize: 13,
-            fontWeight: 600,
-            fontFamily: 'system-ui, sans-serif',
-            border: '1px solid ' + (isRunning ? '#d8555a' : '#2f8f57'),
-            borderRadius: 6,
-            background: isRunning ? '#ff5d5d' : '#2ecc71',
-            color: '#fff',
-            cursor: 'pointer',
-          }}
-        >
-          {isRunning ? '⏸ Hold' : '▶ Run'}
-        </button>
-        <span style={{ color: '#6b6b73', flex: 1 }}>{instructionText}</span>
-      </footer>
+      <StatusBar
+        isRunning={isRunning}
+        onPlayPauseClick={handlePlayPauseClick}
+        instructionText={instructionText}
+        cursorWorldPosition={cursorWorldPosition}
+        snapToGrid={snapToGrid}
+        gridSpacing={gridSpacing}
+      />
     </div>
   );
 }

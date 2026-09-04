@@ -3,6 +3,7 @@ import { FloorLayout } from '../floor/floorLayout';
 import { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeSkin } from '../skin/pathSkin';
 import { SketchLayer, type Sketch } from './sketchLayer';
+import type { CanvasBackground } from './theme';
 import type { EdgeId, NodeDef, EdgeDef, NodeId } from '../core/types';
 import type { Point } from '../floor/bezier';
 
@@ -55,6 +56,10 @@ export interface ProjectsManifest {
 export interface CanvasSettings {
   gridSpacing: number;
   tickIntervalMs: number;
+  /** Falcon, 2026-09-04: "settings on VIEW for workspace theme or
+   * background color" -- optional so old saves (pre-this-field) still
+   * parse; App.tsx defaults a missing value to 'white' when loading. */
+  canvasBackground?: CanvasBackground;
 }
 
 interface EdgeGeometry {

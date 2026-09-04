@@ -20,6 +20,7 @@ import {
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import type { Selection } from './selection';
 import { SketchLayer } from './sketchLayer';
+import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
 interface FluxCanvasProps {
   graph: GraphModel;
@@ -74,6 +75,17 @@ interface FluxCanvasProps {
    * mirrors placementKind/armedEdgeStyle's arm-then-act flow). */
   sketchArmed: boolean;
   onCreateSketch: (from: Point, to: Point) => void;
+
+  /** Falcon, 2026-09-04: "settings on VIEW for workspace theme or
+   * background color" -- which preset paints the canvas background +
+   * grid lines. App.tsx owns the state (persisted per-project via
+   * CanvasSettings.canvasBackground); defaults to 'white' if unset. */
+  canvasBackground?: CanvasBackground;
+  /** Live world-space cursor position for StatusBar's coordinate
+   * readout -- reported on every hover move, null when the pointer
+   * leaves the canvas. Purely a display feed; doesn't affect any
+   * interaction logic below. */
+  onCursorWorldPositionChange?: (point: Point | null) => void;
 }
 
 /** Imperative handle (App.tsx's Play/Pause button lives in the bottom
@@ -119,6 +131,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     sketchLayer,
     sketchArmed,
     onCreateSketch,
+    canvasBackground = 'white',
+    onCursorWorldPositionChange,
   },
   ref,
 ) {
@@ -153,6 +167,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   sketchArmedRef.current = sketchArmed;
   const onCreateSketchRef = useRef(onCreateSketch);
   onCreateSketchRef.current = onCreateSketch;
+  const canvasBackgroundRef = useRef(canvasBackground);
+  canvasBackgroundRef.current = canvasBackground;
+  const onCursorWorldPositionChangeRef = useRef(onCursorWorldPositionChange);
+  onCursorWorldPositionChangeRef.current = onCursorWorldPositionChange;
 
   function toggleRunning(): void {
     const driver = driverRef.current;
@@ -321,10 +339,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
       const viewport = currentViewport();
       ctx!.clearRect(0, 0, viewport.width, viewport.height);
-      ctx!.fillStyle = '#faf9fb';
+      const canvasTheme = CANVAS_THEMES[canvasBackgroundRef.current];
+      ctx!.fillStyle = canvasTheme.background;
       ctx!.fillRect(0, 0, viewport.width, viewport.height);
 
-      drawGrid(ctx!, camera, viewport, gridSpacingRef.current);
+      drawGrid(ctx!, camera, viewport, gridSpacingRef.current, canvasTheme.grid);
 
       // Culling: only draw entities whose position intersects the
       // visible world rect (design doc §3 — virtualization).
@@ -651,9 +670,23 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       camera.zoomAt(screenPoint, viewport, factor);
     }
 
+    /** StatusBar's coordinate readout -- independent of the drag-
+     * gesture pointermove above (which only tracks once a gesture is
+     * already in progress, via dragOriginScreen): this reports on
+     * every hover, dragging or not, and clears to null on pointer
+     * leave. */
+    function onHoverMove(e: PointerEvent): void {
+      onCursorWorldPositionChangeRef.current?.(toWorld(e.clientX, e.clientY));
+    }
+    function onHoverLeave(): void {
+      onCursorWorldPositionChangeRef.current?.(null);
+    }
+
     canvas.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointermove', onHoverMove);
+    canvas.addEventListener('pointerleave', onHoverLeave);
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
     return () => {
@@ -663,6 +696,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       canvas.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      canvas.removeEventListener('pointermove', onHoverMove);
+      canvas.removeEventListener('pointerleave', onHoverLeave);
       canvas.removeEventListener('wheel', onWheel);
     };
     // Interaction props (selection, onSelect, placementKind,
@@ -686,12 +721,12 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
 FluxCanvas.displayName = 'FluxCanvas';
 
-function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewport: Viewport, spacing: number): void {
+function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewport: Viewport, spacing: number, color: string): void {
   const bounds = camera.getVisibleWorldBounds(viewport);
   const startX = Math.floor(bounds.minX / spacing) * spacing;
   const startY = Math.floor(bounds.minY / spacing) * spacing;
 
-  ctx.strokeStyle = '#eceaf0';
+  ctx.strokeStyle = color;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = startX; x <= bounds.maxX; x += spacing) {
