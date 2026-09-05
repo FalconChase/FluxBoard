@@ -7,7 +7,7 @@ import { SimEngine } from '../core/SimEngine';
 import type { EdgeDef, EdgeId, NodeDef, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
-import { drawNode, drawNodeLockBadge, drawNodeSelectionRing, ANCHOR_ROLE_COLOR } from '../skin/nodeSkin';
+import { drawNode, drawNodeLockBadge, drawNodeSelectionRing } from '../skin/nodeSkin';
 import {
   drawPathUnder,
   drawPathOver,
@@ -123,6 +123,12 @@ const EDGE_HIT_TOLERANCE_PX = 12;
  * for new paths/sketches (Falcon, 2026-09-05). Kept in screen space
  * so the snap feels the same size at any zoom level. */
 const PORT_SNAP_RADIUS_PX = 14;
+/** Endpoint-dot colors for a live wire/sketch drag preview (Falcon,
+ * 2026-09-05: red at the fixed origin/outgoing end, green at the
+ * moving head/incoming end). Previously shared with a per-node port-
+ * dot coloring scheme that was tried and then reverted the same day —
+ * this is now the only place these colors are used. */
+const ANCHOR_ROLE_COLOR = { out: '#ff5d5d', in: '#2ecc71' };
 
 /**
  * Milestone 4 (skin layer) + Milestone 5 (selection, node placement,
@@ -574,7 +580,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const screen = camera.worldToScreen(pos, viewport);
         const r = NODE_RADIUS * camera.zoom;
         const state = engine.getNodeState(node.id) ?? {};
-        drawNode(ctx!, node, state, screen, r, camera.zoom, (anchorIndex) => floorLayout.getAnchorRole(node.id, anchorIndex));
+        drawNode(ctx!, node, state, screen, r, camera.zoom);
         if (skinConfig.getNodeLocked(node.id)) {
           drawNodeLockBadge(ctx!, screen, r, camera.zoom);
         }

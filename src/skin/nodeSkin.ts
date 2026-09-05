@@ -1,7 +1,6 @@
 import type { NodeDef, NodeKind } from '../core/types';
 import type { RuntimeState } from '../core/NodeRuntimeState';
 import type { Point } from '../floor/bezier';
-import type { AnchorRole } from '../floor/floorLayout';
 import { octagonVertices, traceClosedPath, octagonPortAnchor, OCTAGON_PORT_COUNT } from './octagon';
 import { nodeIcons } from './nodeIcons';
 import { roundRectPath } from './canvasUtil';
@@ -146,42 +145,12 @@ export function drawNodeLockBadge(
   ctx.fillText('\u{1F512}', bx, by + 0.5 * zoom);
 }
 
-/** Fill color per anchor role (Falcon, 2026-09-05: "green for
- * input/receiving, red for outgoing, grey for neither"). Kept as a
- * flat lookup so any future re-theme only touches this one spot. */
-export const ANCHOR_ROLE_COLOR: Record<AnchorRole, string> = {
-  out: '#ff5d5d',
-  in: '#2ecc71',
-  free: '#9aa1ad',
-};
-
-/** Draws all 8 port-socket dots, colored by whatever's actually
- * booked there right now (real edge or sketch attachment) — replaces
- * the old uniform translucent-white dots. `getAnchorRole` is optional
- * so any caller that genuinely has no FloorLayout on hand still gets
- * a sane (grey/free-looking) render rather than a crash. A thin dark
- * outline keeps each dot's color legible against every node fill
- * color, not just the ones it happens to contrast with. */
-function drawPortAnchors(
-  ctx: CanvasRenderingContext2D,
-  center: Point,
-  radius: number,
-  zoom: number,
-  getAnchorRole?: (anchorIndex: number) => AnchorRole,
-): void {
-  for (let p = 0; p < OCTAGON_PORT_COUNT; p++) {
-    const anchor = octagonPortAnchor(center, radius, p);
-    const role = getAnchorRole ? getAnchorRole(p) : 'free';
-    ctx.beginPath();
-    ctx.arc(anchor.x, anchor.y, Math.max(1.6, 2 * zoom), 0, Math.PI * 2);
-    ctx.fillStyle = ANCHOR_ROLE_COLOR[role];
-    ctx.fill();
-    ctx.lineWidth = Math.max(0.5, 0.8 * zoom);
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
-    ctx.stroke();
-  }
-}
-
+/** Falcon, 2026-09-05, reverted the same day: tried per-anchor
+ * green/red/grey role coloring on the node's own port dots (out/in/
+ * free), then asked to put it back to the plain uniform dot. The
+ * live red/green endpoint dots shown WHILE dragging a wire/sketch
+ * (FluxCanvas's own ANCHOR_ROLE_COLOR) and the path-to-path visual
+ * snap stayed — only this static per-node dot coloring was reverted. */
 export function drawNode(
   ctx: CanvasRenderingContext2D,
   node: NodeDef,
@@ -189,7 +158,6 @@ export function drawNode(
   center: Point,
   radius: number,
   zoom: number,
-  getAnchorRole?: (anchorIndex: number) => AnchorRole,
 ): void {
   const skin = nodeSkinDefaults[node.kind];
 
@@ -201,7 +169,13 @@ export function drawNode(
   ctx.lineWidth = Math.max(1, 1.5 * zoom);
   ctx.stroke();
 
-  drawPortAnchors(ctx, center, radius, zoom, getAnchorRole);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+  for (let p = 0; p < OCTAGON_PORT_COUNT; p++) {
+    const anchor = octagonPortAnchor(center, radius, p);
+    ctx.beginPath();
+    ctx.arc(anchor.x, anchor.y, Math.max(1, 1.4 * zoom), 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   ctx.fillStyle = '#ffffff';
   ctx.strokeStyle = '#ffffff';
