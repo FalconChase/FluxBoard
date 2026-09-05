@@ -12,7 +12,7 @@ import { Ribbon, type RibbonTab } from './Ribbon';
 import { StatusBar } from './StatusBar';
 import { PropertiesPanel } from './PropertiesPanel';
 import { ObjectRegistryManager } from './ObjectRegistryManager';
-import type { Selection } from './selection';
+import { collapseSelection, type Selection } from './selection';
 import { SketchLayer, type Sketch, type SketchAttachment } from './sketchLayer';
 import { ObjectRegistry } from '../skin/ObjectRegistry';
 import { theme, type CanvasBackground } from './theme';
@@ -586,21 +586,36 @@ export function App() {
     }
   }
 
+  /** Plain edge removal — extracted (quick-select, 2026-09-05)
+   * alongside `deleteNodeCascade` so a multi-select delete's
+   * `edgeIds` loop reuses it instead of duplicating it. */
+  function deleteEdgeOnly(edgeId: EdgeId): void {
+    graph.removeEdge(edgeId);
+    floorLayout.removeEdgeCurve(edgeId);
+    skinConfig.removeEdge(edgeId);
+  }
+
+  /** Plain sketch removal — same extraction as `deleteEdgeOnly`, for
+   * a multi-select delete's `sketchIds` loop. */
+  function deleteSketchOnly(sketchId: string): void {
+    const sketch = sketchLayer.get(sketchId);
+    if (sketch?.fromAttachment) floorLayout.releaseReservation(`${sketchId}:from`);
+    if (sketch?.toAttachment) floorLayout.releaseReservation(`${sketchId}:to`);
+    sketchLayer.remove(sketchId);
+  }
+
   function handleDeleteSelection(): void {
     if (!selection) return;
     if (selection.type === 'node') {
       deleteNodeCascade(selection.id);
     } else if (selection.type === 'multi') {
       for (const nodeId of selection.nodeIds) deleteNodeCascade(nodeId);
+      for (const edgeId of selection.edgeIds) deleteEdgeOnly(edgeId);
+      for (const sketchId of selection.sketchIds) deleteSketchOnly(sketchId);
     } else if (selection.type === 'sketch') {
-      const sketch = sketchLayer.get(selection.id);
-      if (sketch?.fromAttachment) floorLayout.releaseReservation(`${selection.id}:from`);
-      if (sketch?.toAttachment) floorLayout.releaseReservation(`${selection.id}:to`);
-      sketchLayer.remove(selection.id);
+      deleteSketchOnly(selection.id);
     } else {
-      graph.removeEdge(selection.id);
-      floorLayout.removeEdgeCurve(selection.id);
-      skinConfig.removeEdge(selection.id);
+      deleteEdgeOnly(selection.id);
     }
     setSelection(null);
   }
@@ -676,7 +691,7 @@ export function App() {
       skinConfig.setEdgeSkin(newEdgeId, skinConfig.getEdgeSkin(edge.id));
     }
 
-    setSelection(newIds.length === 1 ? { type: 'node', id: newIds[0]! } : { type: 'multi', nodeIds: newIds });
+    setSelection(newIds.length === 1 ? { type: 'node', id: newIds[0]! } : { type: 'multi', nodeIds: newIds, edgeIds: [], sketchIds: [] });
   }
 
   function handlePlaceNode(kind: NodeKind, worldPoint: Point): void {
@@ -803,6 +818,29 @@ export function App() {
     setPanArmed(armed);
   }
 
+  /** Multi-select's hover flyout (2026-09-05, Falcon: "when i hover
+   * over to multiselect i want it to have a secondary popup
+   * selection such as all (select all), paths only, nodes only,
+   * sketches only, (soon possible others)"). Replaces whatever's
+   * currently selected with every item of the requested kind(s), then
+   * arms the Multi-select tool so the result is immediately usable —
+   * click to toggle members out, drag to add more, Delete/Duplicate
+   * the group. A category with nothing on the canvas flashes a
+   * reason instead of silently selecting nothing. */
+  function handleQuickSelect(kind: 'all' | 'nodes' | 'paths' | 'sketches'): void {
+    const nodeIds = kind === 'all' || kind === 'nodes' ? graph.getAllNodes().map((n) => n.id) : [];
+    const edgeIds = kind === 'all' || kind === 'paths' ? graph.getAllEdges().map((e) => e.id) : [];
+    const sketchIds = kind === 'all' || kind === 'sketches' ? sketchLayer.getAll().map((s) => s.id) : [];
+    const next = collapseSelection({ nodeIds, edgeIds, sketchIds });
+    if (!next) {
+      const label = kind === 'all' ? 'anything' : kind;
+      flashMessage(`Nothing to select — no ${label} on the canvas.`);
+      return;
+    }
+    setSelection(next);
+    handleArmMultiSelect(true);
+  }
+
   function handleApplyEdgeStyle(edgeId: EdgeId, style: EdgeStyle): void {
     skinConfig.setEdgeSkin(edgeId, { style });
     setArmedEdgeStyle(null);
@@ -910,7 +948,7 @@ export function App() {
             : selection?.type === 'node'
               ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
               : selection?.type === 'multi'
-                ? `${selection.nodeIds.length} nodes selected — drag any of them to move the group, Delete to remove, Duplicate to clone.`
+                ? `${selection.nodeIds.length + selection.edgeIds.length + selection.sketchIds.length} items selected — drag a node to move the group, Delete to remove, Duplicate to clone the nodes.`
                 : selection?.type === 'edge'
                   ? 'Path selected — edit it in the properties panel, Delete to remove.'
                   : selection?.type === 'sketch'
@@ -945,8 +983,9 @@ export function App() {
         onArmPan={handleArmPan}
         canDelete={selection !== null}
         onDeleteSelection={handleDeleteSelection}
-        canDuplicate={selection?.type === 'node' || selection?.type === 'multi'}
+        canDuplicate={selection?.type === 'node' || (selection?.type === 'multi' && selection.nodeIds.length > 0)}
         onDuplicateSelection={handleDuplicateSelection}
+        onQuickSelect={handleQuickSelect}
         onOpenObjectsManager={() => setObjectsManagerOpen(true)}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}

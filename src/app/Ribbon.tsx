@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { NodeKind } from '../core/types';
 import { nodeSkinDefaults } from '../skin/nodeSkin';
 import { octagonVertices, traceClosedPath } from '../skin/octagon';
@@ -13,6 +13,19 @@ import {
 } from './theme';
 
 export type RibbonTab = 'home' | 'insert' | 'view' | 'manage' | 'layers' | 'tools';
+
+/** Multi-select's hover flyout (2026-09-05, Falcon: "when i hover
+ * over to multiselect i want it to have a secondary popup selection
+ * such as all (select all), paths only, nodes only, sketches only,
+ * (soon possible others)"). A plain array so a future addition is one
+ * more row, not new branching logic. */
+export type QuickSelectKind = 'all' | 'nodes' | 'paths' | 'sketches';
+const QUICK_SELECT_OPTIONS: { kind: QuickSelectKind; label: string }[] = [
+  { kind: 'all', label: 'Select all' },
+  { kind: 'nodes', label: 'Nodes only' },
+  { kind: 'paths', label: 'Paths only' },
+  { kind: 'sketches', label: 'Sketches only' },
+];
 
 const NODE_KINDS: NodeKind[] = ['source', 'distributor', 'merger', 'sorter', 'mixer', 'buffer', 'sink'];
 const EDGE_STYLES: { style: EdgeStyle; label: string; color: string }[] = [
@@ -69,6 +82,9 @@ interface RibbonProps {
    * multi-select group) offset a few grid cells over. */
   canDuplicate: boolean;
   onDuplicateSelection: () => void;
+  /** Multi-select's hover flyout (2026-09-05) — replaces the
+   * selection with every item of the given kind(s) and arms the tool. */
+  onQuickSelect: (kind: QuickSelectKind) => void;
 
   /** FBP011 (2026-09-05): opens the OBJECTS registry manager — a
    * modal overlay (ObjectRegistryManager.tsx) rather than a ribbon-
@@ -123,6 +139,7 @@ export function Ribbon({
   onDeleteSelection,
   canDuplicate,
   onDuplicateSelection,
+  onQuickSelect,
   onOpenObjectsManager,
   snapToGrid,
   onToggleSnapToGrid,
@@ -133,6 +150,11 @@ export function Ribbon({
   canvasBackground,
   onCanvasBackgroundChange,
 }: RibbonProps) {
+  // Multi-select's hover flyout (2026-09-05) — open while the mouse is
+  // over the button OR the flyout itself, since both live inside the
+  // same position:relative wrapper below.
+  const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+
   return (
     <div style={{ flexShrink: 0, background: theme.bgPanel, borderBottom: `1px solid ${theme.border}` }}>
       <div
@@ -219,13 +241,36 @@ export function Ribbon({
                   icon={<DeleteIcon />}
                   dangerous
                 />
-                <RibbonIconButton
-                  label="Multi-select"
-                  title="Click nodes to toggle them in, or drag over empty canvas to box-select"
-                  active={multiSelectArmed}
-                  onClick={() => onArmMultiSelect(!multiSelectArmed)}
-                  icon={<MultiSelectIcon />}
-                />
+                <div
+                  style={{ position: 'relative' }}
+                  onMouseEnter={() => setQuickSelectOpen(true)}
+                  onMouseLeave={() => setQuickSelectOpen(false)}
+                >
+                  <RibbonIconButton
+                    label="Multi-select"
+                    title="Click nodes to toggle them in, drag over empty canvas to box-select, or hover for quick-select"
+                    active={multiSelectArmed}
+                    onClick={() => onArmMultiSelect(!multiSelectArmed)}
+                    icon={<MultiSelectIcon />}
+                  />
+                  {quickSelectOpen && (
+                    <div style={quickSelectMenuStyle}>
+                      {QUICK_SELECT_OPTIONS.map(({ kind, label }) => (
+                        <button
+                          key={kind}
+                          type="button"
+                          onClick={() => {
+                            onQuickSelect(kind);
+                            setQuickSelectOpen(false);
+                          }}
+                          style={quickSelectItemStyle}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <RibbonIconButton
                   label="Duplicate"
                   title={canDuplicate ? 'Clone the selected node(s), offset a few grid cells over' : 'Select a node first'}
@@ -681,6 +726,38 @@ const swatchLabelStyle: CSSProperties = {
   textTransform: 'capitalize',
   color: theme.text2,
   whiteSpace: 'nowrap',
+};
+
+// Multi-select's hover flyout (2026-09-05) — a small dropdown anchored
+// below the button via the wrapper's position:relative.
+const quickSelectMenuStyle: CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  left: 0,
+  marginTop: 2,
+  zIndex: 20,
+  minWidth: 130,
+  display: 'flex',
+  flexDirection: 'column',
+  background: theme.bgPanel2,
+  border: `1px solid ${theme.borderStrong}`,
+  borderRadius: 6,
+  padding: 4,
+  boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+};
+
+const quickSelectItemStyle: CSSProperties = {
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  fontSize: 11,
+  fontWeight: 600,
+  color: theme.text1,
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 4,
+  padding: '6px 8px',
+  cursor: 'pointer',
 };
 
 function iconProps(size = 16) {

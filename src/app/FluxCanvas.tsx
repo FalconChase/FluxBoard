@@ -20,7 +20,7 @@ import {
   type EdgeStyle,
 } from '../skin/pathSkin';
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
-import type { Selection } from './selection';
+import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
 import { SketchLayer, type Sketch, type SketchAttachment } from './sketchLayer';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
@@ -479,7 +479,9 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       for (const sketch of sketchLayer.getAll()) {
         const a = camera.worldToScreen(sketch.from, viewport);
         const b = camera.worldToScreen(sketch.to, viewport);
-        const isSelected = sel?.type === 'sketch' && sel.id === sketch.id;
+        const isSelected =
+          (sel?.type === 'sketch' && sel.id === sketch.id) ||
+          (sel?.type === 'multi' && sel.sketchIds.includes(sketch.id));
         ctx!.save();
         ctx!.setLineDash([7, 5]);
         ctx!.strokeStyle = isSelected ? 'rgba(124, 58, 237, 0.9)' : 'rgba(124, 58, 237, 0.45)';
@@ -589,7 +591,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const skin = skinConfig.getEdgeSkin(edge.id);
         drawPathOver(ctx!, curve, camera, viewport, skin);
         drawPathDirectionArrow(ctx!, curve, camera, viewport);
-        if (sel?.type === 'edge' && sel.id === edge.id) {
+        if (
+          (sel?.type === 'edge' && sel.id === edge.id) ||
+          (sel?.type === 'multi' && sel.edgeIds.includes(edge.id))
+        ) {
           drawCurveSelectionHighlight(ctx!, curve, camera, viewport);
         }
       }
@@ -1062,13 +1067,12 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // outside armed mode still just selects the one node, same
         // as always.
         if (multiSelectArmedRef.current) {
-          const sel = selectionRef.current;
-          const current = sel?.type === 'multi' ? sel.nodeIds : sel?.type === 'node' ? [sel.id] : [];
-          const already = current.includes(pendingNodeHitId);
-          const next = already ? current.filter((id) => id !== pendingNodeHitId) : [...current, pendingNodeHitId];
-          if (next.length === 0) onSelectRef.current(null);
-          else if (next.length === 1) onSelectRef.current({ type: 'node', id: next[0]! });
-          else onSelectRef.current({ type: 'multi', nodeIds: next });
+          const parts = normalizeMultiParts(selectionRef.current);
+          const already = parts.nodeIds.includes(pendingNodeHitId);
+          const nodeIds = already
+            ? parts.nodeIds.filter((id) => id !== pendingNodeHitId)
+            : [...parts.nodeIds, pendingNodeHitId];
+          onSelectRef.current(collapseSelection({ ...parts, nodeIds }));
         } else {
           onSelectRef.current({ type: 'node', id: pendingNodeHitId });
         }
@@ -1094,10 +1098,9 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) enclosed.push(node.id);
         }
         if (enclosed.length > 0) {
-          const sel = selectionRef.current;
-          const existing = sel?.type === 'multi' ? sel.nodeIds : sel?.type === 'node' ? [sel.id] : [];
-          const merged = [...new Set([...existing, ...enclosed])];
-          onSelectRef.current(merged.length === 1 ? { type: 'node', id: merged[0]! } : { type: 'multi', nodeIds: merged });
+          const parts = normalizeMultiParts(selectionRef.current);
+          const nodeIds = [...new Set([...parts.nodeIds, ...enclosed])];
+          onSelectRef.current(collapseSelection({ ...parts, nodeIds }));
         } else {
           onSelectRef.current(null);
         }

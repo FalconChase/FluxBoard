@@ -95,7 +95,7 @@ export function PropertiesPanel({
   // stays permanently mounted.
   const selectionKey = selection
     ? selection.type === 'multi'
-      ? `multi:${selection.nodeIds.join(',')}`
+      ? `multi:${selection.nodeIds.join(',')}|${selection.edgeIds.join(',')}|${selection.sketchIds.join(',')}`
       : `${selection.type}:${selection.id}`
     : 'none';
 
@@ -143,6 +143,8 @@ export function PropertiesPanel({
         {selection?.type === 'multi' && (
           <MultiProperties
             nodeIds={selection.nodeIds}
+            edgeIds={selection.edgeIds}
+            sketchIds={selection.sketchIds}
             graph={graph}
             onDelete={onDelete}
             onDuplicate={onDuplicate}
@@ -276,11 +278,15 @@ function NodeProperties({
  * same Duplicate/Delete actions the ribbon's MODIFY group offers. */
 function MultiProperties({
   nodeIds,
+  edgeIds,
+  sketchIds,
   graph,
   onDelete,
   onDuplicate,
 }: {
   nodeIds: string[];
+  edgeIds: string[];
+  sketchIds: string[];
   graph: GraphModel;
   onDelete: () => void;
   onDuplicate: () => void;
@@ -291,18 +297,32 @@ function MultiProperties({
     if (!node) continue;
     counts.set(node.kind, (counts.get(node.kind) ?? 0) + 1);
   }
+  // Quick-select (2026-09-05) can build a mixed group — paths and
+  // sketches count toward the total but have no per-kind config to
+  // summarize the way node kinds do, so they're just one line each.
+  const summaryParts = [...counts.entries()].map(([kind, count]) => `${count} ${kind}${count === 1 ? '' : 's'}`);
+  if (edgeIds.length > 0) summaryParts.push(`${edgeIds.length} path${edgeIds.length === 1 ? '' : 's'}`);
+  if (sketchIds.length > 0) summaryParts.push(`${sketchIds.length} sketch${sketchIds.length === 1 ? '' : 'es'}`);
+  const total = nodeIds.length + edgeIds.length + sketchIds.length;
+  const canDuplicate = nodeIds.length > 0;
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{nodeIds.length} nodes selected</div>
-      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5, marginBottom: 10 }}>
-        {[...counts.entries()].map(([kind, count]) => `${count} ${kind}${count === 1 ? '' : 's'}`).join(', ')}
-      </p>
-      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
-        Drag any selected node to move the whole group together.
-      </p>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{total} items selected</div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5, marginBottom: 10 }}>{summaryParts.join(', ')}</p>
+      {nodeIds.length > 0 && (
+        <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
+          Drag any selected node to move the whole group together.
+        </p>
+      )}
 
       <div style={sectionTitleStyle}>Modify</div>
-      <button type="button" onClick={onDuplicate} style={{ ...smallButtonStyle, width: '100%' }}>
+      <button
+        type="button"
+        onClick={onDuplicate}
+        disabled={!canDuplicate}
+        title={canDuplicate ? undefined : 'Duplicate only clones nodes — this selection has none'}
+        style={{ ...smallButtonStyle, width: '100%', opacity: canDuplicate ? 1 : 0.5, cursor: canDuplicate ? 'pointer' : 'not-allowed' }}
+      >
         Duplicate group
       </button>
 
