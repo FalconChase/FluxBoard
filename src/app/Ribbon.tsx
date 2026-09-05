@@ -57,6 +57,12 @@ interface RibbonProps {
   canDelete: boolean;
   onDeleteSelection: () => void;
 
+  /** FBP011 (2026-09-05): opens the OBJECTS registry manager — a
+   * modal overlay (ObjectRegistryManager.tsx) rather than a ribbon-
+   * strip group, since a type isn't "armed then placed" like a node/
+   * path kind, it's a library entry referenced from elsewhere. */
+  onOpenObjectsManager: () => void;
+
   snapToGrid: boolean;
   onToggleSnapToGrid: () => void;
   gridSpacing: number;
@@ -74,13 +80,16 @@ interface RibbonProps {
  * panel's NODES/PATHS/OBJECTS tabs plus a MODIFY group (Delete is
  * real; Multi-select/Duplicate/Pan are placeholders — the deferred
  * Tools-tab concept, folded in here instead of a separate tab, still
- * not built). VIEW absorbs the properties panel's old "Canvas &
- * simulation" section (grid spacing, sim tick interval, snap-to-grid)
- * plus the new workspace-background setting Falcon asked for. INSERT/
- * MANAGE/LAYERS/TOOLS are inert placeholders — real content for those
- * needs more spec first (ICONS/LABEL overlay, LAYERS' z-axis floor
- * stacking, TOOLS' measure tool — see claude/build-log.md), same
- * "placeholder until asked for" treatment OBJECTS already had.
+ * not built). Objects opens ObjectRegistryManager.tsx (FBP011,
+ * 2026-09-05 — first-pass registry: shape/size/color per item type,
+ * a modal rather than a ribbon group since a type is a referenced
+ * library entry, not an arm-then-place kind). VIEW absorbs the
+ * properties panel's old "Canvas & simulation" section (grid
+ * spacing, sim tick interval, snap-to-grid) plus the new workspace-
+ * background setting Falcon asked for. INSERT/MANAGE/LAYERS/TOOLS are
+ * inert placeholders — real content for those needs more spec first
+ * (ICONS/LABEL overlay, LAYERS' z-axis floor stacking, TOOLS' measure
+ * tool — see claude/build-log.md).
  */
 export function Ribbon({
   projectName,
@@ -95,6 +104,7 @@ export function Ribbon({
   onArmSketch,
   canDelete,
   onDeleteSelection,
+  onOpenObjectsManager,
   snapToGrid,
   onToggleSnapToGrid,
   gridSpacing,
@@ -171,8 +181,13 @@ export function Ribbon({
               </div>
             </RibbonGroup>
             <RibbonGroup title="Objects">
-              <div style={{ display: 'flex', gap: 4, opacity: 0.4 }}>
-                <RibbonIconButton label="Items" title="Coming soon — object-type registry" disabled icon={<ObjectsIcon />} />
+              <div style={{ display: 'flex', gap: 4 }}>
+                <RibbonIconButton
+                  label="Items"
+                  title="Manage item types — shape, size, color"
+                  onClick={onOpenObjectsManager}
+                  icon={<ObjectsIcon />}
+                />
               </div>
             </RibbonGroup>
             <RibbonGroup title="Modify">

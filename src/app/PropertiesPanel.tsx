@@ -5,6 +5,7 @@ import { getPortCapacity } from '../core/nodes/portCapacity';
 import type { FloorLayout } from '../floor/floorLayout';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
+import type { ObjectRegistry } from '../skin/ObjectRegistry';
 import type { Selection } from './selection';
 import type { SketchLayer } from './sketchLayer';
 import { theme } from './theme';
@@ -20,6 +21,11 @@ interface PropertiesPanelProps {
   skinConfig: SkinConfig;
   floorLayout: FloorLayout;
   sketchLayer: SketchLayer;
+  /** OBJECTS registry (FBP011, 2026-09-05) — lets SourceFields/
+   * SorterFields/MixerFields offer a dropdown of actually-registered
+   * item types instead of a free-text field that can silently
+   * reference nothing renderable. */
+  objectRegistry: ObjectRegistry;
   /** Deletes whatever is currently selected (node — cascading to its
    * edges — or edge). App.tsx owns the actual GraphModel/FloorLayout/
    * SkinConfig cleanup and the Delete/Backspace shortcut; this panel
@@ -72,6 +78,7 @@ export function PropertiesPanel({
   skinConfig,
   floorLayout,
   sketchLayer,
+  objectRegistry,
   onDelete,
   onConvertSketch,
 }: PropertiesPanelProps) {
@@ -113,7 +120,14 @@ export function PropertiesPanel({
           </p>
         )}
         {selection?.type === 'node' && (
-          <NodeProperties nodeId={selection.id} graph={graph} skinConfig={skinConfig} floorLayout={floorLayout} onDelete={onDelete} />
+          <NodeProperties
+            nodeId={selection.id}
+            graph={graph}
+            skinConfig={skinConfig}
+            floorLayout={floorLayout}
+            objectRegistry={objectRegistry}
+            onDelete={onDelete}
+          />
         )}
         {selection?.type === 'edge' && (
           <EdgeProperties
@@ -174,12 +188,14 @@ function NodeProperties({
   graph,
   skinConfig,
   floorLayout,
+  objectRegistry,
   onDelete,
 }: {
   nodeId: string;
   graph: GraphModel;
   skinConfig: SkinConfig;
   floorLayout: FloorLayout;
+  objectRegistry: ObjectRegistry;
   onDelete: () => void;
 }) {
   const node = graph.getNode(nodeId);
@@ -194,15 +210,15 @@ function NodeProperties({
       <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'capitalize', marginBottom: 2 }}>{node.kind}</div>
       <div style={{ fontSize: 11, color: theme.text3, marginBottom: 4 }}>{node.id}</div>
 
-      {node.kind === 'source' && <SourceFields node={node} onChange={patch} />}
+      {node.kind === 'source' && <SourceFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
       {node.kind === 'distributor' && <DistributorFields node={node} onChange={patch} />}
       {node.kind === 'merger' && (
         <p style={{ fontSize: 12, color: theme.text3 }}>
           Merger has nothing to configure — every arriving item forwards straight out its one output.
         </p>
       )}
-      {node.kind === 'sorter' && <SorterFields node={node} onChange={patch} />}
-      {node.kind === 'mixer' && <MixerFields node={node} onChange={patch} />}
+      {node.kind === 'sorter' && <SorterFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
+      {node.kind === 'mixer' && <MixerFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
       {node.kind === 'buffer' && <BufferFields node={node} onChange={patch} />}
       {node.kind === 'sink' && (
         <p style={{ fontSize: 12, color: theme.text3 }}>Sink has nothing to configure — it just consumes.</p>
@@ -319,7 +335,52 @@ function LockToggle({ nodeId, skinConfig }: { nodeId: string; skinConfig: SkinCo
   );
 }
 
-function SourceFields({ node, onChange }: { node: NodeDef; onChange: (fields: Record<string, unknown>) => void }) {
+/** Shared item-type dropdown (FBP011, 2026-09-05) — used by every
+ * field that references an `ItemType` string (source's spawned type,
+ * a sorter rule's match type, a mixer recipe/output type), so all
+ * three read from the same OBJECTS registry list instead of a
+ * free-text field that could silently reference nothing renderable.
+ * The current `value` is always included as an option even if it
+ * isn't a registered type — a pre-existing save (or the demo graph's
+ * 'widget') keeps working and keeps showing its actual value rather
+ * than silently jumping to the first option in the list. `allowEmpty`
+ * renders a leading blank option (sorter/mixer rows use '' to mean
+ * "not yet filled in"). */
+function ItemTypeSelect({
+  value,
+  objectRegistry,
+  onChange,
+  allowEmpty,
+}: {
+  value: string;
+  objectRegistry: ObjectRegistry;
+  onChange: (v: string) => void;
+  allowEmpty?: boolean;
+}) {
+  const types = objectRegistry.list();
+  const valueIsRegistered = value === '' || types.some((t) => t.id === value);
+  return (
+    <select value={value} style={inputStyle} onChange={(e) => onChange(e.target.value)}>
+      {allowEmpty && <option value="">— none —</option>}
+      {!valueIsRegistered && <option value={value}>{value} (unregistered)</option>}
+      {types.map((t) => (
+        <option key={t.id} value={t.id}>
+          {t.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function SourceFields({
+  node,
+  onChange,
+  objectRegistry,
+}: {
+  node: NodeDef;
+  onChange: (fields: Record<string, unknown>) => void;
+  objectRegistry: ObjectRegistry;
+}) {
   const [cooldown, setCooldown] = useState(typeof node.config.cooldown === 'number' ? node.config.cooldown : 1);
   const [itemType, setItemType] = useState(typeof node.config.itemType === 'string' ? node.config.itemType : 'item');
   return (
@@ -341,13 +402,12 @@ function SourceFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
       </div>
       <div style={rowStyle}>
         <label style={labelStyle}>Item type</label>
-        <input
-          type="text"
+        <ItemTypeSelect
           value={itemType}
-          style={inputStyle}
-          onChange={(e) => {
-            setItemType(e.target.value);
-            onChange({ itemType: e.target.value });
+          objectRegistry={objectRegistry}
+          onChange={(v) => {
+            setItemType(v);
+            onChange({ itemType: v });
           }}
         />
       </div>
@@ -380,7 +440,15 @@ interface SorterRuleRow {
   outputPort: number;
 }
 
-function SorterFields({ node, onChange }: { node: NodeDef; onChange: (fields: Record<string, unknown>) => void }) {
+function SorterFields({
+  node,
+  onChange,
+  objectRegistry,
+}: {
+  node: NodeDef;
+  onChange: (fields: Record<string, unknown>) => void;
+  objectRegistry: ObjectRegistry;
+}) {
   const initialRules = Array.isArray(node.config.rules) ? (node.config.rules as SorterRuleRow[]) : [];
   const [rules, setRules] = useState<SorterRuleRow[]>(initialRules.map((r) => ({ ...r })));
   const [defaultPort, setDefaultPort] = useState(
@@ -399,16 +467,17 @@ function SorterFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
         <label style={labelStyle}>Rules (first match wins)</label>
         {rules.map((rule, i) => (
           <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
-            <input
-              type="text"
-              placeholder="item type"
-              value={rule.itemType}
-              style={{ ...inputStyle, flex: 2 }}
-              onChange={(e) => {
-                const next = rules.map((r, idx) => (idx === i ? { ...r, itemType: e.target.value } : r));
-                commitRules(next);
-              }}
-            />
+            <div style={{ flex: 2 }}>
+              <ItemTypeSelect
+                value={rule.itemType}
+                objectRegistry={objectRegistry}
+                allowEmpty
+                onChange={(v) => {
+                  const next = rules.map((r, idx) => (idx === i ? { ...r, itemType: v } : r));
+                  commitRules(next);
+                }}
+              />
+            </div>
             <input
               type="number"
               placeholder="port"
@@ -471,7 +540,15 @@ interface RecipeRow {
   itemType: string;
 }
 
-function MixerFields({ node, onChange }: { node: NodeDef; onChange: (fields: Record<string, unknown>) => void }) {
+function MixerFields({
+  node,
+  onChange,
+  objectRegistry,
+}: {
+  node: NodeDef;
+  onChange: (fields: Record<string, unknown>) => void;
+  objectRegistry: ObjectRegistry;
+}) {
   const recipeObj = (node.config.recipe ?? {}) as Record<number, string>;
   const [rows, setRows] = useState<RecipeRow[]>(
     Object.entries(recipeObj).map(([port, itemType]) => ({ port: Number(port), itemType: String(itemType) })),
@@ -507,16 +584,17 @@ function MixerFields({ node, onChange }: { node: NodeDef; onChange: (fields: Rec
                 commitRows(next);
               }}
             />
-            <input
-              type="text"
-              placeholder="item type"
-              value={row.itemType}
-              style={{ ...inputStyle, flex: 2 }}
-              onChange={(e) => {
-                const next = rows.map((r, idx) => (idx === i ? { ...r, itemType: e.target.value } : r));
-                commitRows(next);
-              }}
-            />
+            <div style={{ flex: 2 }}>
+              <ItemTypeSelect
+                value={row.itemType}
+                objectRegistry={objectRegistry}
+                allowEmpty
+                onChange={(v) => {
+                  const next = rows.map((r, idx) => (idx === i ? { ...r, itemType: v } : r));
+                  commitRows(next);
+                }}
+              />
+            </div>
             <button
               type="button"
               onClick={() => commitRows(rows.filter((_, idx) => idx !== i))}
@@ -545,13 +623,12 @@ function MixerFields({ node, onChange }: { node: NodeDef; onChange: (fields: Rec
       </div>
       <div style={rowStyle}>
         <label style={labelStyle}>Output item type</label>
-        <input
-          type="text"
+        <ItemTypeSelect
           value={outputType}
-          style={inputStyle}
-          onChange={(e) => {
-            setOutputType(e.target.value);
-            onChange({ outputType: e.target.value });
+          objectRegistry={objectRegistry}
+          onChange={(v) => {
+            setOutputType(v);
+            onChange({ outputType: v });
           }}
         />
       </div>

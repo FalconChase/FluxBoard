@@ -12,6 +12,11 @@ interface StatusBarProps {
   cursorWorldPosition: Point | null;
   snapToGrid: boolean;
   gridSpacing: number;
+  /** Falcon, 2026-09-05: a rejected connection/placement attempt
+   * shows its reason here instead of the normal contextual hint —
+   * this flags that case so the text reads as a warning, not routine
+   * guidance. */
+  isWarning?: boolean;
 }
 
 /**
@@ -22,7 +27,7 @@ interface StatusBarProps {
  * visibility now that the toggle itself moved into the ribbon's VIEW
  * tab.
  */
-export function StatusBar({ isRunning, onPlayPauseClick, instructionText, cursorWorldPosition, snapToGrid, gridSpacing }: StatusBarProps) {
+export function StatusBar({ isRunning, onPlayPauseClick, instructionText, cursorWorldPosition, snapToGrid, gridSpacing, isWarning }: StatusBarProps) {
   return (
     <footer
       style={{
@@ -56,7 +61,17 @@ export function StatusBar({ isRunning, onPlayPauseClick, instructionText, cursor
         {isRunning ? '⏸ Hold' : '▶ Run'}
       </button>
 
-      <span style={{ color: theme.text2, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <span
+        style={{
+          color: isWarning ? theme.danger : theme.text2,
+          fontWeight: isWarning ? 600 : 400,
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
         {instructionText}
       </span>
 

@@ -2,6 +2,7 @@ import type { BezierPath } from '../floor/bezier';
 import type { Point } from '../floor/bezier';
 import type { Camera, Viewport } from '../floor/camera';
 import { hexWithAlpha } from './canvasUtil';
+import type { ObjectShape } from './ObjectRegistry';
 
 /** Skin-owned edge style (design doc §5.2, §5.4). "Transparent" is not
  * a distinct style in its own right — it's the base state with no
@@ -261,19 +262,36 @@ export function drawItemToken(
   rotation: number,
   fillColor: string,
   strokeColor: string,
+  shape: ObjectShape = 'circle',
 ): void {
   ctx.save();
   ctx.translate(screen.x, screen.y);
   ctx.rotate(rotation);
 
   ctx.beginPath();
-  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  if (shape === 'square') {
+    // Slightly smaller than `radius` so a square token reads as
+    // roughly the same visual footprint as a circle of the same
+    // registry `size` (ObjectRegistry.ts), not visibly larger.
+    const half = radius * 0.86;
+    ctx.rect(-half, -half, half * 2, half * 2);
+  } else if (shape === 'triangle') {
+    ctx.moveTo(0, -radius);
+    ctx.lineTo(radius * 0.87, radius * 0.62);
+    ctx.lineTo(-radius * 0.87, radius * 0.62);
+    ctx.closePath();
+  } else {
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  }
   ctx.fillStyle = fillColor;
   ctx.fill();
   ctx.strokeStyle = strokeColor;
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
+  // Directional "nose" — kept identical across every shape (design
+  // doc §5.3: rotation needs to read visually regardless of body
+  // shape), small enough not to fight a square or triangle body.
   ctx.beginPath();
   ctx.moveTo(radius * 0.9, 0);
   ctx.lineTo(radius * 0.1, radius * 0.55);

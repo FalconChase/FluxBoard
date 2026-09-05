@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { GraphModel } from '../../core/GraphModel';
 import { FloorLayout } from '../../floor/floorLayout';
 import { SkinConfig } from '../../skin/SkinConfig';
+import { ObjectRegistry } from '../../skin/ObjectRegistry';
 import { SketchLayer } from '../sketchLayer';
 import { serializeState, clearAllStores, populateState, makeBlankProjectData, newProjectId, type CanvasSettings } from '../persistence';
 
@@ -23,12 +24,14 @@ function buildSampleState(): {
   floorLayout: FloorLayout;
   skinConfig: SkinConfig;
   sketchLayer: SketchLayer;
+  objectRegistry: ObjectRegistry;
   settings: CanvasSettings;
 } {
   const graph = new GraphModel();
   const floorLayout = new FloorLayout();
   const skinConfig = new SkinConfig();
   const sketchLayer = new SketchLayer();
+  const objectRegistry = new ObjectRegistry();
 
   graph.addNode({ id: 'src', kind: 'source', config: { cooldown: 1.1, itemType: 'widget' } });
   graph.addNode({ id: 'dist', kind: 'distributor', config: { mode: 'roundRobin' } });
@@ -62,14 +65,16 @@ function buildSampleState(): {
 
   sketchLayer.add({ id: 'sk1', from: { x: 0, y: 0 }, to: { x: 50, y: 50 } });
 
+  objectRegistry.create({ name: 'Widget', shape: 'square', size: 9, color: '#3d7fff' }, 'widget');
+
   const settings: CanvasSettings = { gridSpacing: 64, tickIntervalMs: 400 };
-  return { graph, floorLayout, skinConfig, sketchLayer, settings };
+  return { graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings };
 }
 
 describe('persistence', () => {
   it('serializeState captures every node/edge with its position, exact anchors, bow, skin and sketches', () => {
-    const { graph, floorLayout, skinConfig, sketchLayer, settings } = buildSampleState();
-    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+    const { graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings } = buildSampleState();
+    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
 
     expect(saved.nodes).toHaveLength(4);
     expect(saved.edges).toHaveLength(3);
@@ -81,8 +86,8 @@ describe('persistence', () => {
   });
 
   it('clearAllStores empties all four stores in place (same instances, zero content)', () => {
-    const { graph, floorLayout, skinConfig, sketchLayer } = buildSampleState();
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+    const { graph, floorLayout, skinConfig, sketchLayer, objectRegistry } = buildSampleState();
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
 
     expect(graph.getAllNodes()).toHaveLength(0);
     expect(graph.getAllEdges()).toHaveLength(0);
@@ -92,26 +97,26 @@ describe('persistence', () => {
   });
 
   it('serialize -> clear -> populate -> re-serialize round-trips byte-for-byte identically', () => {
-    const { graph, floorLayout, skinConfig, sketchLayer, settings } = buildSampleState();
-    const original = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+    const { graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings } = buildSampleState();
+    const original = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
 
     // A real save goes through JSON.stringify/parse on disk — round-trip that too.
     const roundTripped = JSON.parse(JSON.stringify(original));
 
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
-    const restoredSettings = populateState(roundTripped, graph, floorLayout, skinConfig, sketchLayer);
-    const resaved = serializeState(graph, floorLayout, skinConfig, sketchLayer, restoredSettings);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+    const restoredSettings = populateState(roundTripped, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+    const resaved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, restoredSettings);
 
     expect(resaved).toEqual(original);
   });
 
   it('restores edges at their EXACT saved anchors, not the nearest-free auto-pick', () => {
-    const { graph, floorLayout, skinConfig, sketchLayer, settings } = buildSampleState();
-    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+    const { graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings } = buildSampleState();
+    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
     const originalAnchors = { ...saved.edgeGeometry['e1']! };
 
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
-    populateState(saved, graph, floorLayout, skinConfig, sketchLayer);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+    populateState(saved, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
 
     const anchors = floorLayout.getEdgeAnchors('e1')!;
     expect(anchors.sourceAnchor).toBe(originalAnchors.sourceAnchor);
@@ -121,21 +126,22 @@ describe('persistence', () => {
   it('loading a different saved graph onto already-populated stores leaves zero leftover state from the old graph', () => {
     // Simulates the real App.tsx flow: the demo graph is already live
     // in these instances when a load happens.
-    const { graph, floorLayout, skinConfig, sketchLayer } = buildSampleState();
+    const { graph, floorLayout, skinConfig, sketchLayer, objectRegistry } = buildSampleState();
 
     const freshGraph = new GraphModel();
     const freshFloor = new FloorLayout();
     const freshSkin = new SkinConfig();
     const freshSketches = new SketchLayer();
+    const freshObjects = new ObjectRegistry();
     freshGraph.addNode({ id: 'user-node-1', kind: 'buffer', config: { capacity: 5 } });
     freshFloor.setNodePosition('user-node-1', { x: 5, y: 5 });
-    const savedB = serializeState(freshGraph, freshFloor, freshSkin, freshSketches, {
+    const savedB = serializeState(freshGraph, freshFloor, freshSkin, freshSketches, freshObjects, {
       gridSpacing: 32,
       tickIntervalMs: 250,
     });
 
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
-    const restoredSettings = populateState(savedB, graph, floorLayout, skinConfig, sketchLayer);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+    const restoredSettings = populateState(savedB, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
 
     expect(graph.getAllNodes().map((n) => n.id)).toEqual(['user-node-1']);
     expect(graph.getNode('src')).toBeUndefined(); // old demo node gone
@@ -160,11 +166,11 @@ describe('persistence', () => {
     });
 
     it('a blank project round-trips through populateState just like any other saved graph', () => {
-      const { graph, floorLayout, skinConfig, sketchLayer } = buildSampleState();
+      const { graph, floorLayout, skinConfig, sketchLayer, objectRegistry } = buildSampleState();
       const blank = makeBlankProjectData({ gridSpacing: 8, tickIntervalMs: 400 });
 
-      clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
-      const settings = populateState(blank, graph, floorLayout, skinConfig, sketchLayer);
+      clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+      const settings = populateState(blank, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
 
       expect(graph.getAllNodes()).toHaveLength(0);
       expect(settings).toEqual({ gridSpacing: 8, tickIntervalMs: 400 });

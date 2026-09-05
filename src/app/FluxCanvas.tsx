@@ -7,6 +7,8 @@ import { SimEngine } from '../core/SimEngine';
 import type { EdgeDef, EdgeId, NodeDef, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
+import type { ObjectRegistry } from '../skin/ObjectRegistry';
+import { darkenHex } from '../skin/canvasUtil';
 import { drawNode, drawNodeLockBadge, drawNodeSelectionRing } from '../skin/nodeSkin';
 import {
   drawPathUnder,
@@ -26,6 +28,13 @@ interface FluxCanvasProps {
   graph: GraphModel;
   floorLayout: FloorLayout;
   skinConfig: SkinConfig;
+  /** OBJECTS registry (FBP011, 2026-09-05) — resolves each in-
+   * flight item's `type` tag to a shape/size/color for
+   * drawItemToken. Mutated directly like graph/floorLayout/
+   * skinConfig (design doc §4.6), so editing a type in the
+   * Objects manager is picked up on the very next animation
+   * frame with no extra plumbing. */
+  objectRegistry: ObjectRegistry;
   /** Fixed logic-tick interval — decoupled from render frame rate
    * (design doc §5.1). */
   tickIntervalMs?: number;
@@ -51,6 +60,14 @@ interface FluxCanvasProps {
     targetNodeId: NodeId,
     explicitAnchors?: { sourceAnchor?: number; targetAnchor?: number },
   ) => void;
+  /** Falcon, 2026-09-05 ("a rejected connection... fails
+   * completely silently"): fires with a short human-readable
+   * reason whenever a connection attempt is rejected WITHOUT ever
+   * calling onCreateEdge — today, only the "released precisely on
+   * an already-taken port dot" case (App.tsx's handleCreateEdge
+   * covers every other rejection reason itself, since it owns the
+   * anchor/capacity checks). */
+  onConnectionRejected?: (message: string) => void;
   /** Move/delete/snap feature set: when true, a dragged node's
    * position is rounded to the nearest grid line as it moves (App.tsx
    * owns the toggle — header button + F8 shortcut). */
@@ -113,9 +130,6 @@ export interface FluxCanvasHandle {
   toggleRunning: () => void;
 }
 
-const ITEM_RADIUS = 7;
-const ITEM_FILL = '#2ecc71';
-const ITEM_STROKE = '#1c8a4f';
 const CLICK_MOVE_THRESHOLD_PX = 5;
 const EDGE_HIT_TOLERANCE_PX = 12;
 /** Screen-space radius (px, before dividing by camera.zoom) within
@@ -146,12 +160,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     graph,
     floorLayout,
     skinConfig,
+    objectRegistry,
     tickIntervalMs = 400,
     selection,
     onSelect,
     placementKind,
     onPlaceNode,
     onCreateEdge,
+    onConnectionRejected,
     snapToGrid,
     gridSpacing,
     armedEdgeStyle,
@@ -182,6 +198,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   onPlaceNodeRef.current = onPlaceNode;
   const onCreateEdgeRef = useRef(onCreateEdge);
   onCreateEdgeRef.current = onCreateEdge;
+  const onConnectionRejectedRef = useRef(onConnectionRejected);
+  onConnectionRejectedRef.current = onConnectionRejected;
   const snapToGridRef = useRef(snapToGrid);
   snapToGridRef.current = snapToGrid;
   const gridSpacingRef = useRef(gridSpacing);
@@ -520,7 +538,16 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const skin = skinConfig.getEdgeSkin(renderItem.edgeId);
         const rotation = getItemRotation(skin.itemOrientation, curve, renderItem.progress, elapsedMs, skin.spinSpeed);
         const screen = camera.worldToScreen(worldPoint, viewport);
-        drawItemToken(ctx!, screen, ITEM_RADIUS * camera.zoom, rotation, ITEM_FILL, ITEM_STROKE);
+        const objectType = objectRegistry.resolve(renderItem.type);
+        drawItemToken(
+          ctx!,
+          screen,
+          objectType.size * camera.zoom,
+          rotation,
+          objectType.color,
+          darkenHex(objectType.color, 0.32),
+          objectType.shape,
+        );
       }
 
       for (const edge of edges) {
@@ -811,6 +838,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
               sourceAnchor: wireFromAnchorIndex,
               targetAnchor: hoveredAnchor.anchorIndex,
             });
+          } else {
+            // Falcon, 2026-09-05: released precisely on a dot that's
+            // already taken — the user asked for that specific port,
+            // so there's no "close enough" fallback (see the comment
+            // above onCreateEdgeRef.current). Never reaches App.tsx's
+            // handleCreateEdge at all, so this is the one rejection
+            // reason FluxCanvas has to report itself.
+            onConnectionRejectedRef.current?.('That port is already connected.');
           }
         } else {
           const targetNodeId = hitTestNode(worldPoint);
@@ -917,7 +952,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     // and recreate the SimEngine/driver. onRunningChange is invoked
     // through a ref too, for the same reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph, floorLayout, skinConfig, tickIntervalMs]);
+  }, [graph, floorLayout, skinConfig, objectRegistry, tickIntervalMs]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

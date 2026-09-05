@@ -32,3 +32,19 @@ export function hexWithAlpha(hex: string, alpha: number): string {
   const b = int & 255;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
+
+/** #rrggbb -> a darkened #rrggbb, `amount` in [0,1] (0 = unchanged, 1 =
+ * black) — derives an item token's stroke color from its registry
+ * fill color (ObjectRegistry.ts), the same fill/stroke-pair
+ * relationship nodeSkinDefaults hand-picks per node kind. Falls back
+ * to the input unchanged if it isn't a plain opaque hex color. */
+export function darkenHex(hex: string, amount: number): string {
+  const m = /^#([0-9a-fA-F]{6})/.exec(hex);
+  if (!m) return hex;
+  const int = parseInt(m[1]!, 16);
+  const r = Math.round(((int >> 16) & 255) * (1 - amount));
+  const g = Math.round(((int >> 8) & 255) * (1 - amount));
+  const b = Math.round((int & 255) * (1 - amount));
+  const toHex = (v: number) => v.toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}

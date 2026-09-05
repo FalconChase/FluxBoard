@@ -2,6 +2,7 @@ import { GraphModel } from '../core/GraphModel';
 import { FloorLayout } from '../floor/floorLayout';
 import { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeSkin } from '../skin/pathSkin';
+import { ObjectRegistry, type ObjectTypeDef } from '../skin/ObjectRegistry';
 import { SketchLayer, type Sketch } from './sketchLayer';
 import type { CanvasBackground } from './theme';
 import type { EdgeId, NodeDef, EdgeDef, NodeId } from '../core/types';
@@ -83,6 +84,12 @@ export interface SavedFile {
   edgeSkin: Record<EdgeId, EdgeSkin>;
   sketches: Sketch[];
   settings: CanvasSettings;
+  /** OBJECTS registry (FBP011, 2026-09-05) — optional so pre-existing
+   * saves (no version bump needed, same convention as
+   * CanvasSettings.canvasBackground) parse unchanged; App.tsx/
+   * populateState falls back to just the built-in default type when
+   * absent. */
+  objectTypes?: ObjectTypeDef[];
 }
 
 /** Reads everything out of the four live stores (they're the single
@@ -93,6 +100,7 @@ export function serializeState(
   floorLayout: FloorLayout,
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
+  objectRegistry: ObjectRegistry,
   settings: CanvasSettings,
 ): SavedFile {
   const nodes = graph.getAllNodes();
@@ -130,6 +138,7 @@ export function serializeState(
     edgeSkin,
     sketches: sketchLayer.getAll(),
     settings,
+    objectTypes: objectRegistry.list(),
   };
 }
 
@@ -147,6 +156,7 @@ export function clearAllStores(
   floorLayout: FloorLayout,
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
+  objectRegistry: ObjectRegistry,
 ): void {
   for (const node of graph.getAllNodes()) {
     const cascadedEdgeIds = graph.removeNode(node.id);
@@ -167,6 +177,12 @@ export function clearAllStores(
   // 2026-09-05's port-snapping feature) rather than leaving stale
   // entries keyed by ids the project being loaded might reuse.
   floorLayout.clearReservations();
+
+  // Falcon, 2026-09-05 (FBP011): resets back to just the built-in
+  // default type — populateState (below) re-seeds from the incoming
+  // project's own saved list right after this runs, same "clear then
+  // repopulate the SAME instance" pattern as every other store here.
+  objectRegistry.replaceAll([]);
 }
 
 /** Populates the given (already-constructed, already-empty) stores
@@ -187,7 +203,15 @@ export function populateState(
   floorLayout: FloorLayout,
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
+  objectRegistry: ObjectRegistry,
 ): CanvasSettings {
+  // Falcon, 2026-09-05 (FBP011): pre-existing saves have no
+  // objectTypes field at all (optional, no version bump — same
+  // convention as CanvasSettings.canvasBackground) — replaceAll([])
+  // still guarantees the built-in default type exists, matching
+  // exactly what every item rendered as before this registry existed.
+  objectRegistry.replaceAll(saved.objectTypes ?? []);
+
   for (const node of saved.nodes) {
     graph.addNode(node);
     const pos = saved.nodePositions[node.id];
@@ -278,6 +302,7 @@ export function makeBlankProjectData(settings: CanvasSettings): SavedFile {
     edgeSkin: {},
     sketches: [],
     settings,
+    objectTypes: [],
   };
 }
 

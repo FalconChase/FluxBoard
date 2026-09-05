@@ -11,8 +11,10 @@ import { LeftPanel } from './LeftPanel';
 import { Ribbon, type RibbonTab } from './Ribbon';
 import { StatusBar } from './StatusBar';
 import { PropertiesPanel } from './PropertiesPanel';
+import { ObjectRegistryManager } from './ObjectRegistryManager';
 import type { Selection } from './selection';
 import { SketchLayer, type Sketch, type SketchAttachment } from './sketchLayer';
+import { ObjectRegistry } from '../skin/ObjectRegistry';
 import { theme, type CanvasBackground } from './theme';
 import {
   clearAllStores,
@@ -183,6 +185,10 @@ export function App() {
   const floorLayout = useMemo(() => buildDemoFloorLayout(), []);
   const skinConfig = useMemo(() => buildDemoSkinConfig(), []);
   const sketchLayer = useMemo(() => new SketchLayer(), []);
+  // OBJECTS registry (FBP011, 2026-09-05) — same "stable singleton,
+  // mutated directly, single source of truth" convention as the four
+  // stores above (design doc §4.6).
+  const objectRegistry = useMemo(() => new ObjectRegistry(), []);
 
   // Milestone 5 (minimal-chrome scope, FBP008 resolved): selection +
   // node placement + body-to-body wiring. graph/floorLayout/skinConfig
@@ -222,6 +228,17 @@ export function App() {
   const [cursorWorldPosition, setCursorWorldPosition] = useState<Point | null>(null);
   const [isRunning, setIsRunning] = useState(true);
   const fluxCanvasRef = useRef<FluxCanvasHandle | null>(null);
+  // FBP011 (2026-09-05): the ribbon's Objects button opens this modal
+  // rather than arming a placement mode, since a type is a referenced
+  // library entry, not something dropped on the canvas.
+  const [objectsManagerOpen, setObjectsManagerOpen] = useState(false);
+  // Falcon, 2026-09-05: "a rejected connection attempt... fails
+  // completely silently, no message explaining why" — a short-lived
+  // reason shown in the status bar's instruction strip in place of
+  // the normal contextual hint, auto-clearing so it never lingers
+  // past its own relevance.
+  const [transientMessage, setTransientMessage] = useState<string | null>(null);
+  const transientMessageTimeoutRef = useRef<number | null>(null);
   // Read inside the autosave effect below without needing gridSpacing/
   // tickIntervalMs/canvasBackground in its deps (same "ref mirrors
   // current state" convention FluxCanvas already uses for its
@@ -312,7 +329,7 @@ export function App() {
           tickIntervalMs: tickIntervalMsRef.current,
           canvasBackground: canvasBackgroundRef.current,
         };
-        const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+        const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
         await saveProjectFile(id, data);
         manifest = {
           activeProjectId: id,
@@ -325,8 +342,8 @@ export function App() {
 
       const activeData = await loadProjectFile(manifest.activeProjectId);
       if (activeData) {
-        clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
-        const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer);
+        clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+        const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
         setGridSpacing(settings.gridSpacing);
         setTickIntervalMs(settings.tickIntervalMs);
         setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -374,7 +391,7 @@ export function App() {
         tickIntervalMs: tickIntervalMsRef.current,
         canvasBackground: canvasBackgroundRef.current,
       };
-      const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+      const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
       void saveProjectFile(activeProjectIdRef.current, saved);
     }
 
@@ -408,7 +425,7 @@ export function App() {
       tickIntervalMs: tickIntervalMsRef.current,
       canvasBackground: canvasBackgroundRef.current,
     };
-    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, settings);
+    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
     await saveProjectFile(activeProjectIdRef.current, saved);
   }
 
@@ -432,9 +449,9 @@ export function App() {
     if (id === activeProjectIdRef.current) return;
     await flushActiveProjectSave();
     const data = await loadProjectFile(id);
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
     if (data) {
-      const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer);
+      const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
       setGridSpacing(settings.gridSpacing);
       setTickIntervalMs(settings.tickIntervalMs);
       setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -466,7 +483,7 @@ export function App() {
     const settings: CanvasSettings = { gridSpacing: 8, tickIntervalMs: 400, canvasBackground: 'white' };
     const data = makeBlankProjectData(settings);
     await saveProjectFile(id, data);
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
     setGridSpacing(settings.gridSpacing);
     setTickIntervalMs(settings.tickIntervalMs);
     setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -497,6 +514,39 @@ export function App() {
       activeProjectIdRef.current,
       projects.filter((p) => p.id !== id),
     );
+  }
+
+  /** Shows a short reason in the status bar's instruction strip for
+   * ~2.6s, then reverts to whatever contextual hint would normally be
+   * there — used at every silent-rejection point below (Falcon,
+   * 2026-09-05). */
+  function flashMessage(message: string): void {
+    setTransientMessage(message);
+    if (transientMessageTimeoutRef.current !== null) window.clearTimeout(transientMessageTimeoutRef.current);
+    transientMessageTimeoutRef.current = window.setTimeout(() => setTransientMessage(null), 2600);
+  }
+
+  /** Whether an object type is still referenced by anything in the
+   * graph — a source's spawned itemType, a sorter rule's match type,
+   * or a mixer recipe/output type. Lives here (not on ObjectRegistry
+   * itself) because it needs GraphModel, and the skin layer
+   * deliberately never depends on the logic layer (design doc §2).
+   * ObjectRegistryManager's delete button uses this to refuse
+   * orphaning a type something still points at. */
+  function isObjectTypeInUse(typeId: string): boolean {
+    for (const node of graph.getAllNodes()) {
+      if (node.kind === 'source' && node.config.itemType === typeId) return true;
+      if (node.kind === 'sorter') {
+        const rules = Array.isArray(node.config.rules) ? (node.config.rules as { itemType?: string }[]) : [];
+        if (rules.some((r) => r.itemType === typeId)) return true;
+      }
+      if (node.kind === 'mixer') {
+        const recipe = (node.config.recipe ?? {}) as Record<string, unknown>;
+        if (Object.values(recipe).some((v) => v === typeId)) return true;
+        if (node.config.outputType === typeId) return true;
+      }
+    }
+    return false;
   }
 
   function handleDeleteSelection(): void {
@@ -546,7 +596,10 @@ export function App() {
     // port-capacity checks below (handleCreateEdge): a placement that
     // would land on top of an existing node simply doesn't happen,
     // rather than landing there and needing a correction afterward.
-    if (floorLayout.wouldOverlap(worldPoint)) return;
+    if (floorLayout.wouldOverlap(worldPoint)) {
+      flashMessage("Can't place there \u2014 it would overlap another node.");
+      return;
+    }
     const id = `user-node-${nextIdRef.current++}`;
     graph.addNode({ id, kind, config: defaultConfigFor(kind) });
     floorLayout.setNodePosition(id, worldPoint);
@@ -575,7 +628,14 @@ export function App() {
       explicitAnchors?.targetAnchor !== undefined
         ? floorLayout.isAnchorOccupied(targetNodeId, explicitAnchors.targetAnchor)
         : !floorLayout.hasFreeAnchorSlot(targetNodeId);
-    if (sourceBlocked || targetBlocked) return;
+    if (sourceBlocked || targetBlocked) {
+      flashMessage(
+        explicitAnchors?.sourceAnchor !== undefined || explicitAnchors?.targetAnchor !== undefined
+          ? 'That connection point is already taken.'
+          : 'That node already has all 8 connection points in use.',
+      );
+      return;
+    }
 
     // Per-kind "nature" caps (Falcon, 2026-09-03: a source only ever
     // has one output) — also checked before creating anything, same
@@ -586,9 +646,11 @@ export function App() {
     const sourceCap = getPortCapacity(sourceNode.kind);
     const targetCap = getPortCapacity(targetNode.kind);
     if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
+      flashMessage(`A ${sourceNode.kind} can only have ${sourceCap.maxOutputs} output${sourceCap.maxOutputs === 1 ? '' : 's'}.`);
       return;
     }
     if (targetCap.maxInputs !== undefined && graph.inputEdges(targetNodeId).length >= targetCap.maxInputs) {
+      flashMessage(`A ${targetNode.kind} can only accept ${targetCap.maxInputs} input${targetCap.maxInputs === 1 ? '' : 's'}.`);
       return;
     }
 
@@ -684,9 +746,11 @@ export function App() {
     const sourceCap = getPortCapacity(sourceNode.kind);
     const targetCap = getPortCapacity(targetNode.kind);
     if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
+      flashMessage(`Can't convert \u2014 a ${sourceNode.kind} can only have ${sourceCap.maxOutputs} output${sourceCap.maxOutputs === 1 ? '' : 's'}.`);
       return;
     }
     if (targetCap.maxInputs !== undefined && graph.inputEdges(targetNodeId).length >= targetCap.maxInputs) {
+      flashMessage(`Can't convert \u2014 a ${targetNode.kind} can only accept ${targetCap.maxInputs} input${targetCap.maxInputs === 1 ? '' : 's'}.`);
       return;
     }
 
@@ -717,7 +781,9 @@ export function App() {
     fluxCanvasRef.current?.toggleRunning();
   }
 
-  const instructionText = placementKind
+  const instructionText = transientMessage
+    ? transientMessage
+    : placementKind
     ? `Click the canvas to place a ${placementKind}.`
     : armedEdgeStyle
       ? `Click an existing path to apply the ${armedEdgeStyle} style.`
@@ -755,6 +821,7 @@ export function App() {
         onArmSketch={handleArmSketch}
         canDelete={selection !== null}
         onDeleteSelection={handleDeleteSelection}
+        onOpenObjectsManager={() => setObjectsManagerOpen(true)}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}
         gridSpacing={gridSpacing}
@@ -779,12 +846,14 @@ export function App() {
             graph={graph}
             floorLayout={floorLayout}
             skinConfig={skinConfig}
+            objectRegistry={objectRegistry}
             tickIntervalMs={tickIntervalMs}
             selection={selection}
             onSelect={setSelection}
             placementKind={placementKind}
             onPlaceNode={handlePlaceNode}
             onCreateEdge={handleCreateEdge}
+            onConnectionRejected={flashMessage}
             snapToGrid={snapToGrid}
             gridSpacing={gridSpacing}
             armedEdgeStyle={armedEdgeStyle}
@@ -803,6 +872,7 @@ export function App() {
           skinConfig={skinConfig}
           floorLayout={floorLayout}
           sketchLayer={sketchLayer}
+          objectRegistry={objectRegistry}
           onDelete={handleDeleteSelection}
           onConvertSketch={handleConvertSketchToPath}
         />
@@ -811,10 +881,18 @@ export function App() {
         isRunning={isRunning}
         onPlayPauseClick={handlePlayPauseClick}
         instructionText={instructionText}
+        isWarning={transientMessage !== null}
         cursorWorldPosition={cursorWorldPosition}
         snapToGrid={snapToGrid}
         gridSpacing={gridSpacing}
       />
+      {objectsManagerOpen && (
+        <ObjectRegistryManager
+          objectRegistry={objectRegistry}
+          isTypeInUse={isObjectTypeInUse}
+          onClose={() => setObjectsManagerOpen(false)}
+        />
+      )}
     </div>
   );
 }
