@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, per-socket wiring (FBP009 resolved), path type, merger node, autosave persistence (FBD010 rev.3), multi-project FILE tab (FBT018), and a full ribbon-UI visual port (FBT019, dark chrome/white canvas) replacing the old wireframe left-panel-tabs look. Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
+Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, per-socket wiring (FBP009 resolved), path type, merger node, autosave persistence (FBD010 rev.3), multi-project FILE tab (FBT018), a full ribbon-UI visual port (FBT019), and precise port-dot snapping + snappable/convertible sketches (FBT020). Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
 
 ---
 ## STATE
@@ -44,7 +44,7 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| —  | —        | Falcon to verify the ribbon UI port + FILE tab/persistence end-to-end locally (`npm run tauri:dev`), then decide: Tools tab (multi-select/move, rest of FBP014), spec the OBJECTS registry (FBP011), INSERT tab's icon/label overlay, Milestone 6 (isometric, stretch), or something else. | — |
+| —  | —        | Falcon to verify the ribbon UI port, persistence, AND the new port-snapping/sketch-conversion interaction end-to-end locally (`npm run tauri:dev`), then decide: Tools tab (multi-select/move, rest of FBP014), spec the OBJECTS registry (FBP011), INSERT tab's icon/label overlay, Milestone 6 (isometric, stretch), or something else. | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
@@ -64,6 +64,7 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 | FBT017 | — | Edge properties gained a "Speed" field (world units/sec), converted to/from `flowRate` using the edge's current path length (UI-layer only, no stored field/SimEngine change) — explains/fixes "longer path looks faster" (`flowRate` is length-independent progress/sec by design, §5.1). Grid spacing now defaults to 8 (was 64), snap-to-grid on by default (was off). | SES025 |
 | FBT018 | — | FILE tab (FBP014 half-resolved): persistence.ts's single fixed save file becomes a manifest + one JSON file per project (`projects/<id>.json`) — create/switch/rename/delete, legacy autosave migrated into a project on first load under this. Tools tab (multi-select/move) still deferred. | SES026 |
 | FBT019 | — | Ribbon UI port (Falcon approved the "FluxBoard Ribbon UI" design mockup, then "Full port now"): dark ribbon/panel chrome, HOME tab absorbs NODES/PATHS/OBJECTS + a MODIFY group (Delete wired; multi-select/duplicate/pan placeholders), VIEW tab absorbs grid/tick/snap + new `canvasBackground` (white/dark/blueprint, `theme.ts`/`persistence.ts`). Properties panel is a permanent right-docked panel (idle placeholder when nothing selected — corrected from an initial floating-overlay attempt, SES028). Title strip gained a QAT icon row (Save wired real; Export/Undo/Redo placeholders) + centered project name. `NodePalette.tsx`/`PathPalette.tsx` deleted, absorbed into `Ribbon.tsx`; new `StatusBar.tsx` (Run/Hold + instruction text + cursor readout). New `EdgeStyle` 'trace' (thin PCB-trace line, `pathSkin.ts`) alongside Transparent/Conveyor/Glass tube. | SES027-028 |
+| FBT020 | — | Precise port-dot snapping + snappable/convertible sketches: `FloorLayout`'s 8 anchors/node are now a shared reservation pool (edges AND sketch endpoints), with `findNearestAnchor`/`nearestAnchorOnNode` hover lookups and an `explicitAnchors` param on `setEdgeCurve` that rejects outright (no fallback) if the specifically-targeted dot is taken. Shift+drag wiring and sketch drawing both hit-test port dots live (highlight ring, snapping preview). A sketch may now be half-connected (one end pinned, one floating); once both ends are pinned, Properties panel offers "Convert to path" (style picker, re-checks per-kind port capacity, lands the new edge on the sketch's exact anchors). Sketches gained a direction arrow + hollow rings on unattached ends. Scoped to NEW paths/sketches only — existing edge reassignment untouched (Falcon's own choice via AskUserQuestion). | SES029 |
 
 ---
 ## DECISIONS
@@ -96,4 +97,4 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 99 / 120 — Budget remaining: 21
+# Lines: 100 / 120 — Budget remaining: 20
