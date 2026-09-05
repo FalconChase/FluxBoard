@@ -540,6 +540,13 @@ export function App() {
   }
 
   function handlePlaceNode(kind: NodeKind, worldPoint: Point): void {
+    // Falcon, 2026-09-05: "dont allow overlapping of nodes and paths
+    // ... even creating new node it will hardblock if attempted or
+    // cause overlapping" -- same silent-rejection convention as the
+    // port-capacity checks below (handleCreateEdge): a placement that
+    // would land on top of an existing node simply doesn't happen,
+    // rather than landing there and needing a correction afterward.
+    if (floorLayout.wouldOverlap(worldPoint)) return;
     const id = `user-node-${nextIdRef.current++}`;
     graph.addNode({ id, kind, config: defaultConfigFor(kind) });
     floorLayout.setNodePosition(id, worldPoint);

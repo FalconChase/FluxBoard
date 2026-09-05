@@ -30,6 +30,19 @@ export interface AnchorHit {
   occupied: boolean;
 }
 
+/** Which direction an anchor is currently playing, purely from what's
+ * actually booked there (Falcon, 2026-09-05: "green for input/
+ * receiving, red for outgoing, grey for neither" — and per his own
+ * follow-up, the role is decided by which end of the connection this
+ * dot is: "if the path was snap or started to draw from a port it's
+ * automatically outgoing, but if it's a receiving [end] automatically
+ * incoming"). 'out' = this dot is the SOURCE end of a real edge, or
+ * the end a sketch/wire drag STARTED from; 'in' = the TARGET end of a
+ * real edge, or the end a sketch drag finished/attached at; 'free' =
+ * nothing booked here at all. Purely a read of existing bookings —
+ * no new state of its own. */
+export type AnchorRole = 'out' | 'in' | 'free';
+
 /**
  * The floor layer's own data: world-space node positions and path curve
  * geometry, keyed by the same ids the logic-layer GraphModel uses
@@ -435,5 +448,45 @@ export class FloorLayout {
     this.releaseEdgeAnchors(edgeId);
     this.edgeCurves.delete(edgeId);
     this.edgeBow.delete(edgeId);
+  }
+
+  /** The role one specific anchor is currently playing — 'out' if
+   * it's booked as a real edge's SOURCE end or a sketch's "from" end
+   * (Falcon, 2026-09-05: the end a connection was drawn FROM is
+   * outgoing), 'in' if it's a real edge's TARGET end or a sketch's
+   * "to" end (the end a connection was drawn TO / snapped onto is
+   * incoming), 'free' if nothing is booked there. Sketch reservation
+   * ids are always exactly `${sketchId}:from` / `${sketchId}:to`
+   * (reserveAnchor's only two callers), so the suffix alone is enough
+   * to tell the two apart without a separate lookup table. */
+  getAnchorRole(nodeId: NodeId, anchorIndex: number): AnchorRole {
+    for (const anchors of this.edgeAnchors.values()) {
+      if (anchors.sourceNodeId === nodeId && anchors.sourceAnchor === anchorIndex) return 'out';
+      if (anchors.targetNodeId === nodeId && anchors.targetAnchor === anchorIndex) return 'in';
+    }
+    for (const [reservationId, r] of this.anchorReservations.entries()) {
+      if (r.nodeId === nodeId && r.anchorIndex === anchorIndex) {
+        return reservationId.endsWith(':from') ? 'out' : 'in';
+      }
+    }
+    return 'free';
+  }
+
+  /** Falcon, 2026-09-05: "dont allow overlapping of nodes and paths
+   * (introduction of junctions and elevators later)" — scoped for
+   * now to node-vs-node only (paths are curves, not points, and a
+   * clean overlap test for those waits until junctions/elevators
+   * actually exist). Nodes are approximated as circles of NODE_RADIUS
+   * — the same approximation their octagon body already fits inside
+   * — so two nodes "overlap" once their centers are closer than
+   * 2×NODE_RADIUS. `excludeNodeId` lets a node being dragged ignore
+   * its own current position while checking every OTHER node. */
+  wouldOverlap(candidate: Point, excludeNodeId?: NodeId): boolean {
+    const minDist = NODE_RADIUS * 2;
+    for (const [nodeId, pos] of this.nodePositions.entries()) {
+      if (nodeId === excludeNodeId) continue;
+      if (Math.hypot(pos.x - candidate.x, pos.y - candidate.y) < minDist) return true;
+    }
+    return false;
   }
 }

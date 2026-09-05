@@ -7,7 +7,7 @@ import { SimEngine } from '../core/SimEngine';
 import type { EdgeDef, EdgeId, NodeDef, NodeId, NodeKind } from '../core/types';
 import type { Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
-import { drawNode, drawNodeLockBadge, drawNodeSelectionRing } from '../skin/nodeSkin';
+import { drawNode, drawNodeLockBadge, drawNodeSelectionRing, ANCHOR_ROLE_COLOR } from '../skin/nodeSkin';
 import {
   drawPathUnder,
   drawPathOver,
@@ -328,6 +328,49 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       return undefined;
     }
 
+    /** Closest point (within maxDistance) to `worldPoint` across
+     * every existing real path AND every existing sketch's own line
+     * -- visual-only alignment for a drawn sketch's loose end (Falcon,
+     * 2026-09-05: "allow snapping paths ... to other paths"). Nothing
+     * is attached or recorded here; it only ever changes where the
+     * drag preview's head is DRAWN and what a committed sketch's
+     * final coordinate is. Junctions/elevators (deferred) are what
+     * would eventually make this a real structural connection. */
+    function nearestPointOnAnyPath(worldPoint: Point, maxDistance: number): Point | undefined {
+      let best: Point | undefined;
+      let bestDist = maxDistance;
+
+      for (const edge of graph.getAllEdges()) {
+        const curve = floorLayout.getEdgeCurve(edge.id);
+        if (!curve || curve.totalLength === 0) continue;
+        const samples = 40;
+        for (let i = 0; i <= samples; i++) {
+          const p = curve.getPointAtProgress(i / samples);
+          const d = Math.hypot(p.x - worldPoint.x, p.y - worldPoint.y);
+          if (d < bestDist) {
+            bestDist = d;
+            best = p;
+          }
+        }
+      }
+
+      for (const sketch of sketchLayer.getAll()) {
+        const dx = sketch.to.x - sketch.from.x;
+        const dy = sketch.to.y - sketch.from.y;
+        const lengthSq = dx * dx + dy * dy;
+        let t = lengthSq === 0 ? 0 : ((worldPoint.x - sketch.from.x) * dx + (worldPoint.y - sketch.from.y) * dy) / lengthSq;
+        t = Math.max(0, Math.min(1, t));
+        const closest = { x: sketch.from.x + t * dx, y: sketch.from.y + t * dy };
+        const d = Math.hypot(closest.x - worldPoint.x, closest.y - worldPoint.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = closest;
+        }
+      }
+
+      return best;
+    }
+
     function resize(): void {
       const parent = canvas!.parentElement;
       const width = parent ? parent.clientWidth : window.innerWidth;
@@ -400,7 +443,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         if (!sketch.toAttachment) drawLooseEndpointMarker(ctx!, sketch.to, camera, viewport);
       }
       if (pointerMode === 'sketch-draw' && sketchDrawOrigin && sketchDrawCurrent) {
-        const headWorld = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor.point : sketchDrawCurrent;
+        const headWorld =
+          hoveredAnchor && !hoveredAnchor.occupied
+            ? hoveredAnchor.point
+            : (hoveredPathSnapPoint ?? sketchDrawCurrent);
         const a = camera.worldToScreen(sketchDrawOrigin, viewport);
         const b = camera.worldToScreen(headWorld, viewport);
         ctx!.save();
@@ -415,6 +461,15 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         if (sketchFromAttachment) {
           drawAnchorRing(ctx!, camera.worldToScreen(sketchDrawOrigin, viewport), camera.zoom, 'rgba(124, 58, 237, 0.9)');
         }
+        // Falcon, 2026-09-05: "the path should also have green and
+        // red at the end when drawing mode or sketch mode was
+        // activated" -- the fixed origin (where the drag STARTED) is
+        // always the outgoing end, red; the moving head (where it
+        // would attach if released now) is always the incoming end,
+        // green -- independent of whether anything is actually under
+        // the cursor yet.
+        drawEndpointDot(ctx!, a, camera.zoom, ANCHOR_ROLE_COLOR.out);
+        drawEndpointDot(ctx!, b, camera.zoom, ANCHOR_ROLE_COLOR.in);
       }
       if ((pointerMode === 'wire' || pointerMode === 'sketch-draw') && hoveredAnchor) {
         const screenPt = camera.worldToScreen(hoveredAnchor.point, viewport);
@@ -424,6 +479,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           camera.zoom,
           hoveredAnchor.occupied ? 'rgba(255, 93, 93, 0.9)' : 'rgba(46, 204, 113, 0.9)',
         );
+      }
+      // Falcon, 2026-09-05: "allow snapping paths ... to other paths"
+      // -- visual alignment only for now (no junction exists yet to
+      // actually attach to), shown only when no port dot is already
+      // being targeted so the two hints never compete for the same
+      // spot.
+      if (pointerMode === 'sketch-draw' && !hoveredAnchor && hoveredPathSnapPoint) {
+        drawPathSnapMarker(ctx!, camera.worldToScreen(hoveredPathSnapPoint, viewport), camera.zoom);
       }
 
       // --- Three-pass path render stack (design doc §5.2) ---
@@ -491,6 +554,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
               drawAnchorRing(ctx!, camera.worldToScreen(sourceAnchorPoint, viewport), camera.zoom, 'rgba(37, 99, 235, 0.9)');
             }
           }
+          drawEndpointDot(ctx!, a, camera.zoom, ANCHOR_ROLE_COLOR.out);
+          drawEndpointDot(ctx!, b, camera.zoom, ANCHOR_ROLE_COLOR.in);
         }
       }
 
@@ -509,7 +574,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const screen = camera.worldToScreen(pos, viewport);
         const r = NODE_RADIUS * camera.zoom;
         const state = engine.getNodeState(node.id) ?? {};
-        drawNode(ctx!, node, state, screen, r, camera.zoom);
+        drawNode(ctx!, node, state, screen, r, camera.zoom, (anchorIndex) => floorLayout.getAnchorRole(node.id, anchorIndex));
         if (skinConfig.getNodeLocked(node.id)) {
           drawNodeLockBadge(ctx!, screen, r, camera.zoom);
         }
@@ -554,6 +619,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     let sketchDrawOrigin: Point | undefined;
     let sketchDrawCurrent: Point | undefined;
     let sketchFromAttachment: SketchAttachment | null = null;
+    // Path-to-path visual snap (Falcon, 2026-09-05: "allow snapping
+    // paths ... to other paths") -- alignment only, no attachment
+    // recorded; only ever set when no port dot is already hovered.
+    let hoveredPathSnapPoint: Point | undefined;
     // Latched at pointerdown (not re-read live) so a gesture commits
     // to one interpretation for its whole drag, rather than switching
     // mid-drag if a modifier key state changes.
@@ -664,12 +733,27 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       if (pointerMode === 'sketch-draw') {
         sketchDrawCurrent = toWorld(e.clientX, e.clientY);
         hoveredAnchor = floorLayout.findNearestAnchor(sketchDrawCurrent, PORT_SNAP_RADIUS_PX / camera.zoom);
+        // Path-to-path visual snap only matters when no port dot is
+        // already close enough to take priority (Falcon, 2026-09-05:
+        // ports are the "real" targets; other paths are alignment
+        // only).
+        hoveredPathSnapPoint = hoveredAnchor
+          ? undefined
+          : nearestPointOnAnyPath(sketchDrawCurrent, PORT_SNAP_RADIUS_PX / camera.zoom);
       }
 
       if (pointerMode === 'move' && pendingNodeHitId && moveGrabOffset) {
         const currentWorld = toWorld(e.clientX, e.clientY);
         const rawPos = { x: currentWorld.x - moveGrabOffset.x, y: currentWorld.y - moveGrabOffset.y };
-        floorLayout.setNodePosition(pendingNodeHitId, snapToGridPoint(rawPos));
+        const snappedPos = snapToGridPoint(rawPos);
+        // Falcon, 2026-09-05: "dont allow overlapping of nodes ...
+        // even creating new node it will hardblock if attempted or
+        // cause overlapping" -- a drag that WOULD land the node on
+        // top of another one simply doesn't move it any further this
+        // frame (the node behaves like it hit a wall), rather than
+        // being allowed through and corrected after the fact.
+        if (floorLayout.wouldOverlap(snappedPos, pendingNodeHitId)) return;
+        floorLayout.setNodePosition(pendingNodeHitId, snappedPos);
         for (const edge of edgesTouchingNode(pendingNodeHitId)) {
           floorLayout.recomputeEdgeCurve(edge.id, edge.source, edge.target);
         }
@@ -737,7 +821,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // same spirit as requiring an actual gesture for wiring.
         if (!isClick) {
           const toAnchorHit = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor : undefined;
-          const finalTo = toAnchorHit ? toAnchorHit.point : worldPoint;
+          const finalTo = toAnchorHit ? toAnchorHit.point : (hoveredPathSnapPoint ?? worldPoint);
           const toAttachment = toAnchorHit ? { nodeId: toAnchorHit.nodeId, anchorIndex: toAnchorHit.anchorIndex } : null;
           onCreateSketchRef.current(sketchDrawOrigin, finalTo, sketchFromAttachment, toAttachment);
         }
@@ -769,6 +853,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       sketchDrawOrigin = undefined;
       sketchDrawCurrent = undefined;
       sketchFromAttachment = null;
+      hoveredPathSnapPoint = undefined;
       wireGesture = false;
       moveLocked = false;
       moveGrabOffset = null;
@@ -922,5 +1007,40 @@ function drawAnchorRing(ctx: CanvasRenderingContext2D, screenPoint: Point, zoom:
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(2, 2.5 * zoom);
   ctx.stroke();
+  ctx.restore();
+}
+
+/** A small filled dot at a wire/sketch drag's own endpoint -- always
+ * shown while drawing, independent of whether anything is under the
+ * cursor (Falcon, 2026-09-05: "the path should also have green and
+ * red at the end when drawing mode or sketch mode was activated").
+ * Red at the fixed origin (outgoing), green at the moving head
+ * (incoming) -- the same two colors a real port dot uses once wired,
+ * so the preview already reads the way the finished connection will. */
+function drawEndpointDot(ctx: CanvasRenderingContext2D, screenPoint: Point, zoom: number, color: string): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(screenPoint.x, screenPoint.y, Math.max(3, 4 * zoom), 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, 1.2 * zoom);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** A small diamond marking where a drawn sketch's loose end has
+ * visually snapped onto an EXISTING path/sketch (Falcon, 2026-09-05:
+ * "allow snapping paths ... to other paths") -- deliberately a
+ * different shape from drawAnchorRing's circle, so "aligned to a
+ * path" never reads as "attached to a port," since it isn't one. */
+function drawPathSnapMarker(ctx: CanvasRenderingContext2D, screenPoint: Point, zoom: number): void {
+  const size = Math.max(5, 6 * zoom);
+  ctx.save();
+  ctx.translate(screenPoint.x, screenPoint.y);
+  ctx.rotate(Math.PI / 4);
+  ctx.strokeStyle = 'rgba(58, 58, 66, 0.75)';
+  ctx.lineWidth = Math.max(1.5, 2 * zoom);
+  ctx.strokeRect(-size / 2, -size / 2, size, size);
   ctx.restore();
 }
