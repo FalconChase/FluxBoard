@@ -12,7 +12,7 @@ import { Ribbon, type RibbonTab } from './Ribbon';
 import { StatusBar } from './StatusBar';
 import { PropertiesPanel } from './PropertiesPanel';
 import type { Selection } from './selection';
-import { SketchLayer } from './sketchLayer';
+import { SketchLayer, type Sketch, type SketchAttachment } from './sketchLayer';
 import { theme, type CanvasBackground } from './theme';
 import {
   clearAllStores,
@@ -509,7 +509,27 @@ export function App() {
         floorLayout.removeEdgeCurve(edgeId);
         skinConfig.removeEdge(edgeId);
       }
+      // Detach (not delete) any sketch that had an end pinned to
+      // this node (Falcon, 2026-09-05) — releases the anchor
+      // reservation but keeps the sketch at its last-known endpoint
+      // position, same "planning survives" spirit as everything else
+      // in this cascade.
+      for (const sketch of sketchLayer.getAll()) {
+        let patch: Partial<Sketch> | null = null;
+        if (sketch.fromAttachment && sketch.fromAttachment.nodeId === selection.id) {
+          floorLayout.releaseReservation(`${sketch.id}:from`);
+          patch = { ...(patch ?? {}), fromAttachment: null };
+        }
+        if (sketch.toAttachment && sketch.toAttachment.nodeId === selection.id) {
+          floorLayout.releaseReservation(`${sketch.id}:to`);
+          patch = { ...(patch ?? {}), toAttachment: null };
+        }
+        if (patch) sketchLayer.update(sketch.id, patch);
+      }
     } else if (selection.type === 'sketch') {
+      const sketch = sketchLayer.get(selection.id);
+      if (sketch?.fromAttachment) floorLayout.releaseReservation(`${selection.id}:from`);
+      if (sketch?.toAttachment) floorLayout.releaseReservation(`${selection.id}:to`);
       sketchLayer.remove(selection.id);
     } else {
       graph.removeEdge(selection.id);
@@ -527,14 +547,28 @@ export function App() {
     setPlacementKind(null);
   }
 
-  function handleCreateEdge(sourceNodeId: NodeId, targetNodeId: NodeId): void {
+  function handleCreateEdge(
+    sourceNodeId: NodeId,
+    targetNodeId: NodeId,
+    explicitAnchors?: { sourceAnchor?: number; targetAnchor?: number },
+  ): void {
     // Per-socket wiring (Falcon, 2026-09-03): max 8 paths per node,
-    // one per octagon side. Checked BEFORE creating anything so a
-    // node that's already full silently rejects the drag rather than
-    // leaving a logic-layer edge with no floor-layer curve to render.
-    if (!floorLayout.hasFreeAnchorSlot(sourceNodeId) || !floorLayout.hasFreeAnchorSlot(targetNodeId)) {
-      return;
-    }
+    // one per octagon side. Falcon, 2026-09-05 ("snap on those
+    // dots"): when the drag targeted one SPECIFIC dot, check that
+    // exact dot instead of "does this node have ANY free slot" — a
+    // deliberately-targeted taken dot rejects the whole connection
+    // rather than falling back to a different one. Checked BEFORE
+    // creating anything so a rejection never leaves a logic-layer
+    // edge with no floor-layer curve to render.
+    const sourceBlocked =
+      explicitAnchors?.sourceAnchor !== undefined
+        ? floorLayout.isAnchorOccupied(sourceNodeId, explicitAnchors.sourceAnchor)
+        : !floorLayout.hasFreeAnchorSlot(sourceNodeId);
+    const targetBlocked =
+      explicitAnchors?.targetAnchor !== undefined
+        ? floorLayout.isAnchorOccupied(targetNodeId, explicitAnchors.targetAnchor)
+        : !floorLayout.hasFreeAnchorSlot(targetNodeId);
+    if (sourceBlocked || targetBlocked) return;
 
     // Per-kind "nature" caps (Falcon, 2026-09-03: a source only ever
     // has one output) — also checked before creating anything, same
@@ -561,7 +595,7 @@ export function App() {
       flowRate: 0.15,
       active: true,
     });
-    floorLayout.setEdgeCurve(id, sourceNodeId, targetNodeId, 0.15);
+    floorLayout.setEdgeCurve(id, sourceNodeId, targetNodeId, 0.15, explicitAnchors);
     setSelection({ type: 'edge', id });
   }
 
@@ -591,11 +625,85 @@ export function App() {
     setArmedEdgeStyle(null);
   }
 
-  function handleCreateSketch(from: Point, to: Point): void {
+  function handleCreateSketch(
+    from: Point,
+    to: Point,
+    fromAttachment?: SketchAttachment | null,
+    toAttachment?: SketchAttachment | null,
+  ): void {
     const id = `sketch-${nextIdRef.current++}`;
-    sketchLayer.add({ id, from, to });
+    // Falcon, 2026-09-05: book each attached end in FloorLayout's
+    // shared anchor pool so the sketch genuinely holds that port —
+    // re-validated here (not just trusted from FluxCanvas's own
+    // pre-filtering) so a stale/occupied target degrades to a plain
+    // floating end instead of silently double-booking a dot.
+    const fromOk = fromAttachment
+      ? floorLayout.reserveAnchor(`${id}:from`, fromAttachment.nodeId, fromAttachment.anchorIndex)
+      : false;
+    const toOk = toAttachment
+      ? floorLayout.reserveAnchor(`${id}:to`, toAttachment.nodeId, toAttachment.anchorIndex)
+      : false;
+    sketchLayer.add({
+      id,
+      from,
+      to,
+      fromAttachment: fromOk ? fromAttachment! : null,
+      toAttachment: toOk ? toAttachment! : null,
+    });
     setSelection({ type: 'sketch', id });
     setSketchArmed(false);
+  }
+
+  /** Properties panel's "Convert to path" action (Falcon, 2026-09-05:
+   * "sketches or drawn paths can be convertible to a real path") —
+   * only reachable once both ends are pinned to a real port (enforced
+   * by the panel itself not rendering the control otherwise, checked
+   * again here since this is the actual mutation). Re-checks per-kind
+   * port capacity exactly like handleCreateEdge, since a sketch's
+   * anchor reservation only proves the physical DOT is free, not that
+   * the node's kind still has room under maxOutputs/maxInputs. Only
+   * releases the sketch's anchor reservations — and removes the
+   * sketch — after every check passes, so a rejected conversion
+   * leaves the sketch fully intact. */
+  function handleConvertSketchToPath(sketchId: string, style: EdgeStyle): void {
+    const sketch = sketchLayer.get(sketchId);
+    if (!sketch || !sketch.fromAttachment || !sketch.toAttachment) return;
+    const { nodeId: sourceNodeId, anchorIndex: sourceAnchor } = sketch.fromAttachment;
+    const { nodeId: targetNodeId, anchorIndex: targetAnchor } = sketch.toAttachment;
+
+    const sourceNode = graph.getNode(sourceNodeId);
+    const targetNode = graph.getNode(targetNodeId);
+    if (!sourceNode || !targetNode) return;
+    const sourceCap = getPortCapacity(sourceNode.kind);
+    const targetCap = getPortCapacity(targetNode.kind);
+    if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
+      return;
+    }
+    if (targetCap.maxInputs !== undefined && graph.inputEdges(targetNodeId).length >= targetCap.maxInputs) {
+      return;
+    }
+
+    // The sketch already holds both anchor slots in FloorLayout's
+    // shared reservation pool — release them right before creating
+    // the real edge at the SAME anchors (single-threaded UI, nothing
+    // else can grab them in between).
+    floorLayout.releaseReservation(`${sketchId}:from`);
+    floorLayout.releaseReservation(`${sketchId}:to`);
+
+    const id = `user-edge-${nextIdRef.current++}`;
+    graph.addEdge({
+      id,
+      source: sourceNodeId,
+      target: targetNodeId,
+      sourcePort: 0,
+      targetPort: 0,
+      flowRate: 0.15,
+      active: true,
+    });
+    floorLayout.setEdgeCurve(id, sourceNodeId, targetNodeId, 0.15, { sourceAnchor, targetAnchor });
+    skinConfig.setEdgeSkin(id, { style });
+    sketchLayer.remove(sketchId);
+    setSelection({ type: 'edge', id });
   }
 
   function handlePlayPauseClick(): void {
@@ -607,13 +715,13 @@ export function App() {
     : armedEdgeStyle
       ? `Click an existing path to apply the ${armedEdgeStyle} style.`
       : sketchArmed
-        ? 'Drag anywhere on the canvas to sketch a planning path (no simulation meaning).'
+        ? 'Drag to sketch a planning path — starting or ending near a port dot pins that end to it.'
         : selection?.type === 'node'
           ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
           : selection?.type === 'edge'
             ? 'Path selected — edit it in the properties panel, Delete to remove.'
             : selection?.type === 'sketch'
-              ? 'Sketch selected — Delete to remove. Planning guide only, no simulation meaning.'
+              ? 'Sketch selected — Delete to remove, or Convert to path in the properties panel once both ends are pinned.'
               : 'Click a node or path to select it, choose something from the ribbon to add, or Shift+drag from one node to another to connect them.';
 
   return (
@@ -689,6 +797,7 @@ export function App() {
           floorLayout={floorLayout}
           sketchLayer={sketchLayer}
           onDelete={handleDeleteSelection}
+          onConvertSketch={handleConvertSketchToPath}
         />
       </div>
       <StatusBar

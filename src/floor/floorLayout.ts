@@ -18,6 +18,18 @@ interface EdgeAnchors {
   targetAnchor: number;
 }
 
+/** One specific anchor dot, found by searching near a world point —
+ * returned by nearestAnchorOnNode/findNearestAnchor (Falcon,
+ * 2026-09-05: "snap on those dots"). `occupied` lets a caller show a
+ * different highlight (and refuse to attach) when the nearest dot is
+ * already taken, without a second lookup. */
+export interface AnchorHit {
+  nodeId: NodeId;
+  anchorIndex: number;
+  point: Point;
+  occupied: boolean;
+}
+
 /**
  * The floor layer's own data: world-space node positions and path curve
  * geometry, keyed by the same ids the logic-layer GraphModel uses
@@ -37,6 +49,16 @@ interface EdgeAnchors {
  * its routing logic, which is a bigger decision than what was asked
  * for here — flagged to Falcon as a deliberate scoping choice, worth
  * revisiting only if he actually wants routing tied to physical sides.
+ *
+ * Precise port snapping + sketch attachments (Falcon, 2026-09-05):
+ * the 8 anchor slots per node are now a shared reservation pool — a
+ * real edge occupies one via edgeAnchors (below), and a planning
+ * sketch's endpoint can ALSO reserve one via the generic
+ * reserveAnchor/releaseReservation pair, keyed by an opaque id
+ * (`${sketchId}:from` / `:to`) rather than an edge id. Both draw from
+ * the same nodeAnchorUsage set, so a sketch genuinely holds a real
+ * port the way a wired edge does — nothing else can grab that dot
+ * until the sketch releases it (deleted, detached, or converted).
  */
 export class FloorLayout {
   private nodePositions = new Map<NodeId, Point>();
@@ -46,13 +68,19 @@ export class FloorLayout {
    * losing their original bend. */
   private edgeBow = new Map<EdgeId, number>();
   /** Which of a node's 8 anchor indices (0-7, skin/octagon.ts compass
-   * order) are currently occupied by a path. */
+   * order) are currently occupied — by an edge OR a sketch
+   * reservation, see class doc above. */
   private nodeAnchorUsage = new Map<NodeId, Set<number>>();
   /** Which anchor (and which node) each edge is attached to at each
    * end — this is FloorLayout's own record, independent of GraphModel,
    * so an edge's anchors can be released on deletion even after the
    * edge is already gone from GraphModel (node-deletion cascade). */
   private edgeAnchors = new Map<EdgeId, EdgeAnchors>();
+  /** Generic anchor reservations from things that aren't full
+   * GraphModel edges — currently just sketch endpoints. Keyed by an
+   * opaque reservation id so a sketch's two ends book independently
+   * and either can be released without touching the other. */
+  private anchorReservations = new Map<string, { nodeId: NodeId; anchorIndex: number }>();
 
   setNodePosition(nodeId: NodeId, position: Point): void {
     this.nodePositions.set(nodeId, position);
@@ -64,9 +92,10 @@ export class FloorLayout {
 
   removeNodePosition(nodeId: NodeId): void {
     this.nodePositions.delete(nodeId);
-    // Defensive cleanup — a node's edges are normally already removed
-    // (and their anchors released) via removeEdgeCurve before this
-    // runs, but drop any stray booking rather than leak it.
+    // Defensive cleanup — a node's edges/sketch attachments are
+    // normally already released (via removeEdgeCurve / an explicit
+    // releaseReservation call) before this runs, but drop any stray
+    // booking rather than leak it.
     this.nodeAnchorUsage.delete(nodeId);
   }
 
@@ -79,7 +108,8 @@ export class FloorLayout {
 
   /** The anchor index (0-7) on `nodeId` nearest to `towardPoint`,
    * skipping any already occupied — or undefined if all 8 are taken.
-   * "Nearest" is what auto-picks which side a new path attaches to. */
+   * "Nearest" is what auto-picks which side a new path attaches to
+   * when nothing more specific was targeted. */
   private nearestFreeAnchor(nodeId: NodeId, towardPoint: Point): number | undefined {
     const center = this.nodePositions.get(nodeId);
     if (!center) return undefined;
@@ -115,16 +145,121 @@ export class FloorLayout {
     this.edgeAnchors.delete(edgeId);
   }
 
+  /** Whether one specific anchor (0-7) on `nodeId` is currently taken
+   * — by an edge or a sketch reservation, doesn't matter which. */
+  isAnchorOccupied(nodeId: NodeId, anchorIndex: number): boolean {
+    return this.nodeAnchorUsage.get(nodeId)?.has(anchorIndex) ?? false;
+  }
+
+  /** The world-space point of one specific anchor on a node, or
+   * undefined if the node has no recorded position. */
+  getAnchorPoint(nodeId: NodeId, anchorIndex: number): Point | undefined {
+    const center = this.nodePositions.get(nodeId);
+    if (!center) return undefined;
+    return octagonPortAnchor(center, NODE_RADIUS, anchorIndex);
+  }
+
+  /** The single nearest anchor dot to `point` ON ONE SPECIFIC node,
+   * within `maxDistance` world units — regardless of whether it's
+   * already occupied (callers decide what to do with that). Used to
+   * find which exact dot a drag started ON, once the node under the
+   * cursor is already known. */
+  nearestAnchorOnNode(nodeId: NodeId, point: Point, maxDistance: number): Omit<AnchorHit, 'nodeId'> | undefined {
+    const center = this.nodePositions.get(nodeId);
+    if (!center) return undefined;
+    let best: Omit<AnchorHit, 'nodeId'> | undefined;
+    let bestDist = maxDistance;
+    for (let i = 0; i < OCTAGON_PORT_COUNT; i++) {
+      const anchorPoint = octagonPortAnchor(center, NODE_RADIUS, i);
+      const dist = Math.hypot(anchorPoint.x - point.x, anchorPoint.y - point.y);
+      if (dist <= bestDist) {
+        bestDist = dist;
+        best = { anchorIndex: i, point: anchorPoint, occupied: this.isAnchorOccupied(nodeId, i) };
+      }
+    }
+    return best;
+  }
+
+  /** The single nearest anchor dot to `point` across EVERY node,
+   * within `maxDistance` world units — the general "what's under the
+   * cursor right now" lookup used while dragging out a new path or
+   * sketch (Falcon, 2026-09-05: "I want it to snap on those dots"). */
+  findNearestAnchor(point: Point, maxDistance: number): AnchorHit | undefined {
+    let best: AnchorHit | undefined;
+    let bestDist = maxDistance;
+    for (const nodeId of this.nodePositions.keys()) {
+      const hit = this.nearestAnchorOnNode(nodeId, point, bestDist);
+      if (hit) {
+        bestDist = Math.hypot(hit.point.x - point.x, hit.point.y - point.y);
+        best = { nodeId, ...hit };
+      }
+    }
+    return best;
+  }
+
+  /** Books one anchor for something that isn't a full GraphModel edge
+   * — currently a planning sketch's endpoint (Falcon, 2026-09-05: a
+   * sketch snapped onto a port should genuinely hold that port, the
+   * same as a real path would). Returns false (books nothing) if the
+   * anchor is already taken by anything else. Safe to call again with
+   * the same reservationId — re-reserves fresh rather than leaking
+   * the old booking. */
+  reserveAnchor(reservationId: string, nodeId: NodeId, anchorIndex: number): boolean {
+    this.releaseReservation(reservationId);
+    if (this.isAnchorOccupied(nodeId, anchorIndex)) return false;
+    this.occupyAnchor(nodeId, anchorIndex);
+    this.anchorReservations.set(reservationId, { nodeId, anchorIndex });
+    return true;
+  }
+
+  /** Releases a reservation made via reserveAnchor — a no-op if that
+   * id never held one (already released, or never attached). */
+  releaseReservation(reservationId: string): void {
+    const r = this.anchorReservations.get(reservationId);
+    if (!r) return;
+    this.nodeAnchorUsage.get(r.nodeId)?.delete(r.anchorIndex);
+    this.anchorReservations.delete(reservationId);
+  }
+
+  getReservation(reservationId: string): { nodeId: NodeId; anchorIndex: number } | undefined {
+    return this.anchorReservations.get(reservationId);
+  }
+
+  /** Drops every generic reservation record AND frees the anchor
+   * slots they held (without touching edge bookings) — used by
+   * persistence.ts's clearAllStores (loading a different project) so
+   * an abandoned sketch's reservation id can never confuse a
+   * same-named one from the project being loaded, and so the freed
+   * dots don't linger as falsely "occupied". */
+  clearReservations(): void {
+    for (const { nodeId, anchorIndex } of this.anchorReservations.values()) {
+      this.nodeAnchorUsage.get(nodeId)?.delete(anchorIndex);
+    }
+    this.anchorReservations.clear();
+  }
+
   /** Builds (and caches) an edge's curve from its endpoints' current node
-   * positions, auto-picking (and booking) the nearest free anchor at
-   * each end — the source's anchor faces the target and vice versa,
-   * the natural convention for a node-link diagram. Returns false
-   * without changing anything if either endpoint has no free anchor
-   * (already at its 8-connection limit) — callers should check
-   * `hasFreeAnchorSlot` on both nodes BEFORE creating the logic-layer
-   * edge at all, so a rejected wire never leaves a GraphModel edge
-   * with no curve to render. Call again if either endpoint moves. */
-  setEdgeCurve(edgeId: EdgeId, fromNodeId: NodeId, toNodeId: NodeId, bow = 0.15): boolean {
+   * positions. By default auto-picks (and books) the nearest free
+   * anchor at each end — the source's anchor faces the target and vice
+   * versa, the natural convention for a node-link diagram. Falcon,
+   * 2026-09-05 ("snap on those dots"): `explicitAnchors` lets a caller
+   * that already knows exactly which dot the user targeted skip the
+   * auto-pick for that end — if that specific anchor is already taken,
+   * the whole call fails (returns false) rather than silently falling
+   * back to a different one, since the user asked for THAT port.
+   * Returns false without changing anything if either endpoint ends up
+   * with no anchor (auto-pick exhausted, or an explicit one is taken)
+   * — callers should check `hasFreeAnchorSlot`/`isAnchorOccupied` on
+   * both nodes BEFORE creating the logic-layer edge at all, so a
+   * rejected wire never leaves a GraphModel edge with no curve to
+   * render. Call again if either endpoint moves. */
+  setEdgeCurve(
+    edgeId: EdgeId,
+    fromNodeId: NodeId,
+    toNodeId: NodeId,
+    bow = 0.15,
+    explicitAnchors?: { sourceAnchor?: number; targetAnchor?: number },
+  ): boolean {
     const from = this.nodePositions.get(fromNodeId);
     const to = this.nodePositions.get(toNodeId);
     if (!from || !to) {
@@ -135,8 +270,20 @@ export class FloorLayout {
     // rather than leaking the old booking.
     this.releaseEdgeAnchors(edgeId);
 
-    const sourceAnchor = this.nearestFreeAnchor(fromNodeId, to);
-    const targetAnchor = this.nearestFreeAnchor(toNodeId, from);
+    let sourceAnchor = explicitAnchors?.sourceAnchor;
+    if (sourceAnchor === undefined) {
+      sourceAnchor = this.nearestFreeAnchor(fromNodeId, to);
+    } else if (this.isAnchorOccupied(fromNodeId, sourceAnchor)) {
+      return false;
+    }
+
+    let targetAnchor = explicitAnchors?.targetAnchor;
+    if (targetAnchor === undefined) {
+      targetAnchor = this.nearestFreeAnchor(toNodeId, from);
+    } else if (this.isAnchorOccupied(toNodeId, targetAnchor)) {
+      return false;
+    }
+
     if (sourceAnchor === undefined || targetAnchor === undefined) return false;
 
     this.occupyAnchor(fromNodeId, sourceAnchor);

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { Camera, type Viewport } from '../floor/camera';
-import { NODE_RADIUS, type FloorLayout } from '../floor/floorLayout';
+import { NODE_RADIUS, type AnchorHit, type FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
@@ -19,7 +19,7 @@ import {
 } from '../skin/pathSkin';
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import type { Selection } from './selection';
-import { SketchLayer } from './sketchLayer';
+import { SketchLayer, type Sketch, type SketchAttachment } from './sketchLayer';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
 interface FluxCanvasProps {
@@ -39,11 +39,18 @@ interface FluxCanvasProps {
   placementKind: NodeKind | null;
   onPlaceNode: (kind: NodeKind, worldPoint: Point) => void;
   /** Shift+drag from one node's body to another's to connect them.
-   * Simple body-to-body for now — see FBP009 for why this isn't
-   * per-socket yet. Ports/flowRate/gate are then tuned in the
-   * properties panel. Plain drag (no Shift) MOVES the node instead —
-   * see the pointer state machine below. */
-  onCreateEdge: (sourceNodeId: NodeId, targetNodeId: NodeId) => void;
+   * Falcon, 2026-09-05 ("snap on those dots"): if the drag started or
+   * ended precisely on a specific port dot, the 3rd argument carries
+   * that exact anchor for that end — App.tsx honors it instead of
+   * auto-picking the nearest free one, and rejects the connection
+   * outright if that specific dot turns out to be taken. A body drop
+   * with no precise dot under the cursor omits the corresponding
+   * field, falling back to today's auto-pick behavior. */
+  onCreateEdge: (
+    sourceNodeId: NodeId,
+    targetNodeId: NodeId,
+    explicitAnchors?: { sourceAnchor?: number; targetAnchor?: number },
+  ) => void;
   /** Move/delete/snap feature set: when true, a dragged node's
    * position is rounded to the nearest grid line as it moves (App.tsx
    * owns the toggle — header button + F8 shortcut). */
@@ -65,16 +72,27 @@ interface FluxCanvasProps {
 
   /** Planning sketches (Falcon, 2026-09-03: "draw paths without
    * really needing node... give freedom to users to plan the paths")
-   * — pure visual scratch lines, not real GraphModel edges. Mutated
-   * directly like graph/floorLayout/skinConfig, so adding one doesn't
-   * need to re-run this component's setup effect. */
+   * — visual scratch lines, not real GraphModel edges, UNLESS/UNTIL
+   * converted into one. Mutated directly like graph/floorLayout/
+   * skinConfig, so adding or updating one doesn't need to re-run this
+   * component's setup effect. */
   sketchLayer: SketchLayer;
-  /** When true, the next drag ANYWHERE on the canvas (node or empty
-   * space, doesn't matter — a sketch has no real endpoints) draws a
-   * new sketch instead of doing anything else (armed by PathPalette,
-   * mirrors placementKind/armedEdgeStyle's arm-then-act flow). */
+  /** When true, the next drag on the canvas draws a new sketch instead
+   * of doing anything else (armed by PathPalette, mirrors
+   * placementKind/armedEdgeStyle's arm-then-act flow). Falcon,
+   * 2026-09-05: either end now snaps onto a real port when the drag
+   * starts or ends near one — see onCreateSketch below. */
   sketchArmed: boolean;
-  onCreateSketch: (from: Point, to: Point) => void;
+  /** Falcon, 2026-09-05: a sketch can pin either end to a real node's
+   * port (fromAttachment/toAttachment, null/omitted for a floating
+   * point) — App.tsx books the anchor in FloorLayout's shared
+   * reservation pool so the sketch genuinely holds that port. */
+  onCreateSketch: (
+    from: Point,
+    to: Point,
+    fromAttachment?: SketchAttachment | null,
+    toAttachment?: SketchAttachment | null,
+  ) => void;
 
   /** Falcon, 2026-09-04: "settings on VIEW for workspace theme or
    * background color" -- which preset paints the canvas background +
@@ -100,6 +118,11 @@ const ITEM_FILL = '#2ecc71';
 const ITEM_STROKE = '#1c8a4f';
 const CLICK_MOVE_THRESHOLD_PX = 5;
 const EDGE_HIT_TOLERANCE_PX = 12;
+/** Screen-space radius (px, before dividing by camera.zoom) within
+ * which a drag "snaps" onto a specific port dot — precise targeting
+ * for new paths/sketches (Falcon, 2026-09-05). Kept in screen space
+ * so the snap feels the same size at any zoom level. */
+const PORT_SNAP_RADIUS_PX = 14;
 
 /**
  * Milestone 4 (skin layer) + Milestone 5 (selection, node placement,
@@ -366,10 +389,20 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         ctx!.lineTo(b.x, b.y);
         ctx!.stroke();
         ctx!.restore();
+        // Falcon, 2026-09-05: a sketch should read as having a
+        // direction even though nothing flows along it — from -> to
+        // is that direction, same visual language as a real path's
+        // own arrow. Loose (unattached) ends get a small hollow ring
+        // instead of a filled port dot, so it's obvious at a glance
+        // which ends still need a node to snap onto.
+        drawStraightDirectionArrow(ctx!, sketch.from, sketch.to, camera, viewport);
+        if (!sketch.fromAttachment) drawLooseEndpointMarker(ctx!, sketch.from, camera, viewport);
+        if (!sketch.toAttachment) drawLooseEndpointMarker(ctx!, sketch.to, camera, viewport);
       }
       if (pointerMode === 'sketch-draw' && sketchDrawOrigin && sketchDrawCurrent) {
+        const headWorld = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor.point : sketchDrawCurrent;
         const a = camera.worldToScreen(sketchDrawOrigin, viewport);
-        const b = camera.worldToScreen(sketchDrawCurrent, viewport);
+        const b = camera.worldToScreen(headWorld, viewport);
         ctx!.save();
         ctx!.setLineDash([7, 5]);
         ctx!.strokeStyle = 'rgba(124, 58, 237, 0.7)';
@@ -379,6 +412,18 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         ctx!.lineTo(b.x, b.y);
         ctx!.stroke();
         ctx!.restore();
+        if (sketchFromAttachment) {
+          drawAnchorRing(ctx!, camera.worldToScreen(sketchDrawOrigin, viewport), camera.zoom, 'rgba(124, 58, 237, 0.9)');
+        }
+      }
+      if ((pointerMode === 'wire' || pointerMode === 'sketch-draw') && hoveredAnchor) {
+        const screenPt = camera.worldToScreen(hoveredAnchor.point, viewport);
+        drawAnchorRing(
+          ctx!,
+          screenPt,
+          camera.zoom,
+          hoveredAnchor.occupied ? 'rgba(255, 93, 93, 0.9)' : 'rgba(46, 204, 113, 0.9)',
+        );
       }
 
       // --- Three-pass path render stack (design doc §5.2) ---
@@ -425,8 +470,12 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       if (wireFromNodeId && wireCurrentWorld) {
         const fromPos = floorLayout.getNodePosition(wireFromNodeId);
         if (fromPos) {
+          const headWorld =
+            hoveredAnchor && !hoveredAnchor.occupied && hoveredAnchor.nodeId !== wireFromNodeId
+              ? hoveredAnchor.point
+              : wireCurrentWorld;
           const a = camera.worldToScreen(fromPos, viewport);
-          const b = camera.worldToScreen(wireCurrentWorld, viewport);
+          const b = camera.worldToScreen(headWorld, viewport);
           ctx!.save();
           ctx!.setLineDash([6, 4]);
           ctx!.strokeStyle = 'rgba(37, 99, 235, 0.7)';
@@ -436,6 +485,12 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           ctx!.lineTo(b.x, b.y);
           ctx!.stroke();
           ctx!.restore();
+          if (wireFromAnchorIndex !== undefined) {
+            const sourceAnchorPoint = floorLayout.getAnchorPoint(wireFromNodeId, wireFromAnchorIndex);
+            if (sourceAnchorPoint) {
+              drawAnchorRing(ctx!, camera.worldToScreen(sourceAnchorPoint, viewport), camera.zoom, 'rgba(37, 99, 235, 0.9)');
+            }
+          }
         }
       }
 
@@ -492,8 +547,13 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     let pendingSketchHitId: string | undefined;
     let wireFromNodeId: NodeId | undefined;
     let wireCurrentWorld: Point | undefined;
+    // Precise port targeting (Falcon, 2026-09-05): the exact dot a
+    // wire/sketch drag started or is currently hovering, if any.
+    let wireFromAnchorIndex: number | undefined;
+    let hoveredAnchor: AnchorHit | undefined;
     let sketchDrawOrigin: Point | undefined;
     let sketchDrawCurrent: Point | undefined;
+    let sketchFromAttachment: SketchAttachment | null = null;
     // Latched at pointerdown (not re-read live) so a gesture commits
     // to one interpretation for its whole drag, rather than switching
     // mid-drag if a modifier key state changes.
@@ -523,8 +583,18 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
       if (sketchArmedRef.current) {
         pointerMode = 'sketch-draw';
-        sketchDrawOrigin = worldPoint;
-        sketchDrawCurrent = worldPoint;
+        // Precise port targeting (Falcon, 2026-09-05): start pinned to
+        // a real port if the drag begins right on one, otherwise a
+        // plain floating point exactly like before.
+        const anchorHit = floorLayout.findNearestAnchor(worldPoint, PORT_SNAP_RADIUS_PX / camera.zoom);
+        if (anchorHit && !anchorHit.occupied) {
+          sketchFromAttachment = { nodeId: anchorHit.nodeId, anchorIndex: anchorHit.anchorIndex };
+          sketchDrawOrigin = anchorHit.point;
+        } else {
+          sketchFromAttachment = null;
+          sketchDrawOrigin = worldPoint;
+        }
+        sketchDrawCurrent = sketchDrawOrigin;
         return;
       }
 
@@ -536,6 +606,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         moveLocked = skinConfig.getNodeLocked(nodeId);
         const nodePos = floorLayout.getNodePosition(nodeId);
         moveGrabOffset = nodePos ? { x: worldPoint.x - nodePos.x, y: worldPoint.y - nodePos.y } : { x: 0, y: 0 };
+        // Precise port targeting (Falcon, 2026-09-05): remember which
+        // exact dot the press landed on, if any — only matters if
+        // this turns into a wire drag (checked below on release).
+        const anchorHit = floorLayout.nearestAnchorOnNode(nodeId, worldPoint, PORT_SNAP_RADIUS_PX / camera.zoom);
+        wireFromAnchorIndex = anchorHit?.anchorIndex;
         return;
       }
 
@@ -582,10 +657,13 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
       if (pointerMode === 'wire') {
         wireCurrentWorld = toWorld(e.clientX, e.clientY);
+        const hit = floorLayout.findNearestAnchor(wireCurrentWorld, PORT_SNAP_RADIUS_PX / camera.zoom);
+        hoveredAnchor = hit && hit.nodeId !== wireFromNodeId ? hit : undefined;
       }
 
       if (pointerMode === 'sketch-draw') {
         sketchDrawCurrent = toWorld(e.clientX, e.clientY);
+        hoveredAnchor = floorLayout.findNearestAnchor(sketchDrawCurrent, PORT_SNAP_RADIUS_PX / camera.zoom);
       }
 
       if (pointerMode === 'move' && pendingNodeHitId && moveGrabOffset) {
@@ -594,6 +672,22 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         floorLayout.setNodePosition(pendingNodeHitId, snapToGridPoint(rawPos));
         for (const edge of edgesTouchingNode(pendingNodeHitId)) {
           floorLayout.recomputeEdgeCurve(edge.id, edge.source, edge.target);
+        }
+        // Keep any sketch endpoint pinned to this node glued to its
+        // (moved) port, same spirit as recomputeEdgeCurve above —
+        // Falcon, 2026-09-05: a "planned connection" should track the
+        // node it's pinned to.
+        for (const sketch of sketchLayer.getAll()) {
+          let patch: Partial<Sketch> | null = null;
+          if (sketch.fromAttachment && sketch.fromAttachment.nodeId === pendingNodeHitId) {
+            const pt = floorLayout.getAnchorPoint(pendingNodeHitId, sketch.fromAttachment.anchorIndex);
+            if (pt) patch = { ...(patch ?? {}), from: pt };
+          }
+          if (sketch.toAttachment && sketch.toAttachment.nodeId === pendingNodeHitId) {
+            const pt = floorLayout.getAnchorPoint(pendingNodeHitId, sketch.toAttachment.anchorIndex);
+            if (pt) patch = { ...(patch ?? {}), to: pt };
+          }
+          if (patch) sketchLayer.update(sketch.id, patch);
         }
       }
     }
@@ -615,15 +709,37 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           if (edgeId) onApplyEdgeStyleRef.current(edgeId, armedEdgeStyleRef.current);
         }
       } else if (pointerMode === 'wire' && wireFromNodeId) {
-        const targetNodeId = hitTestNode(worldPoint);
-        if (targetNodeId && targetNodeId !== wireFromNodeId) {
-          onCreateEdgeRef.current(wireFromNodeId, targetNodeId);
+        // Precise port targeting (Falcon, 2026-09-05): a release right
+        // on a free dot locks onto that exact port; right on a TAKEN
+        // dot rejects the connection outright (the user asked for
+        // that specific port, so there's no "close enough" fallback);
+        // otherwise fall back to today's body-drop auto-pick, still
+        // honoring an explicitly-grabbed source dot if there was one.
+        if (hoveredAnchor && hoveredAnchor.nodeId !== wireFromNodeId) {
+          if (!hoveredAnchor.occupied) {
+            onCreateEdgeRef.current(wireFromNodeId, hoveredAnchor.nodeId, {
+              sourceAnchor: wireFromAnchorIndex,
+              targetAnchor: hoveredAnchor.anchorIndex,
+            });
+          }
+        } else {
+          const targetNodeId = hitTestNode(worldPoint);
+          if (targetNodeId && targetNodeId !== wireFromNodeId) {
+            onCreateEdgeRef.current(
+              wireFromNodeId,
+              targetNodeId,
+              wireFromAnchorIndex !== undefined ? { sourceAnchor: wireFromAnchorIndex } : undefined,
+            );
+          }
         }
       } else if (pointerMode === 'sketch-draw' && sketchDrawOrigin) {
         // A real drag only — a plain click while armed draws nothing,
         // same spirit as requiring an actual gesture for wiring.
         if (!isClick) {
-          onCreateSketchRef.current(sketchDrawOrigin, worldPoint);
+          const toAnchorHit = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor : undefined;
+          const finalTo = toAnchorHit ? toAnchorHit.point : worldPoint;
+          const toAttachment = toAnchorHit ? { nodeId: toAnchorHit.nodeId, anchorIndex: toAnchorHit.anchorIndex } : null;
+          onCreateSketchRef.current(sketchDrawOrigin, finalTo, sketchFromAttachment, toAttachment);
         }
       } else if (pointerMode === 'sketch-down' && isClick && pendingSketchHitId) {
         onSelectRef.current({ type: 'sketch', id: pendingSketchHitId });
@@ -648,8 +764,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       pendingSketchHitId = undefined;
       wireFromNodeId = undefined;
       wireCurrentWorld = undefined;
+      wireFromAnchorIndex = undefined;
+      hoveredAnchor = undefined;
       sketchDrawOrigin = undefined;
       sketchDrawCurrent = undefined;
+      sketchFromAttachment = null;
       wireGesture = false;
       moveLocked = false;
       moveGrabOffset = null;
@@ -740,4 +859,68 @@ function drawGrid(ctx: CanvasRenderingContext2D, camera: Camera, viewport: Viewp
     ctx.lineTo(viewport.width, screen.y);
   }
   ctx.stroke();
+}
+
+/** A small directional arrowhead at a sketch's midpoint, pointing
+ * from->to — the same visual language as a real path's own direction
+ * arrow (skin/pathSkin.ts's drawPathDirectionArrow), but computed
+ * directly from two points since a sketch is a plain line, not a
+ * BezierPath (Falcon, 2026-09-05: a sketch should have a legible
+ * sense of direction even though nothing simulates along it). */
+function drawStraightDirectionArrow(
+  ctx: CanvasRenderingContext2D,
+  from: Point,
+  to: Point,
+  camera: Camera,
+  viewport: Viewport,
+): void {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (dx === 0 && dy === 0) return;
+  const angle = Math.atan2(dy, dx);
+  const midWorld = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  const screen = camera.worldToScreen(midWorld, viewport);
+  const size = Math.max(5, 7 * camera.zoom);
+
+  ctx.save();
+  ctx.translate(screen.x, screen.y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(size, 0);
+  ctx.lineTo(-size * 0.6, size * 0.62);
+  ctx.lineTo(-size * 0.6, -size * 0.62);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(124, 58, 237, 0.85)';
+  ctx.fill();
+  ctx.restore();
+}
+
+/** A small hollow ring at a sketch endpoint that ISN'T pinned to a
+ * real port — visually distinct from a real node's filled anchor dot,
+ * so a half-connected sketch (Falcon, 2026-09-05) reads at a glance:
+ * one end is a genuine port, the other is still just a placeholder. */
+function drawLooseEndpointMarker(ctx: CanvasRenderingContext2D, worldPoint: Point, camera: Camera, viewport: Viewport): void {
+  const screen = camera.worldToScreen(worldPoint, viewport);
+  const r = Math.max(3, 4 * camera.zoom);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(124, 58, 237, 0.75)';
+  ctx.lineWidth = Math.max(1, 1.5 * camera.zoom);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** A highlight ring drawn over a port dot the cursor is currently
+ * near while dragging out a new path or sketch (Falcon, 2026-09-05:
+ * "snap on those dots") — color communicates whether that dot can
+ * actually be attached to (free) or not (already taken). */
+function drawAnchorRing(ctx: CanvasRenderingContext2D, screenPoint: Point, zoom: number, color: string): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(screenPoint.x, screenPoint.y, Math.max(6, 8 * zoom), 0, Math.PI * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2, 2.5 * zoom);
+  ctx.stroke();
+  ctx.restore();
 }

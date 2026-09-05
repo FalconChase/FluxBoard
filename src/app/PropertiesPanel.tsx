@@ -26,6 +26,11 @@ interface PropertiesPanelProps {
    * only offers the same action as a button, and doesn't need to know
    * the selection's id since App.tsx already has it. */
   onDelete: () => void;
+  /** Falcon, 2026-09-05: turns a fully-pinned sketch (both ends
+   * attached to a real port) into a real path, at the chosen style.
+   * Only ever called when SketchProperties actually shows the
+   * control, i.e. both ends are attached — App.tsx re-checks anyway. */
+  onConvertSketch: (sketchId: string, style: EdgeStyle) => void;
 }
 
 const labelStyle: CSSProperties = { fontSize: 11, fontWeight: 600, color: theme.text2, display: 'block', marginBottom: 3 };
@@ -68,6 +73,7 @@ export function PropertiesPanel({
   floorLayout,
   sketchLayer,
   onDelete,
+  onConvertSketch,
 }: PropertiesPanelProps) {
   // Keys just the selection-editing block, not the whole panel — so
   // every field inside NodeProperties/EdgeProperties can hold plain
@@ -119,7 +125,13 @@ export function PropertiesPanel({
           />
         )}
         {selection?.type === 'sketch' && (
-          <SketchProperties sketchId={selection.id} sketchLayer={sketchLayer} onDelete={onDelete} />
+          <SketchProperties
+            sketchId={selection.id}
+            sketchLayer={sketchLayer}
+            graph={graph}
+            onDelete={onDelete}
+            onConvertSketch={onConvertSketch}
+          />
         )}
       </div>
     </div>
@@ -630,27 +642,77 @@ function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
 }
 
 /** Sketches are pure planning scratch, not GraphModel data (see
- * sketchLayer.ts) — no logic/skin fields to edit, just a note and a
- * delete button. */
+ * sketchLayer.ts) — no simulation meaning of their own. Falcon,
+ * 2026-09-05: either end can now be pinned to a real node's port
+ * (drawn as a filled dot on the canvas, vs. a hollow ring for a
+ * floating end) — once BOTH ends are pinned, this panel offers
+ * "Convert to path" to turn the sketch into a real GraphModel edge. */
 function SketchProperties({
   sketchId,
   sketchLayer,
+  graph,
   onDelete,
+  onConvertSketch,
 }: {
   sketchId: string;
   sketchLayer: SketchLayer;
+  graph: GraphModel;
   onDelete: () => void;
+  onConvertSketch: (sketchId: string, style: EdgeStyle) => void;
 }) {
+  const [style, setStyle] = useState<EdgeStyle>('trace');
   const sketch = sketchLayer.get(sketchId);
   if (!sketch) return <p style={{ fontSize: 12, color: theme.danger }}>Sketch no longer exists.</p>;
+
+  const bothAttached = Boolean(sketch.fromAttachment && sketch.toAttachment);
+
+  function describeEnd(attachment: { nodeId: string; anchorIndex: number } | null | undefined): string {
+    if (!attachment) return 'not attached — a floating planning point';
+    const node = graph.getNode(attachment.nodeId);
+    return `attached to ${node ? `${node.kind} (${attachment.nodeId})` : attachment.nodeId}, port ${attachment.anchorIndex}`;
+  }
 
   return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Sketch</div>
       <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
-        A planning guide only — no simulation meaning, not connected to any node. Replace it with a real path once
-        the nodes it connects exist.
+        A planning guide — no simulation meaning until converted. Start or end a sketch drag right on a node's port
+        dot to pin that end to it.
       </p>
+
+      <div style={sectionTitleStyle}>Attachments</div>
+      <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginBottom: 4 }}>
+        Start: {describeEnd(sketch.fromAttachment)}
+      </p>
+      <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginBottom: 10 }}>
+        End: {describeEnd(sketch.toAttachment)}
+      </p>
+
+      {bothAttached ? (
+        <>
+          <div style={sectionTitleStyle}>Convert to path</div>
+          <div style={rowStyle}>
+            <label style={labelStyle}>Path style</label>
+            <select value={style} style={inputStyle} onChange={(e) => setStyle(e.target.value as EdgeStyle)}>
+              <option value="transparent">Transparent</option>
+              <option value="conveyor">Conveyor</option>
+              <option value="glassTube">Glass tube</option>
+              <option value="trace">Trace</option>
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={() => onConvertSketch(sketchId, style)}
+            style={{ ...smallButtonStyle, width: '100%', color: theme.accentStrong, borderColor: theme.accent, marginBottom: 10 }}
+          >
+            Convert to path
+          </button>
+        </>
+      ) : (
+        <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginBottom: 10 }}>
+          Pin both ends to a node's port to convert this into a real path.
+        </p>
+      )}
 
       <div style={sectionTitleStyle}>Danger zone</div>
       <button

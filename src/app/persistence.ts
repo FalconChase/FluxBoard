@@ -161,6 +161,12 @@ export function clearAllStores(
   for (const sketch of sketchLayer.getAll()) {
     sketchLayer.remove(sketch.id);
   }
+
+  // Every node above is already gone, so no sketch reservation could
+  // still be meaningful — drops the records outright (Falcon,
+  // 2026-09-05's port-snapping feature) rather than leaving stale
+  // entries keyed by ids the project being loaded might reuse.
+  floorLayout.clearReservations();
 }
 
 /** Populates the given (already-constructed, already-empty) stores
@@ -212,6 +218,19 @@ export function populateState(
 
   for (const sketch of saved.sketches) {
     sketchLayer.add(sketch);
+    // Re-book each attached end in FloorLayout's shared anchor pool
+    // (Falcon, 2026-09-05) — edges were already restored above, so
+    // any anchor they hold is correctly occupied by the time this
+    // runs. Degrades gracefully to a floating end (rather than
+    // throwing) if a saved reservation somehow conflicts.
+    if (sketch.fromAttachment) {
+      const ok = floorLayout.reserveAnchor(`${sketch.id}:from`, sketch.fromAttachment.nodeId, sketch.fromAttachment.anchorIndex);
+      if (!ok) sketchLayer.update(sketch.id, { fromAttachment: null });
+    }
+    if (sketch.toAttachment) {
+      const ok = floorLayout.reserveAnchor(`${sketch.id}:to`, sketch.toAttachment.nodeId, sketch.toAttachment.anchorIndex);
+      if (!ok) sketchLayer.update(sketch.id, { toAttachment: null });
+    }
   }
 
   return saved.settings;
