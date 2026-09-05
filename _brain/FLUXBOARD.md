@@ -26,7 +26,7 @@ VARIANTS    : **FluxBoard PC** (Tauri desktop, single-user, primary/current buil
 
 ---
 ## PHASE
-Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, per-socket wiring (FBP009 resolved), path type, merger node, autosave persistence (FBD010 rev.3), multi-project FILE tab (FBT018), a full ribbon-UI visual port (FBT019), precise port-dot snapping + snappable/convertible sketches (FBT020), path-to-path visual snap + node-overlap hard block (FBT021), a first-pass OBJECTS registry + silent-rejection feedback (FBT022, FBP011 resolved), and the ribbon MODIFY group's remaining tools — multi-select/duplicate/pan (FBT023, FBP014 fully resolved). Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
+Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move/lock/delete/snap-to-grid, per-socket wiring (FBP009 resolved), path type, merger node, autosave persistence (FBD010 rev.3), multi-project FILE tab (FBT018), a full ribbon-UI visual port (FBT019), precise port-dot snapping + snappable/convertible sketches (FBT020), path-to-path visual snap + node-overlap hard block (FBT021), a first-pass OBJECTS registry + silent-rejection feedback (FBT022, FBP011 resolved), the ribbon MODIFY group's remaining tools — multi-select/duplicate/pan (FBT023, FBP014 fully resolved), and a quick-select flyout on Multi-select (all/nodes/paths/sketches, FBT024). Falcon to verify locally (tsc clean from the bridge; npm test/tauri:dev not runnable here).
 
 ---
 ## STATE
@@ -44,7 +44,7 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 ### NEXT
 | ID | PRIORITY | ITEM | BLOCKED BY |
 |----|----------|------|------------|
-| —  | —        | Falcon to verify the OBJECTS registry, silent-rejection feedback, AND multi-select/duplicate/pan end-to-end locally (`npm run tauri:dev`), then decide: path-vs-node/path overlap + junctions (deferred per Falcon), INSERT tab's icon/label overlay, FBP012 (object-type-to-path-style taxonomy), FBP013 (LAYERS z-axis), Milestone 6 (isometric, stretch), or something else. | — |
+| —  | —        | Falcon to verify the OBJECTS registry, silent-rejection feedback, multi-select/duplicate/pan, AND the quick-select flyout end-to-end locally (`npm run tauri:dev`), then decide: path-vs-node/path overlap + junctions (deferred per Falcon), INSERT tab's icon/label overlay, FBP012 (object-type-to-path-style taxonomy), FBP013 (LAYERS z-axis), Milestone 6 (isometric, stretch), or something else. | — |
 
 ### DONE (see SESSIONS.md for full narrative detail)
 | ID | PRIORITY | ITEM | SESSION |
@@ -68,6 +68,7 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 | FBT021 | — | Wire/sketch drag previews show a red dot at the origin + green dot at the head (`FluxCanvas`'s own `ANCHOR_ROLE_COLOR`); a sketch's loose end also visually snaps onto the nearest point of any OTHER path/sketch (alignment only, no attachment — junctions deferred). Node placement and drag-to-move both hard-block against landing one node on top of another (`FloorLayout.wouldOverlap`, 2×NODE_RADIUS) — path-vs-node/path overlap stays deferred until junctions/elevators exist. Per-anchor out/in/free coloring on the NODE'S OWN port dots was also tried (`FloorLayout.getAnchorRole`) then reverted same-day per Falcon's call — nodes draw plain uniform dots again. | SES030-031 |
 | FBT022 | — | OBJECTS registry first-pass build (FBP011 resolved from DEFERRED — Falcon explicitly said to proceed): new `skin/ObjectRegistry.ts` (shape circle/square/triangle, size, color per item type, built-in 'item' default matching the old hardcoded token exactly). `pathSkin.ts`'s `drawItemToken` takes a shape param; `FluxCanvas` resolves each render item's `type` through the registry instead of fixed ITEM_RADIUS/FILL/STROKE constants. New `app/ObjectRegistryManager.tsx` modal (ribbon's Objects button, now functional) — create/edit/delete types, delete refuses the built-in default and any type still referenced (source itemType, sorter rule, mixer recipe/output). Source/sorter/mixer item-type fields are now `ItemTypeSelect` dropdowns off the registry instead of free text. Persisted per-project (`SavedFile.objectTypes`, optional field, no version bump). Also: silent-rejection feedback — node-overlap placement, anchor/capacity-cap wiring rejections, and sketch-conversion capacity rejections now flash a reason in the status bar's instruction strip (`App.tsx`'s `flashMessage`) instead of failing silently. | SES032 |
 | FBT023 | — | Ribbon MODIFY group's remaining three tools (FBP014 fully resolved): Multi-select (marquee drag over empty canvas + click-to-toggle a node, `selection.ts`'s new `{type:'multi'}` variant), Duplicate (clones the selection offset a few grid cells, keeps any edge whose both ends are inside the duplicated set, drops the rest, deep-copies config), Pan (forces every drag to pan regardless of what's under it). Once a multi selection exists, dragging any of its members moves the whole group together, hard-blocked as one unit (`FloorLayout.wouldOverlap`'s exclude param now also takes an array). Properties panel gained a group view (Duplicate/Delete); NodeProperties gained its own Duplicate button too. | SES033
+| FBT024 | — | Multi-select quick-select flyout (FBP014 follow-up): hovering the ribbon's Multi-select button opens a small menu — Select all, Nodes only, Paths only, Sketches only (config-driven list, more can be added later). Picking one replaces the current selection and arms the tool. Required extending `selection.ts`'s `'multi'` variant from nodes-only to `{nodeIds, edgeIds, sketchIds}` — a mixed group of any combination — with new `normalizeMultiParts`/`collapseSelection` helpers as the single place a `'multi'` is ever built or read apart. Duplicate/group-move stay node-only (unaffected, both only ever read `nodeIds`); Delete now covers all three arrays. | SES034
 
 ---
 ## DECISIONS
@@ -100,4 +101,4 @@ Milestones 1-5 DONE. M5 minimal-chrome scope (FBP008) extended with drag-to-move
 | USER_GUIDE.md | /FLUXBOARD/_brain/USER_GUIDE.md — end-user app guide, not dev docs |
 
 ---
-# Lines: 104 / 120 — Budget remaining: 16
+# Lines: 105 / 120 — Budget remaining: 15
