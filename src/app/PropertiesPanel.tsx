@@ -32,6 +32,11 @@ interface PropertiesPanelProps {
    * only offers the same action as a button, and doesn't need to know
    * the selection's id since App.tsx already has it. */
   onDelete: () => void;
+  /** FBP014 (2026-09-05): clones the selected node (or every member
+   * of a multi selection) — the properties panel's own button, same
+   * action as the ribbon's Duplicate tool. Not offered for an edge or
+   * a sketch selection (neither renders a Duplicate button). */
+  onDuplicate: () => void;
   /** Falcon, 2026-09-05: turns a fully-pinned sketch (both ends
    * attached to a real port) into a real path, at the chosen style.
    * Only ever called when SketchProperties actually shows the
@@ -80,6 +85,7 @@ export function PropertiesPanel({
   sketchLayer,
   objectRegistry,
   onDelete,
+  onDuplicate,
   onConvertSketch,
 }: PropertiesPanelProps) {
   // Keys just the selection-editing block, not the whole panel — so
@@ -87,7 +93,11 @@ export function PropertiesPanel({
   // local state without worrying about stale values from a previous
   // selection, while the panel itself (and its idle placeholder)
   // stays permanently mounted.
-  const selectionKey = selection ? `${selection.type}:${selection.id}` : 'none';
+  const selectionKey = selection
+    ? selection.type === 'multi'
+      ? `multi:${selection.nodeIds.join(',')}`
+      : `${selection.type}:${selection.id}`
+    : 'none';
 
   return (
     <div
@@ -127,6 +137,15 @@ export function PropertiesPanel({
             floorLayout={floorLayout}
             objectRegistry={objectRegistry}
             onDelete={onDelete}
+            onDuplicate={onDuplicate}
+          />
+        )}
+        {selection?.type === 'multi' && (
+          <MultiProperties
+            nodeIds={selection.nodeIds}
+            graph={graph}
+            onDelete={onDelete}
+            onDuplicate={onDuplicate}
           />
         )}
         {selection?.type === 'edge' && (
@@ -190,6 +209,7 @@ function NodeProperties({
   floorLayout,
   objectRegistry,
   onDelete,
+  onDuplicate,
 }: {
   nodeId: string;
   graph: GraphModel;
@@ -197,6 +217,7 @@ function NodeProperties({
   floorLayout: FloorLayout;
   objectRegistry: ObjectRegistry;
   onDelete: () => void;
+  onDuplicate: () => void;
 }) {
   const node = graph.getNode(nodeId);
   if (!node) return <p style={{ fontSize: 12, color: theme.danger }}>Node no longer exists.</p>;
@@ -232,6 +253,11 @@ function NodeProperties({
       <div style={sectionTitleStyle}>Position</div>
       <LockToggle nodeId={nodeId} skinConfig={skinConfig} />
 
+      <div style={sectionTitleStyle}>Modify</div>
+      <button type="button" onClick={onDuplicate} style={{ ...smallButtonStyle, width: '100%' }}>
+        Duplicate node
+      </button>
+
       <div style={sectionTitleStyle}>Danger zone</div>
       <button
         type="button"
@@ -239,6 +265,54 @@ function NodeProperties({
         style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
       >
         Delete node
+      </button>
+    </div>
+  );
+}
+
+/** FBP014 (2026-09-05): the multi-select group's own properties view
+ * — no per-field editing (each node kind's config differs too much to
+ * show a merged form), just a manifest of what's selected plus the
+ * same Duplicate/Delete actions the ribbon's MODIFY group offers. */
+function MultiProperties({
+  nodeIds,
+  graph,
+  onDelete,
+  onDuplicate,
+}: {
+  nodeIds: string[];
+  graph: GraphModel;
+  onDelete: () => void;
+  onDuplicate: () => void;
+}) {
+  const counts = new Map<string, number>();
+  for (const id of nodeIds) {
+    const node = graph.getNode(id);
+    if (!node) continue;
+    counts.set(node.kind, (counts.get(node.kind) ?? 0) + 1);
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{nodeIds.length} nodes selected</div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5, marginBottom: 10 }}>
+        {[...counts.entries()].map(([kind, count]) => `${count} ${kind}${count === 1 ? '' : 's'}`).join(', ')}
+      </p>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
+        Drag any selected node to move the whole group together.
+      </p>
+
+      <div style={sectionTitleStyle}>Modify</div>
+      <button type="button" onClick={onDuplicate} style={{ ...smallButtonStyle, width: '100%' }}>
+        Duplicate group
+      </button>
+
+      <div style={sectionTitleStyle}>Danger zone</div>
+      <button
+        type="button"
+        onClick={onDelete}
+        style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
+      >
+        Delete group
       </button>
     </div>
   );

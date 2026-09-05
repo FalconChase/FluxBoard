@@ -53,9 +53,22 @@ interface RibbonProps {
   onArmEdgeStyle: (style: EdgeStyle | null) => void;
   sketchArmed: boolean;
   onArmSketch: (armed: boolean) => void;
+  /** FBP014 (2026-09-05): marquee-drag + click-to-toggle multi
+   * selection — mirrors sketchArmed's arm-then-act flow. */
+  multiSelectArmed: boolean;
+  onArmMultiSelect: (armed: boolean) => void;
+  /** FBP014 (2026-09-05): forces every drag to pan, even one starting
+   * on a node/path/sketch (an empty-canvas drag already pans for
+   * free without this). */
+  panArmed: boolean;
+  onArmPan: (armed: boolean) => void;
 
   canDelete: boolean;
   onDeleteSelection: () => void;
+  /** FBP014 (2026-09-05): clones the current selection (a node, or a
+   * multi-select group) offset a few grid cells over. */
+  canDuplicate: boolean;
+  onDuplicateSelection: () => void;
 
   /** FBP011 (2026-09-05): opens the OBJECTS registry manager — a
    * modal overlay (ObjectRegistryManager.tsx) rather than a ribbon-
@@ -77,10 +90,10 @@ interface RibbonProps {
  * Top ribbon chrome (Falcon's "TABS UI FRAMEWORKS" wireframe sheet,
  * approved as the "FluxBoard Ribbon UI" design mockup, then "Full
  * port now", 2026-09-04). HOME absorbs what used to be the left
- * panel's NODES/PATHS/OBJECTS tabs plus a MODIFY group (Delete is
- * real; Multi-select/Duplicate/Pan are placeholders — the deferred
- * Tools-tab concept, folded in here instead of a separate tab, still
- * not built). Objects opens ObjectRegistryManager.tsx (FBP011,
+ * panel's NODES/PATHS/OBJECTS tabs plus a MODIFY group — Delete,
+ * Multi-select, Duplicate and Pan are all real now (FBP014,
+ * 2026-09-05: the deferred Tools-tab concept, folded in here instead
+ * of a separate tab). Objects opens ObjectRegistryManager.tsx (FBP011,
  * 2026-09-05 — first-pass registry: shape/size/color per item type,
  * a modal rather than a ribbon group since a type is a referenced
  * library entry, not an arm-then-place kind). VIEW absorbs the
@@ -102,8 +115,14 @@ export function Ribbon({
   onArmEdgeStyle,
   sketchArmed,
   onArmSketch,
+  multiSelectArmed,
+  onArmMultiSelect,
+  panArmed,
+  onArmPan,
   canDelete,
   onDeleteSelection,
+  canDuplicate,
+  onDuplicateSelection,
   onOpenObjectsManager,
   snapToGrid,
   onToggleSnapToGrid,
@@ -200,9 +219,27 @@ export function Ribbon({
                   icon={<DeleteIcon />}
                   dangerous
                 />
-                <RibbonIconButton label="Multi-select" title="Coming soon" disabled icon={<MultiSelectIcon />} />
-                <RibbonIconButton label="Duplicate" title="Coming soon" disabled icon={<DuplicateIcon />} />
-                <RibbonIconButton label="Pan" title="Coming soon — drag-to-pan is already free with an empty-canvas drag" disabled icon={<PanIcon />} />
+                <RibbonIconButton
+                  label="Multi-select"
+                  title="Click nodes to toggle them in, or drag over empty canvas to box-select"
+                  active={multiSelectArmed}
+                  onClick={() => onArmMultiSelect(!multiSelectArmed)}
+                  icon={<MultiSelectIcon />}
+                />
+                <RibbonIconButton
+                  label="Duplicate"
+                  title={canDuplicate ? 'Clone the selected node(s), offset a few grid cells over' : 'Select a node first'}
+                  disabled={!canDuplicate}
+                  onClick={onDuplicateSelection}
+                  icon={<DuplicateIcon />}
+                />
+                <RibbonIconButton
+                  label="Pan"
+                  title="Drag anywhere to pan, even starting on a node or path — empty-canvas drag already pans for free without this"
+                  active={panArmed}
+                  onClick={() => onArmPan(!panArmed)}
+                  icon={<PanIcon />}
+                />
               </div>
             </RibbonGroup>
           </>

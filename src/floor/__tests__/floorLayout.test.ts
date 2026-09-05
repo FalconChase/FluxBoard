@@ -250,4 +250,40 @@ describe('FloorLayout', () => {
       expect(() => layout.restoreEdgeCurve('e1', 'a', 0, 'missing', 4, 0.15)).toThrow();
     });
   });
+
+  // FBP014 (2026-09-05): wouldOverlap's exclude argument now takes a
+  // single id (unchanged) OR an array of ids -- the multi-select
+  // group move/duplicate hard-block needs to exclude every member of
+  // the moving/duplicating group at once, not just one at a time.
+  describe('wouldOverlap', () => {
+    function buildThree(): FloorLayout {
+      const layout = new FloorLayout();
+      layout.setNodePosition('a', { x: 0, y: 0 });
+      layout.setNodePosition('b', { x: 100, y: 0 });
+      layout.setNodePosition('c', { x: 200, y: 0 });
+      return layout;
+    }
+
+    it('with no exclude, flags a candidate too close to ANY existing node', () => {
+      const layout = buildThree();
+      expect(layout.wouldOverlap({ x: 5, y: 0 })).toBe(true); // near a
+      expect(layout.wouldOverlap({ x: 500, y: 500 })).toBe(false); // far from all three
+    });
+
+    it('a single excluded id (backward-compatible) ignores just that node', () => {
+      const layout = buildThree();
+      expect(layout.wouldOverlap({ x: 0, y: 0 }, 'a')).toBe(false); // a excluded, nothing else nearby
+      expect(layout.wouldOverlap({ x: 0, y: 0 }, 'b')).toBe(true); // a still counts
+    });
+
+    it('an array of excluded ids ignores every node in the group, but still catches an outside one', () => {
+      const layout = buildThree();
+      // a candidate sitting on top of BOTH a and b is clear once both
+      // are excluded together (as a group move/duplicate would)...
+      expect(layout.wouldOverlap({ x: 0, y: 0 }, ['a', 'b'])).toBe(false);
+      // ...but the same exclude set still flags an overlap with c,
+      // which is outside the group.
+      expect(layout.wouldOverlap({ x: 200, y: 0 }, ['a', 'b'])).toBe(true);
+    });
+  });
 });

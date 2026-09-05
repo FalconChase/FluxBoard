@@ -218,6 +218,14 @@ export function App() {
   // placementKind/armedEdgeStyle's arm-then-act flow but the "act" is
   // just a drag anywhere on the canvas (see FluxCanvas's onCreateSketch).
   const [sketchArmed, setSketchArmed] = useState(false);
+  // FBP014 (2026-09-05): the ribbon MODIFY group's remaining two
+  // tools -- Multi-select (marquee + click-to-toggle, building a
+  // Selection {type:'multi'} in FluxCanvas) and Pan (forces every
+  // drag to pan, mirrors the same arm-then-act flow as everything
+  // above). Mutually exclusive with placementKind/armedEdgeStyle/
+  // sketchArmed and with each other -- see the handleArm* functions.
+  const [multiSelectArmed, setMultiSelectArmed] = useState(false);
+  const [panArmed, setPanArmed] = useState(false);
   const [gridSpacing, setGridSpacing] = useState(8);
   const [tickIntervalMs, setTickIntervalMs] = useState(400);
   // Falcon, 2026-09-04: "I WANT THE BOARD OR THE WORKSPACE BE SET TO
@@ -549,33 +557,41 @@ export function App() {
     return false;
   }
 
+  /** The single-node deletion cascade — extracted (FBP014,
+   * 2026-09-05) so a multi-select delete can reuse it per member
+   * rather than duplicating it. Removes the node, every edge that
+   * touched it, and detaches (never deletes) any sketch end that was
+   * pinned to it, same "planning survives" spirit as everything else
+   * here. Does NOT touch `selection` — the caller decides what's
+   * selected once the whole batch is done. */
+  function deleteNodeCascade(nodeId: NodeId): void {
+    const removedEdgeIds = graph.removeNode(nodeId);
+    floorLayout.removeNodePosition(nodeId);
+    skinConfig.removeNode(nodeId);
+    for (const edgeId of removedEdgeIds) {
+      floorLayout.removeEdgeCurve(edgeId);
+      skinConfig.removeEdge(edgeId);
+    }
+    for (const sketch of sketchLayer.getAll()) {
+      let patch: Partial<Sketch> | null = null;
+      if (sketch.fromAttachment && sketch.fromAttachment.nodeId === nodeId) {
+        floorLayout.releaseReservation(`${sketch.id}:from`);
+        patch = { ...(patch ?? {}), fromAttachment: null };
+      }
+      if (sketch.toAttachment && sketch.toAttachment.nodeId === nodeId) {
+        floorLayout.releaseReservation(`${sketch.id}:to`);
+        patch = { ...(patch ?? {}), toAttachment: null };
+      }
+      if (patch) sketchLayer.update(sketch.id, patch);
+    }
+  }
+
   function handleDeleteSelection(): void {
     if (!selection) return;
     if (selection.type === 'node') {
-      const removedEdgeIds = graph.removeNode(selection.id);
-      floorLayout.removeNodePosition(selection.id);
-      skinConfig.removeNode(selection.id);
-      for (const edgeId of removedEdgeIds) {
-        floorLayout.removeEdgeCurve(edgeId);
-        skinConfig.removeEdge(edgeId);
-      }
-      // Detach (not delete) any sketch that had an end pinned to
-      // this node (Falcon, 2026-09-05) — releases the anchor
-      // reservation but keeps the sketch at its last-known endpoint
-      // position, same "planning survives" spirit as everything else
-      // in this cascade.
-      for (const sketch of sketchLayer.getAll()) {
-        let patch: Partial<Sketch> | null = null;
-        if (sketch.fromAttachment && sketch.fromAttachment.nodeId === selection.id) {
-          floorLayout.releaseReservation(`${sketch.id}:from`);
-          patch = { ...(patch ?? {}), fromAttachment: null };
-        }
-        if (sketch.toAttachment && sketch.toAttachment.nodeId === selection.id) {
-          floorLayout.releaseReservation(`${sketch.id}:to`);
-          patch = { ...(patch ?? {}), toAttachment: null };
-        }
-        if (patch) sketchLayer.update(sketch.id, patch);
-      }
+      deleteNodeCascade(selection.id);
+    } else if (selection.type === 'multi') {
+      for (const nodeId of selection.nodeIds) deleteNodeCascade(nodeId);
     } else if (selection.type === 'sketch') {
       const sketch = sketchLayer.get(selection.id);
       if (sketch?.fromAttachment) floorLayout.releaseReservation(`${selection.id}:from`);
@@ -587,6 +603,80 @@ export function App() {
       skinConfig.removeEdge(selection.id);
     }
     setSelection(null);
+  }
+
+  /** Duplicate tool (FBP014, 2026-09-05) — clones every node in the
+   * current selection (a single 'node', or every member of a
+   * 'multi'), offset by a few grid cells so the copies never land
+   * exactly on top of their originals. Edges/sketches aren't
+   * duplicable in this first pass. Preserves any edge whose BOTH
+   * endpoints are inside the duplicated set (a duplicated sub-graph
+   * keeps its own internal wiring); an edge crossing OUT of the set
+   * is simply not copied, same "external connections don't carry
+   * over" spirit as everything else that clones rather than moves.
+   * Hard-blocks the whole duplicate (nothing created) if any copy
+   * would land on an existing node — same convention as placement/
+   * move everywhere else, rather than dropping some copies and not
+   * others. */
+  function handleDuplicateSelection(): void {
+    if (!selection) return;
+    const sourceIds = selection.type === 'multi' ? selection.nodeIds : selection.type === 'node' ? [selection.id] : [];
+    if (sourceIds.length === 0) return;
+
+    const offset = gridSpacing * 3;
+    const candidates = new Map<NodeId, Point>();
+    for (const nodeId of sourceIds) {
+      const pos = floorLayout.getNodePosition(nodeId);
+      if (pos) candidates.set(nodeId, { x: pos.x + offset, y: pos.y + offset });
+    }
+    for (const candidate of candidates.values()) {
+      if (floorLayout.wouldOverlap(candidate, sourceIds)) {
+        flashMessage("Can't duplicate — there's no room next to the selection.");
+        return;
+      }
+    }
+
+    const idMap = new Map<NodeId, NodeId>();
+    const newIds: NodeId[] = [];
+    for (const oldId of sourceIds) {
+      const node = graph.getNode(oldId);
+      const pos = candidates.get(oldId);
+      if (!node || !pos) continue;
+      const newId = `user-node-${nextIdRef.current++}`;
+      // Deep-copy config defensively — every config field is JSON-
+      // safe (design doc §4.4), and this guarantees editing the copy
+      // (e.g. a sorter's rules array) never mutates the original's
+      // config through a shared reference.
+      graph.addNode({ id: newId, kind: node.kind, config: JSON.parse(JSON.stringify(node.config)) });
+      floorLayout.setNodePosition(newId, pos);
+      idMap.set(oldId, newId);
+      newIds.push(newId);
+    }
+
+    for (const edge of graph.getAllEdges()) {
+      const newSource = idMap.get(edge.source);
+      const newTarget = idMap.get(edge.target);
+      // Only an edge that was already in the graph BEFORE this loop
+      // added any new nodes/edges can match here — idMap only maps
+      // original ids, so a freshly-created duplicate edge (whose
+      // source/target are new ids, absent from idMap) is never
+      // mistaken for one to duplicate again.
+      if (!newSource || !newTarget) continue;
+      const newEdgeId = `user-edge-${nextIdRef.current++}`;
+      graph.addEdge({
+        id: newEdgeId,
+        source: newSource,
+        target: newTarget,
+        sourcePort: edge.sourcePort,
+        targetPort: edge.targetPort,
+        flowRate: edge.flowRate,
+        active: edge.active,
+      });
+      floorLayout.setEdgeCurve(newEdgeId, newSource, newTarget, floorLayout.getEdgeBow(edge.id));
+      skinConfig.setEdgeSkin(newEdgeId, skinConfig.getEdgeSkin(edge.id));
+    }
+
+    setSelection(newIds.length === 1 ? { type: 'node', id: newIds[0]! } : { type: 'multi', nodeIds: newIds });
   }
 
   function handlePlaceNode(kind: NodeKind, worldPoint: Point): void {
@@ -668,25 +758,49 @@ export function App() {
     setSelection({ type: 'edge', id });
   }
 
-  // NODES and PATHS arming are mutually exclusive — arming one clears
-  // the other, so the canvas's pointer state machine never has to
-  // decide which one wins.
+  // NODES, PATHS, Sketch, Multi-select and Pan arming are all
+  // mutually exclusive — arming one clears every other, so the
+  // canvas's pointer state machine never has to decide which one
+  // wins (FBP014, 2026-09-05: folded Multi-select/Pan into the same
+  // pattern already established for the first three).
   function handleArmNodeKind(kind: NodeKind | null): void {
     setArmedEdgeStyle(null);
     setSketchArmed(false);
+    setMultiSelectArmed(false);
+    setPanArmed(false);
     setPlacementKind(kind);
   }
 
   function handleArmEdgeStyle(style: EdgeStyle | null): void {
     setPlacementKind(null);
     setSketchArmed(false);
+    setMultiSelectArmed(false);
+    setPanArmed(false);
     setArmedEdgeStyle(style);
   }
 
   function handleArmSketch(armed: boolean): void {
     setPlacementKind(null);
     setArmedEdgeStyle(null);
+    setMultiSelectArmed(false);
+    setPanArmed(false);
     setSketchArmed(armed);
+  }
+
+  function handleArmMultiSelect(armed: boolean): void {
+    setPlacementKind(null);
+    setArmedEdgeStyle(null);
+    setSketchArmed(false);
+    setPanArmed(false);
+    setMultiSelectArmed(armed);
+  }
+
+  function handleArmPan(armed: boolean): void {
+    setPlacementKind(null);
+    setArmedEdgeStyle(null);
+    setSketchArmed(false);
+    setMultiSelectArmed(false);
+    setPanArmed(armed);
   }
 
   function handleApplyEdgeStyle(edgeId: EdgeId, style: EdgeStyle): void {
@@ -789,13 +903,19 @@ export function App() {
       ? `Click an existing path to apply the ${armedEdgeStyle} style.`
       : sketchArmed
         ? 'Drag to sketch a planning path — starting or ending near a port dot pins that end to it.'
-        : selection?.type === 'node'
-          ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
-          : selection?.type === 'edge'
-            ? 'Path selected — edit it in the properties panel, Delete to remove.'
-            : selection?.type === 'sketch'
-              ? 'Sketch selected — Delete to remove, or Convert to path in the properties panel once both ends are pinned.'
-              : 'Click a node or path to select it, choose something from the ribbon to add, or Shift+drag from one node to another to connect them.';
+        : multiSelectArmed
+          ? 'Click nodes to toggle them into the selection, or drag over empty canvas to select everything inside the box.'
+          : panArmed
+            ? 'Drag anywhere to pan — even starting on a node or path.'
+            : selection?.type === 'node'
+              ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
+              : selection?.type === 'multi'
+                ? `${selection.nodeIds.length} nodes selected — drag any of them to move the group, Delete to remove, Duplicate to clone.`
+                : selection?.type === 'edge'
+                  ? 'Path selected — edit it in the properties panel, Delete to remove.'
+                  : selection?.type === 'sketch'
+                    ? 'Sketch selected — Delete to remove, or Convert to path in the properties panel once both ends are pinned.'
+                    : 'Click a node or path to select it, choose something from the ribbon to add, or Shift+drag from one node to another to connect them.';
 
   return (
     <div
@@ -819,8 +939,14 @@ export function App() {
         onArmEdgeStyle={handleArmEdgeStyle}
         sketchArmed={sketchArmed}
         onArmSketch={handleArmSketch}
+        multiSelectArmed={multiSelectArmed}
+        onArmMultiSelect={handleArmMultiSelect}
+        panArmed={panArmed}
+        onArmPan={handleArmPan}
         canDelete={selection !== null}
         onDeleteSelection={handleDeleteSelection}
+        canDuplicate={selection?.type === 'node' || selection?.type === 'multi'}
+        onDuplicateSelection={handleDuplicateSelection}
         onOpenObjectsManager={() => setObjectsManagerOpen(true)}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}
@@ -862,6 +988,8 @@ export function App() {
             sketchLayer={sketchLayer}
             sketchArmed={sketchArmed}
             onCreateSketch={handleCreateSketch}
+            multiSelectArmed={multiSelectArmed}
+            panArmed={panArmed}
             canvasBackground={canvasBackground}
             onCursorWorldPositionChange={setCursorWorldPosition}
           />
@@ -874,6 +1002,7 @@ export function App() {
           sketchLayer={sketchLayer}
           objectRegistry={objectRegistry}
           onDelete={handleDeleteSelection}
+          onDuplicate={handleDuplicateSelection}
           onConvertSketch={handleConvertSketchToPath}
         />
       </div>

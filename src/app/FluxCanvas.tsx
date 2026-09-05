@@ -111,6 +111,23 @@ interface FluxCanvasProps {
     toAttachment?: SketchAttachment | null,
   ) => void;
 
+  /** FBP014 (2026-09-05): while armed, an empty-canvas drag draws a
+   * marquee (rubber-band select) instead of panning, and clicking a
+   * node toggles it into/out of the current multi selection instead
+   * of replacing it -- mirrors sketchArmed's arm-then-act flow, but
+   * the "act" is building up onSelect's Selection rather than a
+   * single one-shot mutation. Mutually exclusive with every other
+   * arm state (App.tsx). Once a multi selection exists, dragging any
+   * of its members moves the whole group together -- that part
+   * works whether or not this is still armed. */
+  multiSelectArmed: boolean;
+  /** FBP014 (2026-09-05): while armed, EVERY drag pans the camera
+   * regardless of what's under the cursor -- unlike the free empty-
+   * canvas pan that's always available, this lets a drag that starts
+   * on top of a node/path/sketch pan too, without grabbing/moving/
+   * selecting it. */
+  panArmed: boolean;
+
   /** Falcon, 2026-09-04: "settings on VIEW for workspace theme or
    * background color" -- which preset paints the canvas background +
    * grid lines. App.tsx owns the state (persisted per-project via
@@ -154,6 +171,15 @@ const ANCHOR_ROLE_COLOR = { out: '#ff5d5d', in: '#2ecc71' };
  * (Milestone 3) and the skin render stack (Milestone 4) are unchanged
  * by this — this file only adds pointer INTERACTION on top of what
  * was already being painted.
+ *
+ * FBP014 (2026-09-05): the ribbon's MODIFY group's remaining three
+ * placeholders -- Multi-select (marquee drag + click-to-toggle,
+ * building a Selection {type:'multi'}), Duplicate (App.tsx-only, no
+ * canvas interaction of its own), and Pan (forces every drag to pan
+ * regardless of what's under the cursor) -- are real now. Once a
+ * multi selection exists, dragging any of its members moves the
+ * whole group together as one hard-blocked unit, whether or not the
+ * multi-select tool is still armed.
  */
 export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function FluxCanvas(
   {
@@ -176,6 +202,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     sketchLayer,
     sketchArmed,
     onCreateSketch,
+    multiSelectArmed,
+    panArmed,
     canvasBackground = 'white',
     onCursorWorldPositionChange,
   },
@@ -214,6 +242,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   sketchArmedRef.current = sketchArmed;
   const onCreateSketchRef = useRef(onCreateSketch);
   onCreateSketchRef.current = onCreateSketch;
+  const multiSelectArmedRef = useRef(multiSelectArmed);
+  multiSelectArmedRef.current = multiSelectArmed;
+  const panArmedRef = useRef(panArmed);
+  panArmedRef.current = panArmed;
   const canvasBackgroundRef = useRef(canvasBackground);
   canvasBackgroundRef.current = canvasBackground;
   const onCursorWorldPositionChangeRef = useRef(onCursorWorldPositionChange);
@@ -419,13 +451,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       lastFrameMs = nowMs;
       const elapsedMs = animElapsedMs;
 
-      canvas!.style.cursor = placementKindRef.current || armedEdgeStyleRef.current || sketchArmedRef.current
-        ? 'crosshair'
-        : pointerMode === 'move'
-          ? 'grabbing'
-          : wireFromNodeId
-            ? 'crosshair'
-            : 'grab';
+      canvas!.style.cursor =
+        placementKindRef.current || armedEdgeStyleRef.current || sketchArmedRef.current || multiSelectArmedRef.current
+          ? 'crosshair'
+          : pointerMode === 'move' || pointerMode === 'pan'
+            ? 'grabbing'
+            : wireFromNodeId
+              ? 'crosshair'
+              : 'grab';
 
       const viewport = currentViewport();
       ctx!.clearRect(0, 0, viewport.width, viewport.height);
@@ -603,6 +636,19 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       }
       visibleNodes.sort((a, b) => skinConfig.getNodeZIndex(a.node.id) - skinConfig.getNodeZIndex(b.node.id));
 
+      // FBP014 (2026-09-05): marquee bounds computed once per frame
+      // (world space) so every node's live-preview ring below is a
+      // cheap containment check, not a re-derivation.
+      const marqueeBounds =
+        pointerMode === 'marquee' && marqueeOrigin && marqueeCurrent
+          ? {
+              minX: Math.min(marqueeOrigin.x, marqueeCurrent.x),
+              maxX: Math.max(marqueeOrigin.x, marqueeCurrent.x),
+              minY: Math.min(marqueeOrigin.y, marqueeCurrent.y),
+              maxY: Math.max(marqueeOrigin.y, marqueeCurrent.y),
+            }
+          : null;
+
       for (const { node, pos } of visibleNodes) {
         const screen = camera.worldToScreen(pos, viewport);
         const r = NODE_RADIUS * camera.zoom;
@@ -611,9 +657,35 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         if (skinConfig.getNodeLocked(node.id)) {
           drawNodeLockBadge(ctx!, screen, r, camera.zoom);
         }
-        if (sel?.type === 'node' && sel.id === node.id) {
+        const inMarquee =
+          !!marqueeBounds &&
+          pos.x >= marqueeBounds.minX &&
+          pos.x <= marqueeBounds.maxX &&
+          pos.y >= marqueeBounds.minY &&
+          pos.y <= marqueeBounds.maxY;
+        const isMultiSelected = sel?.type === 'multi' && sel.nodeIds.includes(node.id);
+        if ((sel?.type === 'node' && sel.id === node.id) || isMultiSelected || inMarquee) {
           drawNodeSelectionRing(ctx!, screen, r, camera.zoom);
         }
+      }
+
+      // FBP014 (2026-09-05): the marquee rectangle itself, drawn last
+      // so it reads on top of everything while the drag is live.
+      if (marqueeOrigin && marqueeCurrent) {
+        const a = camera.worldToScreen(marqueeOrigin, viewport);
+        const b = camera.worldToScreen(marqueeCurrent, viewport);
+        const x = Math.min(a.x, b.x);
+        const y = Math.min(a.y, b.y);
+        const w = Math.abs(b.x - a.x);
+        const h = Math.abs(b.y - a.y);
+        ctx!.save();
+        ctx!.fillStyle = 'rgba(37, 99, 235, 0.12)';
+        ctx!.strokeStyle = 'rgba(37, 99, 235, 0.85)';
+        ctx!.lineWidth = 1.5;
+        ctx!.setLineDash([5, 4]);
+        ctx!.fillRect(x, y, w, h);
+        ctx!.strokeRect(x, y, w, h);
+        ctx!.restore();
       }
 
       raf = requestAnimationFrame(frame);
@@ -636,7 +708,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       | 'move'
       | 'placement'
       | 'apply-style'
-      | 'sketch-draw';
+      | 'sketch-draw'
+      | 'marquee';
     let pointerMode: PointerMode = 'idle';
     let dragOriginScreen: { x: number; y: number } | null = null;
     let dragLastScreen: { x: number; y: number } | null = null;
@@ -665,6 +738,18 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     // actually grabbed it at, so the node doesn't jump to re-center
     // under the cursor the instant a drag starts.
     let moveGrabOffset: Point | null = null;
+    // Multi-select tool (FBP014, 2026-09-05): a rubber-band drag on
+    // empty canvas while armed -- world-space origin/current corner,
+    // both undefined outside a marquee drag.
+    let marqueeOrigin: Point | undefined;
+    let marqueeCurrent: Point | undefined;
+    // Set at the 'node-down' -> 'move' transition when the grabbed
+    // node belongs to an active multi selection with 2+ members --
+    // every member then translates by the same delta the grabbed one
+    // does, hard-blocked as a whole (never partially applied) exactly
+    // like a single node hitting wouldOverlap.
+    let groupMoveActive = false;
+    let groupOriginalPositions: Map<NodeId, Point> | null = null;
 
     function onPointerDown(e: PointerEvent): void {
       dragOriginScreen = { x: e.clientX, y: e.clientY };
@@ -672,6 +757,15 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       canvas!.setPointerCapture(e.pointerId);
 
       const worldPoint = toWorld(e.clientX, e.clientY);
+
+      // FBP014 (2026-09-05): the Pan tool overrides every hit test --
+      // a drag starting on a node/edge/sketch pans instead of
+      // grabbing it, which is the whole point of arming it explicitly
+      // (empty-canvas drag already pans for free without this).
+      if (panArmedRef.current) {
+        pointerMode = 'pan';
+        return;
+      }
 
       if (placementKindRef.current) {
         pointerMode = 'placement';
@@ -704,7 +798,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       if (nodeId) {
         pointerMode = 'node-down';
         pendingNodeHitId = nodeId;
-        wireGesture = e.shiftKey;
+        // FBP014 (2026-09-05): while the multi-select tool is armed,
+        // a plain click/drag on a node is a selection action (toggle
+        // membership, or drag the group it already belongs to), never
+        // a wire drag -- Shift has no meaning in this mode.
+        wireGesture = !multiSelectArmedRef.current && e.shiftKey;
         moveLocked = skinConfig.getNodeLocked(nodeId);
         const nodePos = floorLayout.getNodePosition(nodeId);
         moveGrabOffset = nodePos ? { x: worldPoint.x - nodePos.x, y: worldPoint.y - nodePos.y } : { x: 0, y: 0 };
@@ -730,6 +828,16 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         return;
       }
 
+      // FBP014 (2026-09-05): empty canvas while the multi-select tool
+      // is armed draws a marquee instead of panning -- panning from
+      // empty space stays free the rest of the time, same as always.
+      if (multiSelectArmedRef.current) {
+        pointerMode = 'marquee';
+        marqueeOrigin = worldPoint;
+        marqueeCurrent = worldPoint;
+        return;
+      }
+
       pointerMode = 'pan';
     }
 
@@ -751,10 +859,34 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           wireFromNodeId = pendingNodeHitId;
         } else if (!moveLocked) {
           pointerMode = 'move';
+          // FBP014 (2026-09-05): dragging a node that's part of an
+          // active 2+-member multi selection moves the WHOLE group,
+          // regardless of whether the multi-select tool is still
+          // armed -- building the selection is what arming is for,
+          // moving it works like any other node drag from then on.
+          // Snapshot every member's pre-drag position now so the
+          // group's relative layout never drifts as deltas accumulate
+          // frame to frame.
+          const sel = selectionRef.current;
+          if (sel?.type === 'multi' && pendingNodeHitId && sel.nodeIds.includes(pendingNodeHitId)) {
+            groupMoveActive = true;
+            groupOriginalPositions = new Map();
+            for (const id of sel.nodeIds) {
+              const p = floorLayout.getNodePosition(id);
+              if (p) groupOriginalPositions.set(id, p);
+            }
+          } else {
+            groupMoveActive = false;
+            groupOriginalPositions = null;
+          }
         }
         // else: dragging a locked node with no Shift — stays
         // 'node-down' with no visible effect; releasing past the
         // click threshold then selects nothing new (see onPointerUp).
+      }
+
+      if (pointerMode === 'marquee') {
+        marqueeCurrent = toWorld(e.clientX, e.clientY);
       }
 
       if (pointerMode === 'wire') {
@@ -775,7 +907,54 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           : nearestPointOnAnyPath(sketchDrawCurrent, PORT_SNAP_RADIUS_PX / camera.zoom);
       }
 
-      if (pointerMode === 'move' && pendingNodeHitId && moveGrabOffset) {
+      if (pointerMode === 'move' && groupMoveActive && groupOriginalPositions && pendingNodeHitId && moveGrabOffset) {
+        // FBP014 (2026-09-05): group move -- every member translates
+        // by the SAME delta the grabbed node does (computed from its
+        // own snapped candidate position), so relative spacing within
+        // the group never drifts. Hard-blocked as a whole, exactly
+        // like a single node hitting a wall: if ANY member's candidate
+        // would overlap a node outside the group, nothing moves this
+        // frame rather than some members moving and others not.
+        const currentWorld = toWorld(e.clientX, e.clientY);
+        const grabbedOriginal = groupOriginalPositions.get(pendingNodeHitId);
+        if (grabbedOriginal) {
+          const rawGrabbedPos = { x: currentWorld.x - moveGrabOffset.x, y: currentWorld.y - moveGrabOffset.y };
+          const snappedGrabbedPos = snapToGridPoint(rawGrabbedPos);
+          const delta = { x: snappedGrabbedPos.x - grabbedOriginal.x, y: snappedGrabbedPos.y - grabbedOriginal.y };
+          const groupIds = [...groupOriginalPositions.keys()];
+          const candidates = new Map<NodeId, Point>();
+          for (const [id, origPos] of groupOriginalPositions) {
+            candidates.set(id, { x: origPos.x + delta.x, y: origPos.y + delta.y });
+          }
+          let blocked = false;
+          for (const cand of candidates.values()) {
+            if (floorLayout.wouldOverlap(cand, groupIds)) {
+              blocked = true;
+              break;
+            }
+          }
+          if (!blocked) {
+            for (const [id, cand] of candidates) {
+              floorLayout.setNodePosition(id, cand);
+              for (const edge of edgesTouchingNode(id)) {
+                floorLayout.recomputeEdgeCurve(edge.id, edge.source, edge.target);
+              }
+              for (const sketch of sketchLayer.getAll()) {
+                let patch: Partial<Sketch> | null = null;
+                if (sketch.fromAttachment && sketch.fromAttachment.nodeId === id) {
+                  const pt = floorLayout.getAnchorPoint(id, sketch.fromAttachment.anchorIndex);
+                  if (pt) patch = { ...(patch ?? {}), from: pt };
+                }
+                if (sketch.toAttachment && sketch.toAttachment.nodeId === id) {
+                  const pt = floorLayout.getAnchorPoint(id, sketch.toAttachment.anchorIndex);
+                  if (pt) patch = { ...(patch ?? {}), to: pt };
+                }
+                if (patch) sketchLayer.update(sketch.id, patch);
+              }
+            }
+          }
+        }
+      } else if (pointerMode === 'move' && pendingNodeHitId && moveGrabOffset) {
         const currentWorld = toWorld(e.clientX, e.clientY);
         const rawPos = { x: currentWorld.x - moveGrabOffset.x, y: currentWorld.y - moveGrabOffset.y };
         const snappedPos = snapToGridPoint(rawPos);
@@ -869,16 +1048,59 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       } else if (pointerMode === 'sketch-down' && isClick && pendingSketchHitId) {
         onSelectRef.current({ type: 'sketch', id: pendingSketchHitId });
       } else if (pointerMode === 'move' && pendingNodeHitId) {
-        // The drag itself already committed the position on every
-        // pointermove — this just leaves the moved node selected, so
-        // the properties panel follows it.
-        onSelectRef.current({ type: 'node', id: pendingNodeHitId });
+        // FBP014 (2026-09-05): a group move already applied every
+        // member's new position on each pointermove above -- leave
+        // the multi selection exactly as it was rather than
+        // collapsing it down to just the node that happened to be
+        // grabbed. A single-node move still selects that node, same
+        // as always.
+        if (!groupMoveActive) onSelectRef.current({ type: 'node', id: pendingNodeHitId });
       } else if (pointerMode === 'node-down' && isClick && pendingNodeHitId) {
-        onSelectRef.current({ type: 'node', id: pendingNodeHitId });
+        // FBP014 (2026-09-05): with the multi-select tool armed, a
+        // plain click toggles that node into/out of the current
+        // selection instead of replacing it -- a stationary click
+        // outside armed mode still just selects the one node, same
+        // as always.
+        if (multiSelectArmedRef.current) {
+          const sel = selectionRef.current;
+          const current = sel?.type === 'multi' ? sel.nodeIds : sel?.type === 'node' ? [sel.id] : [];
+          const already = current.includes(pendingNodeHitId);
+          const next = already ? current.filter((id) => id !== pendingNodeHitId) : [...current, pendingNodeHitId];
+          if (next.length === 0) onSelectRef.current(null);
+          else if (next.length === 1) onSelectRef.current({ type: 'node', id: next[0]! });
+          else onSelectRef.current({ type: 'multi', nodeIds: next });
+        } else {
+          onSelectRef.current({ type: 'node', id: pendingNodeHitId });
+        }
       } else if (pointerMode === 'edge-down' && isClick && pendingEdgeHitId) {
         onSelectRef.current({ type: 'edge', id: pendingEdgeHitId });
       } else if (pointerMode === 'pan' && isClick) {
         onSelectRef.current(null);
+      } else if (pointerMode === 'marquee' && marqueeOrigin && marqueeCurrent) {
+        // FBP014 (2026-09-05): every node whose CENTER falls inside
+        // the dragged rectangle joins the selection -- merged with
+        // whatever was already selected (so successive drags/toggles
+        // build up a group) rather than replacing it. A marquee that
+        // encloses nothing clears the selection, same spirit as an
+        // empty-space click in the default (un-armed) pan mode.
+        const minX = Math.min(marqueeOrigin.x, marqueeCurrent.x);
+        const maxX = Math.max(marqueeOrigin.x, marqueeCurrent.x);
+        const minY = Math.min(marqueeOrigin.y, marqueeCurrent.y);
+        const maxY = Math.max(marqueeOrigin.y, marqueeCurrent.y);
+        const enclosed: NodeId[] = [];
+        for (const node of graph.getAllNodes()) {
+          const pos = floorLayout.getNodePosition(node.id);
+          if (!pos) continue;
+          if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) enclosed.push(node.id);
+        }
+        if (enclosed.length > 0) {
+          const sel = selectionRef.current;
+          const existing = sel?.type === 'multi' ? sel.nodeIds : sel?.type === 'node' ? [sel.id] : [];
+          const merged = [...new Set([...existing, ...enclosed])];
+          onSelectRef.current(merged.length === 1 ? { type: 'node', id: merged[0]! } : { type: 'multi', nodeIds: merged });
+        } else {
+          onSelectRef.current(null);
+        }
       }
 
       pointerMode = 'idle';
@@ -898,6 +1120,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       wireGesture = false;
       moveLocked = false;
       moveGrabOffset = null;
+      marqueeOrigin = undefined;
+      marqueeCurrent = undefined;
+      groupMoveActive = false;
+      groupOriginalPositions = null;
 
       try {
         canvas!.releasePointerCapture(e.pointerId);
@@ -947,10 +1173,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     };
     // Interaction props (selection, onSelect, placementKind,
     // onPlaceNode, onCreateEdge, snapToGrid, gridSpacing,
-    // armedEdgeStyle, onApplyEdgeStyle) are intentionally excluded —
-    // they're read through refs above so a click doesn't tear down
-    // and recreate the SimEngine/driver. onRunningChange is invoked
-    // through a ref too, for the same reason.
+    // armedEdgeStyle, onApplyEdgeStyle, multiSelectArmed, panArmed)
+    // are intentionally excluded — they're read through refs above so
+    // a click doesn't tear down and recreate the SimEngine/driver.
+    // onRunningChange is invoked through a ref too, for the same
+    // reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph, floorLayout, skinConfig, objectRegistry, tickIntervalMs]);
 

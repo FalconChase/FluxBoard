@@ -444,12 +444,17 @@ export class FloorLayout {
    * actually exist). Nodes are approximated as circles of NODE_RADIUS
    * — the same approximation their octagon body already fits inside
    * — so two nodes "overlap" once their centers are closer than
-   * 2×NODE_RADIUS. `excludeNodeId` lets a node being dragged ignore
-   * its own current position while checking every OTHER node. */
-  wouldOverlap(candidate: Point, excludeNodeId?: NodeId): boolean {
+   * 2×NODE_RADIUS. `exclude` lets a node (or, FBP014 2026-09-05,
+   * every node in a multi-select group being dragged/duplicated
+   * together) ignore its own current position while checking every
+   * OTHER node — a single id or an array of ids, so a group move's
+   * hard-block check can exclude the whole moving group in one call
+   * rather than looping wouldOverlap per member. */
+  wouldOverlap(candidate: Point, exclude?: NodeId | NodeId[]): boolean {
     const minDist = NODE_RADIUS * 2;
+    const excludeSet = exclude === undefined ? undefined : new Set(Array.isArray(exclude) ? exclude : [exclude]);
     for (const [nodeId, pos] of this.nodePositions.entries()) {
-      if (nodeId === excludeNodeId) continue;
+      if (excludeSet?.has(nodeId)) continue;
       if (Math.hypot(pos.x - candidate.x, pos.y - candidate.y) < minDist) return true;
     }
     return false;
