@@ -85,6 +85,27 @@ export class GraphModel {
     edge.flowRate = flowRate;
   }
 
+  /** Falcon, 2026-09-05 ("Option D" — a per-path opt-in lock so the
+   * path's apparent speed stays pinned as it's resized, rather than
+   * every path behaving that way globally): records the toggle plus
+   * the real-world speed (world units/second) it should keep solving
+   * for. Doesn't itself touch flowRate — App.tsx's own poll is what
+   * continuously recomputes flowRate from lockedSpeed against this
+   * edge's CURRENT path length (same "poll instead of instrumenting
+   * every mutation site" convention undo/redo already uses, since a
+   * path's length can change through several different code paths —
+   * a node drag, a curvature edit, a reassigned anchor). Passing no
+   * lockedSpeed while turning the lock off leaves the last value in
+   * place (harmless — it's ignored whenever speedLocked is false),
+   * so a later re-enable without a fresh speed still remembers the
+   * old target. */
+  setEdgeSpeedLock(edgeId: EdgeId, locked: boolean, lockedSpeed?: number): void {
+    const edge = this.edges.get(edgeId);
+    if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);
+    edge.speedLocked = locked;
+    if (lockedSpeed !== undefined) edge.lockedSpeed = lockedSpeed;
+  }
+
   /** Edge port numbers — the integers each node kind's own handler
    * matches against (sorter rules, mixer recipe ports, distributor
    * round-robin order, ...). Renamed here to make clear this is NOT

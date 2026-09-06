@@ -90,7 +90,7 @@ describe('FloorLayout', () => {
     expect(afterStart.y).not.toBeCloseTo(beforeStart.y);
   });
 
-  it('recomputeEdgeCurve falls back to node centers (and the 0.15 default bow) when the edge was never set via setEdgeCurve', () => {
+  it('recomputeEdgeCurve falls back to node centers (and the 0 default bow) when the edge was never set via setEdgeCurve', () => {
     const layout = new FloorLayout();
     layout.setNodePosition('a', { x: 0, y: 0 });
     layout.setNodePosition('b', { x: 100, y: 0 });
@@ -119,15 +119,15 @@ describe('FloorLayout', () => {
 
     // Bow was forgotten too — recreating fresh (setEdgeCurve, no bow
     // argument) picks the same anchors as before (only two nodes, so
-    // "nearest free" is deterministic) and falls back to the 0.15
-    // default bow rather than the original 0.4.
+    // "nearest free" is deterministic) and falls back to the 0
+    // (linear) default bow rather than the original 0.4.
     layout.setEdgeCurve('e1', 'a', 'b');
     const defaultBowCurve = layout.getEdgeCurve('e1')!;
 
     const manual = new FloorLayout();
     manual.setNodePosition('a', { x: 0, y: 0 });
     manual.setNodePosition('b', { x: 100, y: 0 });
-    manual.setEdgeCurve('e1', 'a', 'b', 0.15);
+    manual.setEdgeCurve('e1', 'a', 'b', 0);
     expect(defaultBowCurve.totalLength).toBeCloseTo(manual.getEdgeCurve('e1')!.totalLength);
   });
 
@@ -198,9 +198,9 @@ describe('FloorLayout', () => {
     expect(point.y).not.toBeCloseTo(0, 5);
   });
 
-  it('getEdgeBow defaults to 0.15 (curveBetween\'s own cosmetic default) for an edge with no bow recorded yet', () => {
+  it('getEdgeBow defaults to 0 (linear) for an edge with no bow recorded yet', () => {
     const layout = new FloorLayout();
-    expect(layout.getEdgeBow('nonexistent')).toBe(0.15);
+    expect(layout.getEdgeBow('nonexistent')).toBe(0);
   });
 
   // restoreEdgeCurve (Falcon, 2026-09-03: persistence/save-load) — a

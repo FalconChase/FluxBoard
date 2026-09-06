@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { GraphModel } from '../core/GraphModel';
 import type { EdgeDef, NodeDef } from '../core/types';
 import { getPortCapacity } from '../core/nodes/portCapacity';
@@ -7,7 +7,7 @@ import type { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
 import type { ObjectRegistry } from '../skin/ObjectRegistry';
 import type { Selection } from './selection';
-import type { SketchLayer } from './sketchLayer';
+import type { Sketch, SketchLayer } from './sketchLayer';
 import { theme } from './theme';
 
 interface PropertiesPanelProps {
@@ -42,6 +42,19 @@ interface PropertiesPanelProps {
    * Only ever called when SketchProperties actually shows the
    * control, i.e. both ends are attached — App.tsx re-checks anyway. */
   onConvertSketch: (sketchId: string, style: EdgeStyle) => void;
+  /** Falcon, 2026-09-05 ("no way i can snap a sketch to a node's
+   * port"): pins a currently-floating end of an existing sketch to
+   * the nearest free port, without redrawing it. Only ever called
+   * when that end is actually unattached (the button isn't shown
+   * otherwise). */
+  onPinSketchEnd: (sketchId: string, end: 'from' | 'to') => void;
+  /** Multi-select batch actions (Falcon, 2026-09-05: "i want to
+   * convert as many in one go") -- only offered by MultiProperties
+   * when the selection is ENTIRELY sketches (batch convert) or
+   * ENTIRELY paths (batch restyle); a mixed selection just gets the
+   * generic Duplicate/Delete below. */
+  onBatchConvertSketches: (sketchIds: string[], style: EdgeStyle) => void;
+  onBatchRestyleEdges: (edgeIds: string[], style: EdgeStyle) => void;
 }
 
 const labelStyle: CSSProperties = { fontSize: 11, fontWeight: 600, color: theme.text2, display: 'block', marginBottom: 3 };
@@ -87,6 +100,9 @@ export function PropertiesPanel({
   onDelete,
   onDuplicate,
   onConvertSketch,
+  onPinSketchEnd,
+  onBatchConvertSketches,
+  onBatchRestyleEdges,
 }: PropertiesPanelProps) {
   // Keys just the selection-editing block, not the whole panel — so
   // every field inside NodeProperties/EdgeProperties can hold plain
@@ -96,7 +112,9 @@ export function PropertiesPanel({
   const selectionKey = selection
     ? selection.type === 'multi'
       ? `multi:${selection.nodeIds.join(',')}|${selection.edgeIds.join(',')}|${selection.sketchIds.join(',')}`
-      : `${selection.type}:${selection.id}`
+      : selection.type === 'sketch' && selection.segmentIndex !== undefined
+        ? `sketch:${selection.id}:${selection.segmentIndex}`
+        : `${selection.type}:${selection.id}`
     : 'none';
 
   return (
@@ -148,6 +166,8 @@ export function PropertiesPanel({
             graph={graph}
             onDelete={onDelete}
             onDuplicate={onDuplicate}
+            onBatchConvertSketches={onBatchConvertSketches}
+            onBatchRestyleEdges={onBatchRestyleEdges}
           />
         )}
         {selection?.type === 'edge' && (
@@ -162,10 +182,12 @@ export function PropertiesPanel({
         {selection?.type === 'sketch' && (
           <SketchProperties
             sketchId={selection.id}
+            segmentIndex={selection.segmentIndex}
             sketchLayer={sketchLayer}
             graph={graph}
             onDelete={onDelete}
             onConvertSketch={onConvertSketch}
+            onPinSketchEnd={onPinSketchEnd}
           />
         )}
       </div>
@@ -283,6 +305,8 @@ function MultiProperties({
   graph,
   onDelete,
   onDuplicate,
+  onBatchConvertSketches,
+  onBatchRestyleEdges,
 }: {
   nodeIds: string[];
   edgeIds: string[];
@@ -290,7 +314,10 @@ function MultiProperties({
   graph: GraphModel;
   onDelete: () => void;
   onDuplicate: () => void;
+  onBatchConvertSketches: (sketchIds: string[], style: EdgeStyle) => void;
+  onBatchRestyleEdges: (edgeIds: string[], style: EdgeStyle) => void;
 }) {
+  const [batchStyle, setBatchStyle] = useState<EdgeStyle>('trace');
   const counts = new Map<string, number>();
   for (const id of nodeIds) {
     const node = graph.getNode(id);
@@ -305,6 +332,16 @@ function MultiProperties({
   if (sketchIds.length > 0) summaryParts.push(`${sketchIds.length} sketch${sketchIds.length === 1 ? '' : 'es'}`);
   const total = nodeIds.length + edgeIds.length + sketchIds.length;
   const canDuplicate = nodeIds.length > 0;
+
+  // Batch convert/restyle (Falcon, 2026-09-05: "the sketches only
+  // options may have possible actions such as delete group/convert to
+  // path, and or so for paths only ... will convert all also/delete
+  // group") — only offered when the selection is ENTIRELY one kind;
+  // a mixed group (nodes present, or paths+sketches together) falls
+  // through to just Duplicate/Delete below.
+  const sketchesOnly = nodeIds.length === 0 && edgeIds.length === 0 && sketchIds.length > 0;
+  const pathsOnly = nodeIds.length === 0 && sketchIds.length === 0 && edgeIds.length > 0;
+
   return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{total} items selected</div>
@@ -313,6 +350,43 @@ function MultiProperties({
         <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
           Drag any selected node to move the whole group together.
         </p>
+      )}
+
+      {(sketchesOnly || pathsOnly) && (
+        <>
+          <div style={sectionTitleStyle}>{sketchesOnly ? 'Convert to path' : 'Convert all'}</div>
+          <div style={rowStyle}>
+            <label style={labelStyle}>Path style</label>
+            <select value={batchStyle} style={inputStyle} onChange={(e) => setBatchStyle(e.target.value as EdgeStyle)}>
+              <option value="transparent">Transparent</option>
+              <option value="conveyor">Conveyor</option>
+              <option value="glassTube">Glass tube</option>
+              <option value="trace">Trace</option>
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              sketchesOnly ? onBatchConvertSketches(sketchIds, batchStyle) : onBatchRestyleEdges(edgeIds, batchStyle)
+            }
+            style={{
+              ...smallButtonStyle,
+              width: '100%',
+              color: theme.accentStrong,
+              borderColor: theme.accent,
+              marginBottom: 10,
+            }}
+          >
+            {sketchesOnly
+              ? `Convert ${sketchIds.length} sketch${sketchIds.length === 1 ? '' : 'es'} to path`
+              : `Restyle ${edgeIds.length} path${edgeIds.length === 1 ? '' : 's'}`}
+          </button>
+          {sketchesOnly && (
+            <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, marginTop: -6, marginBottom: 10 }}>
+              Only sketches with both ends pinned to a port convert — the rest are skipped and reported.
+            </p>
+          )}
+        </>
       )}
 
       <div style={sectionTitleStyle}>Modify</div>
@@ -820,22 +894,44 @@ function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
  * "Convert to path" to turn the sketch into a real GraphModel edge. */
 function SketchProperties({
   sketchId,
+  segmentIndex,
   sketchLayer,
   graph,
   onDelete,
   onConvertSketch,
+  onPinSketchEnd,
 }: {
   sketchId: string;
+  /** Falcon, 2026-09-05 ("click directly on that segment"): set only
+   * when a specific leg of a multi-segment sketch is drilled into
+   * (FluxCanvas's sketch-down click handling) -- undefined shows the
+   * whole-sketch view below, same as every sketch had before
+   * multi-segment existed. */
+  segmentIndex?: number;
   sketchLayer: SketchLayer;
   graph: GraphModel;
   onDelete: () => void;
   onConvertSketch: (sketchId: string, style: EdgeStyle) => void;
+  onPinSketchEnd: (sketchId: string, end: 'from' | 'to') => void;
 }) {
   const [style, setStyle] = useState<EdgeStyle>('trace');
   const sketch = sketchLayer.get(sketchId);
   if (!sketch) return <p style={{ fontSize: 12, color: theme.danger }}>Sketch no longer exists.</p>;
 
+  if (segmentIndex !== undefined && sketch.segments[segmentIndex]) {
+    return (
+      <SketchSegmentProperties
+        sketchId={sketchId}
+        segmentIndex={segmentIndex}
+        sketch={sketch}
+        sketchLayer={sketchLayer}
+        onDelete={onDelete}
+      />
+    );
+  }
+
   const bothAttached = Boolean(sketch.fromAttachment && sketch.toAttachment);
+  const isMultiSegment = sketch.segments.length > 1;
 
   function describeEnd(attachment: { nodeId: string; anchorIndex: number } | null | undefined): string {
     if (!attachment) return 'not attached — a floating planning point';
@@ -845,19 +941,48 @@ function SketchProperties({
 
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Sketch</div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+        Sketch{isMultiSegment ? ` — ${sketch.segments.length} segments` : ''}
+      </div>
       <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
         A planning guide — no simulation meaning until converted. Start or end a sketch drag right on a node's port
         dot to pin that end to it.
       </p>
+      {isMultiSegment && (
+        <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginTop: 6 }}>
+          Click a segment on the canvas to edit its own curve (or convert it to an arc).
+        </p>
+      )}
 
       <div style={sectionTitleStyle}>Attachments</div>
-      <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginBottom: 4 }}>
-        Start: {describeEnd(sketch.fromAttachment)}
-      </p>
-      <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginBottom: 10 }}>
-        End: {describeEnd(sketch.toAttachment)}
-      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, flex: 1, margin: 0 }}>
+          Start: {describeEnd(sketch.fromAttachment)}
+        </p>
+        {!sketch.fromAttachment && (
+          <button
+            type="button"
+            onClick={() => onPinSketchEnd(sketchId, 'from')}
+            style={{ ...smallButtonStyle, flexShrink: 0 }}
+          >
+            Pin
+          </button>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, flex: 1, margin: 0 }}>
+          End: {describeEnd(sketch.toAttachment)}
+        </p>
+        {!sketch.toAttachment && (
+          <button
+            type="button"
+            onClick={() => onPinSketchEnd(sketchId, 'to')}
+            style={{ ...smallButtonStyle, flexShrink: 0 }}
+          >
+            Pin
+          </button>
+        )}
+      </div>
 
       {bothAttached ? (
         <>
@@ -897,6 +1022,133 @@ function SketchProperties({
   );
 }
 
+/** Falcon, 2026-09-05 ("then the middle path was converted to arc/
+ * curve path"): the drilled-into view for ONE segment of a multi-
+ * segment sketch — a scoped-down mirror of PathShapeField's Linear/
+ * Curve control, but writing to SketchLayer's own per-segment bow
+ * instead of FloorLayout (sketches carry no GraphModel meaning at
+ * all, multi-segment ones doubly so — see the "can't convert yet"
+ * note one level up). Deliberately NOT tangent-continuous with its
+ * neighboring segments (Falcon, 2026-09-05: that's explicitly a LATER
+ * idea) — converting this one leg to an arc never reshapes the
+ * others. */
+function SketchSegmentProperties({
+  sketchId,
+  segmentIndex,
+  sketch,
+  sketchLayer,
+  onDelete,
+}: {
+  sketchId: string;
+  segmentIndex: number;
+  sketch: Sketch;
+  sketchLayer: SketchLayer;
+  onDelete: () => void;
+}) {
+  const initialBow = sketch.segments[segmentIndex]!.bow;
+  // Falcon, 2026-09-05 ("whenever i try to replace or try to reduce
+  // the value... whenever it hits zero its gets reset to linear
+  // type... adds so much friction"): segmentType used to be DERIVED
+  // straight from bow===0, so any transient zero while editing --
+  // clearing the box to retype, or just passing through 0 on the way
+  // to a negative number -- yanked the dropdown back to Linear and
+  // unmounted this very input mid-keystroke. It's now its own state,
+  // flipped only by the dropdown itself (or, deliberately, by
+  // actually settling on 0 -- see handleBowBlur, which keeps the
+  // original "typing 0 IS Linear" intent, just applied once the user
+  // is done typing instead of on every keystroke). bowText is a
+  // separate raw-text buffer for the same reason: "-", ".", or an
+  // emptied box are all valid, unfinished states a real number can't
+  // represent, and committing Number(text) straight into the model on
+  // every keystroke (the old behavior) could and did write NaN into a
+  // segment's bow the instant one of those was typed.
+  const [bow, setBow] = useState(initialBow);
+  const [bowText, setBowText] = useState(String(initialBow));
+  const [segmentType, setSegmentType] = useState<'linear' | 'curve'>(initialBow === 0 ? 'linear' : 'curve');
+
+  function commitBow(nextBow: number): void {
+    setBow(nextBow);
+    const segments = sketch.segments.map((seg, i) => (i === segmentIndex ? { bow: nextBow } : seg));
+    sketchLayer.update(sketchId, { segments });
+  }
+
+  function handleTypeChange(nextType: 'linear' | 'curve'): void {
+    setSegmentType(nextType);
+    const nextBow = nextType === 'linear' ? 0 : INITIAL_CURVE_BOW;
+    setBowText(String(nextBow));
+    commitBow(nextBow);
+  }
+
+  function handleBowTextChange(text: string): void {
+    setBowText(text);
+    const parsed = Number(text);
+    if (text.trim() !== '' && Number.isFinite(parsed)) {
+      commitBow(parsed);
+    }
+  }
+
+  function handleBowBlur(): void {
+    const parsed = Number(bowText);
+    if (bowText.trim() === '' || !Number.isFinite(parsed)) {
+      // Left it mid-edit (just "-", or emptied) -- snap the text back
+      // to whatever's actually committed rather than leaving a
+      // broken-looking field.
+      setBowText(String(bow));
+      return;
+    }
+    if (parsed === 0) {
+      setSegmentType('linear');
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+        Segment {segmentIndex + 1} of {sketch.segments.length}
+      </div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5, marginBottom: 10 }}>
+        One leg of this sketch — purely visual, same as the sketch as a whole. Changing its shape doesn't affect its
+        neighbors.
+      </p>
+
+      <div style={sectionTitleStyle}>Shape</div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Segment type</label>
+        <select
+          value={segmentType}
+          style={inputStyle}
+          onChange={(e) => handleTypeChange(e.target.value as 'linear' | 'curve')}
+        >
+          <option value="linear">Linear (straight)</option>
+          <option value="curve">Curve (arc)</option>
+        </select>
+      </div>
+      {segmentType === 'curve' && (
+        <div style={rowStyle}>
+          <label style={labelStyle}>Curvature</label>
+          <input
+            type="number"
+            step={0.05}
+            value={bowText}
+            style={inputStyle}
+            onChange={(e) => handleBowTextChange(e.target.value)}
+            onBlur={handleBowBlur}
+          />
+        </div>
+      )}
+
+      <div style={sectionTitleStyle}>Danger zone</div>
+      <button
+        type="button"
+        onClick={onDelete}
+        style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
+      >
+        Delete whole sketch
+      </button>
+    </div>
+  );
+}
+
 function EdgeProperties({
   edgeId,
   graph,
@@ -913,6 +1165,17 @@ function EdgeProperties({
   const edge = graph.getEdge(edgeId);
   if (!edge) return <p style={{ fontSize: 12, color: theme.danger }}>Edge no longer exists.</p>;
 
+  // Falcon, 2026-09-05 ("one continuous path... treating it as simple
+  // paths connected as one"): an edge converted from a multi-segment
+  // sketch carries a real shape (FloorLayout.getEdgeInteriorPoints),
+  // not just a single bow -- PathShapeField's Linear/Curve dropdown
+  // only ever edits that single bow, so showing it here would look
+  // like it does something and silently do nothing. Read-only info
+  // instead for now; per-leg editing (mirroring SketchSegmentProperties)
+  // is a natural follow-up, not required for the path to actually work.
+  const interiorPoints = floorLayout.getEdgeInteriorPoints(edgeId);
+  const isMultiSegmentPath = Boolean(interiorPoints && interiorPoints.length > 0);
+
   return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Edge</div>
@@ -924,7 +1187,14 @@ function EdgeProperties({
       <EdgeLogicFields edge={edge} graph={graph} floorLayout={floorLayout} />
 
       <div style={sectionTitleStyle}>Path shape (design doc §5.1)</div>
-      <PathShapeField edgeId={edgeId} floorLayout={floorLayout} />
+      {isMultiSegmentPath ? (
+        <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5 }}>
+          Multi-segment path — {(interiorPoints?.length ?? 0) + 1} legs, converted from a sketch shape. Per-leg
+          curvature editing isn't available here yet.
+        </p>
+      ) : (
+        <PathShapeField edgeId={edgeId} floorLayout={floorLayout} />
+      )}
 
       <div style={sectionTitleStyle}>Skin (design doc §5.2, §5.3)</div>
       <EdgeSkinFields edgeId={edgeId} skinConfig={skinConfig} />
@@ -945,31 +1215,101 @@ function EdgeProperties({
  * (straight line) and curve type") — a floor-layer geometry choice
  * (design doc §5.1's curveBetween `bow` parameter), not a skin
  * concern: bow=0 is a dead-straight line, any other value ("curve")
- * is the gentle bend paths have always rendered with. Restoring
- * "curve" uses curveBetween's own 0.15 cosmetic default rather than
- * remembering whatever custom bow a path had before — there's no UI
- * for arbitrary bow amounts yet, just the two named types Falcon
- * asked for. */
+ * is a bend of that exact magnitude/direction. Picking "Curve" from
+ * the dropdown starts a fresh curve at INITIAL_CURVE_BOW (a visibly-
+ * curved starting point — bow=0 would render identically to Linear,
+ * defeating the point of picking Curve at all) rather than
+ * remembering whatever custom bow a path had before switching away
+ * from Curve and back.
+ *
+ * Falcon, 2026-09-05: "for curve paths i now want radius option on
+ * its properties to adjust its curvature" — the numeric field below
+ * (shown only once Curve is selected) exposes that SAME bow value
+ * directly for fine control, rather than being locked to the one
+ * fixed starting magnitude. Deliberately labeled "Curvature", not
+ * "Radius" — this is the existing bow fraction (design doc §5.1: "a
+ * fraction of the direct distance, offset perpendicular to it"), not
+ * a literal geometric arc radius (today's curves are cubic beziers,
+ * not circular arcs, so there's no single radius that describes one
+ * exactly). Typing 0 here is equivalent to picking "Linear" again —
+ * the dropdown above reflects that on the very next render, same as
+ * it always has (pathType is DERIVED from bow, not tracked
+ * separately). */
+const INITIAL_CURVE_BOW = 0.15;
+
 function PathShapeField({ edgeId, floorLayout }: { edgeId: string; floorLayout: FloorLayout }) {
-  const [bow, setBow] = useState(floorLayout.getEdgeBow(edgeId));
-  const pathType = bow === 0 ? 'linear' : 'curve';
+  const initialBow = floorLayout.getEdgeBow(edgeId);
+  // Falcon, 2026-09-05: same friction fix as SketchSegmentProperties
+  // (identical bow/INITIAL_CURVE_BOW pattern) -- pathType is its own
+  // state now, flipped by the dropdown or by actually settling on 0
+  // on blur, not by every transient value the number input passes
+  // through while typing (e.g. clearing the box to type a negative
+  // curvature used to bounce straight back to "Linear" and hide this
+  // very field). bowText is a raw-text buffer so "-", ".", or an
+  // emptied box can exist on screen without writing NaN into the
+  // edge's bow.
+  const [bow, setBow] = useState(initialBow);
+  const [bowText, setBowText] = useState(String(initialBow));
+  const [pathType, setPathType] = useState<'linear' | 'curve'>(initialBow === 0 ? 'linear' : 'curve');
+
+  function commitBow(nextBow: number): void {
+    setBow(nextBow);
+    floorLayout.setEdgeBow(edgeId, nextBow);
+  }
+
+  function handleTypeChange(nextType: 'linear' | 'curve'): void {
+    setPathType(nextType);
+    const nextBow = nextType === 'linear' ? 0 : INITIAL_CURVE_BOW;
+    setBowText(String(nextBow));
+    commitBow(nextBow);
+  }
+
+  function handleBowTextChange(text: string): void {
+    setBowText(text);
+    const parsed = Number(text);
+    if (text.trim() !== '' && Number.isFinite(parsed)) {
+      commitBow(parsed);
+    }
+  }
+
+  function handleBowBlur(): void {
+    const parsed = Number(bowText);
+    if (bowText.trim() === '' || !Number.isFinite(parsed)) {
+      setBowText(String(bow));
+      return;
+    }
+    if (parsed === 0) {
+      setPathType('linear');
+    }
+  }
 
   return (
-    <div style={rowStyle}>
-      <label style={labelStyle}>Path type</label>
-      <select
-        value={pathType}
-        style={inputStyle}
-        onChange={(e) => {
-          const nextBow = e.target.value === 'linear' ? 0 : 0.15;
-          setBow(nextBow);
-          floorLayout.setEdgeBow(edgeId, nextBow);
-        }}
-      >
-        <option value="linear">Linear (straight)</option>
-        <option value="curve">Curve</option>
-      </select>
-    </div>
+    <>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Path type</label>
+        <select
+          value={pathType}
+          style={inputStyle}
+          onChange={(e) => handleTypeChange(e.target.value as 'linear' | 'curve')}
+        >
+          <option value="linear">Linear (straight)</option>
+          <option value="curve">Curve</option>
+        </select>
+      </div>
+      {pathType === 'curve' && (
+        <div style={rowStyle}>
+          <label style={labelStyle}>Curvature</label>
+          <input
+            type="number"
+            step={0.05}
+            value={bowText}
+            style={inputStyle}
+            onChange={(e) => handleBowTextChange(e.target.value)}
+            onBlur={handleBowBlur}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1005,9 +1345,28 @@ function EdgeLogicFields({
   const [targetPort, setTargetPort] = useState(edge.targetPort);
   const [flowRate, setFlowRate] = useState(edge.flowRate);
   const [active, setActive] = useState(edge.active);
+  const [speedLocked, setSpeedLocked] = useState(edge.speedLocked ?? false);
 
   const pathLength = floorLayout.getEdgeCurve(edge.id)?.totalLength ?? 0;
   const [speed, setSpeed] = useState(flowRate * pathLength);
+
+  // Falcon, 2026-09-05 ("Option D"): App.tsx's own poll keeps
+  // rewriting this edge's flowRate in the background while it's
+  // locked, any time the path's length changes elsewhere (dragging a
+  // node, adjusting curvature) -- this mirrors that same resync here
+  // so the fields stay visibly accurate without needing to reselect
+  // the path.
+  useEffect(() => {
+    if (!speedLocked) return;
+    const id = window.setInterval(() => {
+      const current = graph.getEdge(edge.id);
+      if (!current) return;
+      const currentLength = floorLayout.getEdgeCurve(edge.id)?.totalLength ?? 0;
+      setFlowRate(current.flowRate);
+      setSpeed(current.flowRate * currentLength);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [speedLocked, edge.id, graph, floorLayout]);
 
   return (
     <>
@@ -1055,10 +1414,26 @@ function EdgeLogicFields({
               const nextFlowRate = v / pathLength;
               setFlowRate(nextFlowRate);
               graph.setEdgeFlowRate(edge.id, nextFlowRate);
+              if (speedLocked) graph.setEdgeSpeedLock(edge.id, true, v);
             }
           }}
         />
       </div>
+      <label
+        style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: -4 }}
+      >
+        <input
+          type="checkbox"
+          checked={speedLocked}
+          disabled={pathLength <= 0}
+          onChange={(e) => {
+            const locked = e.target.checked;
+            setSpeedLocked(locked);
+            graph.setEdgeSpeedLock(edge.id, locked, locked ? speed : undefined);
+          }}
+        />
+        Lock apparent speed
+      </label>
       <div style={rowStyle}>
         <label style={labelStyle}>Flow rate (progress / logic-second)</label>
         <input
@@ -1072,13 +1447,14 @@ function EdgeLogicFields({
             setFlowRate(v);
             setSpeed(v * pathLength);
             graph.setEdgeFlowRate(edge.id, v);
+            if (speedLocked && pathLength > 0) graph.setEdgeSpeedLock(edge.id, true, v * pathLength);
           }}
         />
       </div>
       <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
-        Speed is converted to flow rate using this path's current length —
-        if you drag a connected node afterward, the path's length changes
-        but flow rate doesn't auto-adjust, so re-enter speed to keep it pinned.
+        {speedLocked
+          ? "This path's speed stays pinned as it's resized \u2014 flow rate above is kept in sync automatically."
+          : "Speed is converted to flow rate using this path's current length \u2014 if you drag a connected node afterward, the path's length changes but flow rate doesn't auto-adjust, so re-enter speed to keep it pinned (or turn on Lock apparent speed above)."}
       </div>
       <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
         <input

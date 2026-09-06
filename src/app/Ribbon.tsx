@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { NodeKind } from '../core/types';
 import { nodeSkinDefaults } from '../skin/nodeSkin';
 import { octagonVertices, traceClosedPath } from '../skin/octagon';
 import type { EdgeStyle } from '../skin/pathSkin';
+import type { SketchStyle } from './FluxCanvas';
 import { hexWithAlpha } from '../skin/canvasUtil';
 import {
   theme,
@@ -25,6 +27,17 @@ const QUICK_SELECT_OPTIONS: { kind: QuickSelectKind; label: string }[] = [
   { kind: 'nodes', label: 'Nodes only' },
   { kind: 'paths', label: 'Paths only' },
   { kind: 'sketches', label: 'Sketches only' },
+];
+
+/** Sketch's own hover flyout (2026-09-05, Falcon: "there is no way to
+ * end the continious lines... proposing a path style... 'single
+ * path','polypath','3-point-arc path'"). Mirrors Multi-select's
+ * QUICK_SELECT_OPTIONS above -- same flyout pattern, different menu.
+ * 3-point-arc path was proposed alongside these but explicitly
+ * deferred by Falcon as the challenging one; not listed here yet. */
+const SKETCH_STYLE_OPTIONS: { style: SketchStyle; label: string; hint: string }[] = [
+  { style: 'single', label: 'Single path', hint: 'One drag = one segment, finishes on release' },
+  { style: 'polypath', label: 'Polypath', hint: 'Click to place each point, double-click/Enter to finish' },
 ];
 
 const NODE_KINDS: NodeKind[] = ['source', 'distributor', 'merger', 'sorter', 'mixer', 'buffer', 'sink'];
@@ -56,6 +69,15 @@ interface RibbonProps {
    * function the project-switch/create flow already calls before
    * swapping projects. */
   onSaveNow: () => void;
+  /** Undo/redo (Falcon, 2026-09-05: "i want to activate the undo and
+   * redo features also") — full-project-snapshot history, App.tsx
+   * owns the stack; these QAT icons are its only UI (Ctrl+Z/Ctrl+Y
+   * also work, wired at the window level in App.tsx). Disabled
+   * exactly when there's nothing to undo/redo. */
+  canUndo: boolean;
+  onUndo: () => void;
+  canRedo: boolean;
+  onRedo: () => void;
 
   activeTab: RibbonTab;
   onTabChange: (tab: RibbonTab) => void;
@@ -66,6 +88,8 @@ interface RibbonProps {
   onArmEdgeStyle: (style: EdgeStyle | null) => void;
   sketchArmed: boolean;
   onArmSketch: (armed: boolean) => void;
+  sketchStyle: SketchStyle;
+  onSketchStyleChange: (style: SketchStyle) => void;
   /** FBP014 (2026-09-05): marquee-drag + click-to-toggle multi
    * selection — mirrors sketchArmed's arm-then-act flow. */
   multiSelectArmed: boolean;
@@ -123,6 +147,10 @@ interface RibbonProps {
 export function Ribbon({
   projectName,
   onSaveNow,
+  canUndo,
+  onUndo,
+  canRedo,
+  onRedo,
   activeTab,
   onTabChange,
   armedKind,
@@ -131,6 +159,8 @@ export function Ribbon({
   onArmEdgeStyle,
   sketchArmed,
   onArmSketch,
+  sketchStyle,
+  onSketchStyleChange,
   multiSelectArmed,
   onArmMultiSelect,
   panArmed,
@@ -151,9 +181,33 @@ export function Ribbon({
   onCanvasBackgroundChange,
 }: RibbonProps) {
   // Multi-select's hover flyout (2026-09-05) — open while the mouse is
-  // over the button OR the flyout itself, since both live inside the
-  // same position:relative wrapper below.
+  // over the button OR the flyout itself. Rendered via a portal into
+  // document.body (below) so it floats free of the ribbon row's
+  // overflow-x scroll container — setting overflow-x to anything but
+  // `visible` silently makes overflow-y `auto` too (one axis can't stay
+  // `visible` while the other doesn't), which was clipping this flyout
+  // and forcing a scroll of the whole row to see it in full. Any future
+  // ribbon dropdown should follow the same anchor-ref + portal pattern.
+  const quickSelectAnchorRef = useRef<HTMLDivElement>(null);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+  const [quickSelectPos, setQuickSelectPos] = useState<{ top: number; left: number } | null>(null);
+  const openQuickSelect = () => {
+    const rect = quickSelectAnchorRef.current?.getBoundingClientRect();
+    if (rect) setQuickSelectPos({ top: rect.bottom + 2, left: rect.left });
+    setQuickSelectOpen(true);
+  };
+
+  // Sketch style's own hover flyout -- identical shape to Multi-
+  // select's above, just a second anchor/open/pos triple for the
+  // Sketch tool button instead.
+  const sketchStyleAnchorRef = useRef<HTMLDivElement>(null);
+  const [sketchStyleOpen, setSketchStyleOpen] = useState(false);
+  const [sketchStylePos, setSketchStylePos] = useState<{ top: number; left: number } | null>(null);
+  const openSketchStyle = () => {
+    const rect = sketchStyleAnchorRef.current?.getBoundingClientRect();
+    if (rect) setSketchStylePos({ top: rect.bottom + 2, left: rect.left });
+    setSketchStyleOpen(true);
+  };
 
   return (
     <div style={{ flexShrink: 0, background: theme.bgPanel, borderBottom: `1px solid ${theme.border}` }}>
@@ -169,8 +223,18 @@ export function Ribbon({
           <QatIconButton title="Save now" onClick={onSaveNow} icon={<SaveIcon />} />
           <QatIconButton title="Export — coming soon" disabled icon={<ExportIcon />} />
           <span style={{ width: 1, height: 16, background: theme.borderSoft, margin: '0 4px' }} />
-          <QatIconButton title="Undo — coming soon" disabled icon={<UndoIcon />} />
-          <QatIconButton title="Redo — coming soon" disabled icon={<RedoIcon />} />
+          <QatIconButton
+            title={canUndo ? 'Undo (Ctrl+Z)' : 'Nothing to undo'}
+            disabled={!canUndo}
+            onClick={onUndo}
+            icon={<UndoIcon />}
+          />
+          <QatIconButton
+            title={canRedo ? 'Redo (Ctrl+Y)' : 'Nothing to redo'}
+            disabled={!canRedo}
+            onClick={onRedo}
+            icon={<RedoIcon />}
+          />
         </div>
         <div style={{ fontSize: 13, fontWeight: 700, color: theme.text1, letterSpacing: 0.2, textAlign: 'center' }}>
           FluxBoard{projectName ? ` — ${projectName}` : ''}
@@ -184,7 +248,7 @@ export function Ribbon({
           </button>
         ))}
       </div>
-      <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 84, padding: '6px 10px', overflowX: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 84, padding: '6px 10px', overflowX: 'auto', overflowY: 'visible' }}>
         {activeTab === 'home' && (
           <>
             <RibbonGroup title="Nodes">
@@ -211,14 +275,50 @@ export function Ribbon({
                     onClick={() => onArmEdgeStyle(armedEdgeStyle === style ? null : style)}
                   />
                 ))}
-                <RibbonIconButton
-                  label="Sketch"
-                  title="Sketch a planning path — drag anywhere on the canvas, no simulation meaning"
-                  active={sketchArmed}
-                  activeColor={theme.sketch}
-                  onClick={() => onArmSketch(!sketchArmed)}
-                  icon={<SketchIcon />}
-                />
+                <div
+                  ref={sketchStyleAnchorRef}
+                  onMouseEnter={openSketchStyle}
+                  onMouseLeave={() => setSketchStyleOpen(false)}
+                >
+                  <RibbonIconButton
+                    label="Sketch"
+                    title={`Sketch a planning path — drag anywhere on the canvas, no simulation meaning (style: ${
+                      SKETCH_STYLE_OPTIONS.find((o) => o.style === sketchStyle)?.label ?? 'Single path'
+                    }; hover for more)`}
+                    active={sketchArmed}
+                    activeColor={theme.sketch}
+                    onClick={() => onArmSketch(!sketchArmed)}
+                    icon={<SketchIcon />}
+                  />
+                  {sketchStyleOpen &&
+                    sketchStylePos &&
+                    createPortal(
+                      <div
+                        style={{ ...quickSelectMenuStyle, top: sketchStylePos.top, left: sketchStylePos.left, minWidth: 210 }}
+                        onMouseEnter={openSketchStyle}
+                        onMouseLeave={() => setSketchStyleOpen(false)}
+                      >
+                        {SKETCH_STYLE_OPTIONS.map(({ style, label, hint }) => (
+                          <button
+                            key={style}
+                            type="button"
+                            onClick={() => {
+                              onSketchStyleChange(style);
+                              setSketchStyleOpen(false);
+                            }}
+                            style={{
+                              ...quickSelectItemStyle,
+                              background: sketchStyle === style ? theme.bgPanel2 : 'transparent',
+                            }}
+                          >
+                            <div>{label}</div>
+                            <div style={{ fontSize: 10, fontWeight: 400, color: theme.text3, marginTop: 1 }}>{hint}</div>
+                          </button>
+                        ))}
+                      </div>,
+                      document.body,
+                    )}
+                </div>
               </div>
             </RibbonGroup>
             <RibbonGroup title="Objects">
@@ -242,8 +342,8 @@ export function Ribbon({
                   dangerous
                 />
                 <div
-                  style={{ position: 'relative' }}
-                  onMouseEnter={() => setQuickSelectOpen(true)}
+                  ref={quickSelectAnchorRef}
+                  onMouseEnter={openQuickSelect}
                   onMouseLeave={() => setQuickSelectOpen(false)}
                 >
                   <RibbonIconButton
@@ -253,23 +353,30 @@ export function Ribbon({
                     onClick={() => onArmMultiSelect(!multiSelectArmed)}
                     icon={<MultiSelectIcon />}
                   />
-                  {quickSelectOpen && (
-                    <div style={quickSelectMenuStyle}>
-                      {QUICK_SELECT_OPTIONS.map(({ kind, label }) => (
-                        <button
-                          key={kind}
-                          type="button"
-                          onClick={() => {
-                            onQuickSelect(kind);
-                            setQuickSelectOpen(false);
-                          }}
-                          style={quickSelectItemStyle}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  {quickSelectOpen &&
+                    quickSelectPos &&
+                    createPortal(
+                      <div
+                        style={{ ...quickSelectMenuStyle, top: quickSelectPos.top, left: quickSelectPos.left }}
+                        onMouseEnter={openQuickSelect}
+                        onMouseLeave={() => setQuickSelectOpen(false)}
+                      >
+                        {QUICK_SELECT_OPTIONS.map(({ kind, label }) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => {
+                              onQuickSelect(kind);
+                              setQuickSelectOpen(false);
+                            }}
+                            style={quickSelectItemStyle}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>,
+                      document.body,
+                    )}
                 </div>
                 <RibbonIconButton
                   label="Duplicate"
@@ -728,13 +835,11 @@ const swatchLabelStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-// Multi-select's hover flyout (2026-09-05) — a small dropdown anchored
-// below the button via the wrapper's position:relative.
+// Multi-select's hover flyout (2026-09-05) — a small dropdown portaled
+// into document.body, positioned via the anchor's live getBoundingClientRect
+// (top/left set at render time, see the wrapper above).
 const quickSelectMenuStyle: CSSProperties = {
-  position: 'absolute',
-  top: '100%',
-  left: 0,
-  marginTop: 2,
+  position: 'fixed',
   zIndex: 20,
   minWidth: 130,
   display: 'flex',

@@ -1,4 +1,4 @@
-import type { BezierPath } from '../floor/bezier';
+import type { EdgePath } from '../floor/bezier';
 import type { Point } from '../floor/bezier';
 import type { Camera, Viewport } from '../floor/camera';
 import { hexWithAlpha } from './canvasUtil';
@@ -38,7 +38,7 @@ export const defaultEdgeSkin: EdgeSkin = {
 
 function strokeCurve(
   ctx: CanvasRenderingContext2D,
-  curve: BezierPath,
+  curve: EdgePath,
   camera: Camera,
   viewport: Viewport,
   lineWidth: number,
@@ -65,7 +65,7 @@ function strokeCurve(
  * not along it. */
 function strokeCurveOffset(
   ctx: CanvasRenderingContext2D,
-  curve: BezierPath,
+  curve: EdgePath,
   camera: Camera,
   viewport: Viewport,
   offset: number,
@@ -99,7 +99,7 @@ function strokeCurveOffset(
  * with the items riding the belt. */
 function drawConveyorTicks(
   ctx: CanvasRenderingContext2D,
-  curve: BezierPath,
+  curve: EdgePath,
   camera: Camera,
   viewport: Viewport,
   skin: EdgeSkin,
@@ -137,7 +137,7 @@ function drawConveyorTicks(
  */
 export function drawPathUnder(
   ctx: CanvasRenderingContext2D,
-  curve: BezierPath,
+  curve: EdgePath,
   camera: Camera,
   viewport: Viewport,
   skin: EdgeSkin,
@@ -168,7 +168,7 @@ export function drawPathUnder(
  */
 export function drawPathOver(
   ctx: CanvasRenderingContext2D,
-  curve: BezierPath,
+  curve: EdgePath,
   camera: Camera,
   viewport: Viewport,
   skin: EdgeSkin,
@@ -190,7 +190,7 @@ export function drawPathOver(
  * meaning of its own. */
 export function drawCurveSelectionHighlight(
   ctx: CanvasRenderingContext2D,
-  curve: BezierPath,
+  curve: EdgePath,
   camera: Camera,
   viewport: Viewport,
 ): void {
@@ -206,7 +206,7 @@ export function drawCurveSelectionHighlight(
  * direction — no separate "reverse" state to keep in sync. */
 export function drawPathDirectionArrow(
   ctx: CanvasRenderingContext2D,
-  curve: BezierPath,
+  curve: EdgePath,
   camera: Camera,
   viewport: Viewport,
 ): void {
@@ -234,7 +234,7 @@ export function drawPathDirectionArrow(
  * orientation mode (design doc §5.3). */
 export function getItemRotation(
   mode: ItemOrientationMode,
-  curve: BezierPath,
+  curve: EdgePath,
   progress: number,
   elapsedMs: number,
   spinSpeed: number,

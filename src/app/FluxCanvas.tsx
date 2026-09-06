@@ -5,7 +5,7 @@ import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
 import type { EdgeDef, EdgeId, NodeDef, NodeId, NodeKind } from '../core/types';
-import type { Point } from '../floor/bezier';
+import { curveBetween, BezierPath, type Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { ObjectRegistry } from '../skin/ObjectRegistry';
 import { darkenHex } from '../skin/canvasUtil';
@@ -21,8 +21,22 @@ import {
 } from '../skin/pathSkin';
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
-import { SketchLayer, type Sketch, type SketchAttachment } from './sketchLayer';
+import { SketchLayer, type SketchAttachment, type SketchSegment } from './sketchLayer';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
+
+/** Falcon, 2026-09-05 ("no way to end the continuous lines... so im
+ * proposing a path style... 'single path','polypath'"): which gesture
+ * an armed Sketch tool uses. 'single' is the original one-continuous-
+ * drag-equals-one-segment behavior (auto-completes on release, no
+ * explicit end gesture) -- the sensible default, since requiring a
+ * double-click/Enter to finish even a simple one-segment sketch was
+ * the regression Falcon hit. 'polypath' is the click-to-place chain
+ * gesture built for genuinely multi-segment sketches (double-click/
+ * Enter/Escape to finish -- see finalizeSketchChain/cancelSketchChain).
+ * A third 'arc' mode (three clicks as an arc's tangent points) was
+ * proposed alongside these but explicitly deferred by Falcon as the
+ * challenging one -- not implemented here. */
+export type SketchStyle = 'single' | 'polypath';
 
 interface FluxCanvasProps {
   graph: GraphModel;
@@ -54,11 +68,18 @@ interface FluxCanvasProps {
    * auto-picking the nearest free one, and rejects the connection
    * outright if that specific dot turns out to be taken. A body drop
    * with no precise dot under the cursor omits the corresponding
-   * field, falling back to today's auto-pick behavior. */
+   * field, falling back to today's auto-pick behavior. The optional
+   * 4th argument (Falcon, 2026-09-05: "I want to draw the selected
+   * path directly ... no need to draw or sketch first") is set only
+   * by the new armed-style drag-to-create gesture below — App.tsx
+   * applies it to the new edge's skin in the same call, and omitting
+   * it (a plain Shift+drag with nothing armed) leaves the edge at its
+   * default style, unchanged from before. */
   onCreateEdge: (
     sourceNodeId: NodeId,
     targetNodeId: NodeId,
     explicitAnchors?: { sourceAnchor?: number; targetAnchor?: number },
+    style?: EdgeStyle,
   ) => void;
   /** Falcon, 2026-09-05 ("a rejected connection... fails
    * completely silently"): fires with a short human-readable
@@ -100,13 +121,17 @@ interface FluxCanvasProps {
    * 2026-09-05: either end now snaps onto a real port when the drag
    * starts or ends near one — see onCreateSketch below. */
   sketchArmed: boolean;
+  /** See SketchStyle above. Defaults to 'single' at the call site
+   * (App.tsx) so a project that predates this toggle keeps the old
+   * one-drag behavior with no code changes needed. */
+  sketchStyle: SketchStyle;
   /** Falcon, 2026-09-05: a sketch can pin either end to a real node's
    * port (fromAttachment/toAttachment, null/omitted for a floating
    * point) — App.tsx books the anchor in FloorLayout's shared
    * reservation pool so the sketch genuinely holds that port. */
   onCreateSketch: (
-    from: Point,
-    to: Point,
+    points: Point[],
+    segments: SketchSegment[],
     fromAttachment?: SketchAttachment | null,
     toAttachment?: SketchAttachment | null,
   ) => void;
@@ -121,6 +146,16 @@ interface FluxCanvasProps {
    * of its members moves the whole group together -- that part
    * works whether or not this is still armed. */
   multiSelectArmed: boolean;
+  /** Which kind the armed Multi-select tool's marquee (and, for
+   * 'nodes'/'all', click-to-toggle) is scoped to (Falcon, 2026-09-05:
+   * "the multiselect is the selection base on the highlighted area or
+   * selected area" -- every ribbon quick-select pick, including
+   * "Select all", arms this tool rather than grabbing everything of
+   * that kind project-wide; 'all' just means no kind restriction on
+   * the box). A box that also crosses a node while this is 'paths',
+   * say, simply ignores that node -- only the active kind(s) join
+   * the selection. */
+  quickSelectFilter: 'all' | 'nodes' | 'paths' | 'sketches';
   /** FBP014 (2026-09-05): while armed, EVERY drag pans the camera
    * regardless of what's under the cursor -- unlike the free empty-
    * canvas pan that's always available, this lets a drag that starts
@@ -154,6 +189,23 @@ const EDGE_HIT_TOLERANCE_PX = 12;
  * for new paths/sketches (Falcon, 2026-09-05). Kept in screen space
  * so the snap feels the same size at any zoom level. */
 const PORT_SNAP_RADIUS_PX = 14;
+/** Falcon, 2026-09-05 ("there is no way i can snap a sketch to a
+ * node's port"): sketches get a more generous snap radius than
+ * wires/style-drawn paths -- there's no live GraphModel edge at
+ * stake if a sketch misses (PropertiesPanel's per-end "Pin" button
+ * covers a miss anyway), so it's worth trading a little precision
+ * for it being noticeably easier to actually land a snap while
+ * sketching. */
+const SKETCH_PORT_SNAP_RADIUS_PX = 22;
+/** Falcon, 2026-09-05 ("Click to place each point... double-click...
+ * to finish the chain"): two clicks land inside this window (ms) AND
+ * within CLICK_MOVE_THRESHOLD_PX*2 of each other to count as a
+ * double-click that FINISHES a multi-segment sketch chain, instead of
+ * committing a redundant extra waypoint on top of the last one.
+ * Detected manually (not via the browser's native 'dblclick') so the
+ * would-be-redundant second point never gets committed in the first
+ * place. */
+const SKETCH_DOUBLE_CLICK_MS = 400;
 /** Endpoint-dot colors for a live wire/sketch drag preview (Falcon,
  * 2026-09-05: red at the fixed origin/outgoing end, green at the
  * moving head/incoming end). Previously shared with a per-node port-
@@ -201,8 +253,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     onRunningChange,
     sketchLayer,
     sketchArmed,
+    sketchStyle,
     onCreateSketch,
     multiSelectArmed,
+    quickSelectFilter,
     panArmed,
     canvasBackground = 'white',
     onCursorWorldPositionChange,
@@ -240,10 +294,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   onRunningChangeRef.current = onRunningChange;
   const sketchArmedRef = useRef(sketchArmed);
   sketchArmedRef.current = sketchArmed;
+  const sketchStyleRef = useRef(sketchStyle);
+  sketchStyleRef.current = sketchStyle;
   const onCreateSketchRef = useRef(onCreateSketch);
   onCreateSketchRef.current = onCreateSketch;
   const multiSelectArmedRef = useRef(multiSelectArmed);
   multiSelectArmedRef.current = multiSelectArmed;
+  const quickSelectFilterRef = useRef(quickSelectFilter);
+  quickSelectFilterRef.current = quickSelectFilter;
   const panArmedRef = useRef(panArmed);
   panArmedRef.current = panArmed;
   const canvasBackgroundRef = useRef(canvasBackground);
@@ -366,20 +424,25 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       return undefined;
     }
 
-    /** Closest-point-on-segment distance test — sketches are plain
-     * straight lines (no bezier machinery needed, unlike hitTestEdge
-     * above). */
-    function hitTestSketch(worldPoint: Point): string | undefined {
+    /** Falcon, 2026-09-05 ("l3 connected non linear paths"): every
+     * segment -- straight (bow 0) or bowed -- is sampled the same way
+     * a real edge's own curve already is (BezierPath), rather than
+     * needing two separate code paths for straight vs curved. Also
+     * returns WHICH segment was hit -- clicking a specific leg of an
+     * already-selected multi-segment sketch drills into just that one
+     * (see onPointerUp / PropertiesPanel). */
+    function hitTestSketch(worldPoint: Point): { id: string; segmentIndex: number } | undefined {
       const toleranceWorld = EDGE_HIT_TOLERANCE_PX / camera.zoom;
+      const samples = 24;
       for (const sketch of sketchLayer.getAll()) {
-        const dx = sketch.to.x - sketch.from.x;
-        const dy = sketch.to.y - sketch.from.y;
-        const lengthSq = dx * dx + dy * dy;
-        let t = lengthSq === 0 ? 0 : ((worldPoint.x - sketch.from.x) * dx + (worldPoint.y - sketch.from.y) * dy) / lengthSq;
-        t = Math.max(0, Math.min(1, t));
-        const closest = { x: sketch.from.x + t * dx, y: sketch.from.y + t * dy };
-        const dist = Math.hypot(closest.x - worldPoint.x, closest.y - worldPoint.y);
-        if (dist <= toleranceWorld) return sketch.id;
+        for (let s = 0; s < sketch.segments.length; s++) {
+          const curve = new BezierPath(curveBetween(sketch.points[s]!, sketch.points[s + 1]!, sketch.segments[s]!.bow));
+          for (let i = 0; i <= samples; i++) {
+            const p = curve.getPointAtProgress(i / samples);
+            const dist = Math.hypot(p.x - worldPoint.x, p.y - worldPoint.y);
+            if (dist <= toleranceWorld) return { id: sketch.id, segmentIndex: s };
+          }
+        }
       }
       return undefined;
     }
@@ -411,20 +474,80 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       }
 
       for (const sketch of sketchLayer.getAll()) {
-        const dx = sketch.to.x - sketch.from.x;
-        const dy = sketch.to.y - sketch.from.y;
-        const lengthSq = dx * dx + dy * dy;
-        let t = lengthSq === 0 ? 0 : ((worldPoint.x - sketch.from.x) * dx + (worldPoint.y - sketch.from.y) * dy) / lengthSq;
-        t = Math.max(0, Math.min(1, t));
-        const closest = { x: sketch.from.x + t * dx, y: sketch.from.y + t * dy };
-        const d = Math.hypot(closest.x - worldPoint.x, closest.y - worldPoint.y);
-        if (d < bestDist) {
-          bestDist = d;
-          best = closest;
+        for (let s = 0; s < sketch.segments.length; s++) {
+          const curve = new BezierPath(curveBetween(sketch.points[s]!, sketch.points[s + 1]!, sketch.segments[s]!.bow));
+          if (curve.totalLength === 0) continue;
+          const samples = 24;
+          for (let i = 0; i <= samples; i++) {
+            const p = curve.getPointAtProgress(i / samples);
+            const d = Math.hypot(p.x - worldPoint.x, p.y - worldPoint.y);
+            if (d < bestDist) {
+              bestDist = d;
+              best = p;
+            }
+          }
         }
       }
 
       return best;
+    }
+
+    /** Falcon, 2026-09-05 ("Escape" or losing focus): discards an
+     * in-progress multi-segment sketch chain outright -- nothing gets
+     * created. Also the shared "end of gesture" step finalize calls
+     * into once it's done using whatever was committed. */
+    function cancelSketchChain(): void {
+      sketchChainPoints = [];
+      sketchChainAttachments = [];
+      sketchLastCommitScreen = undefined;
+      pointerMode = 'idle';
+      sketchDrawCurrent = undefined;
+      hoveredAnchor = undefined;
+      hoveredPathSnapPoint = undefined;
+    }
+
+    /** Falcon, 2026-09-05 ("double-click ... to finish the chain"):
+     * turns whatever's been committed so far into a real sketch --
+     * needs at least 2 points (1 segment) to actually create anything
+     * (a lone first click with nothing after it just cancels, same as
+     * pressing Escape). Every new segment starts straight (bow 0) --
+     * arcing one in is a separate, later step (PropertiesPanel's
+     * per-segment "Convert to arc"). */
+    function finalizeSketchChain(): void {
+      if (sketchChainPoints.length >= 2) {
+        const segments: SketchSegment[] = sketchChainPoints.slice(1).map(() => ({ bow: 0 }));
+        const fromAttachment = sketchChainAttachments[0] ?? null;
+        const toAttachment = sketchChainAttachments[sketchChainAttachments.length - 1] ?? null;
+        onCreateSketchRef.current([...sketchChainPoints], segments, fromAttachment, toAttachment);
+      }
+      cancelSketchChain();
+    }
+
+    /** Falcon, 2026-09-05: keeps a sketch endpoint pinned to a moved
+     * node's port glued to its new position -- same spirit as
+     * recomputeEdgeCurve for a real edge. Only ever touches
+     * points[0]/points[last] (the two true ends this sketch can be
+     * pinned at), never an interior waypoint. */
+    function syncSketchEndpointsToNode(nodeId: NodeId): void {
+      for (const sketch of sketchLayer.getAll()) {
+        const points = [...sketch.points];
+        let changed = false;
+        if (sketch.fromAttachment && sketch.fromAttachment.nodeId === nodeId) {
+          const pt = floorLayout.getAnchorPoint(nodeId, sketch.fromAttachment.anchorIndex);
+          if (pt) {
+            points[0] = pt;
+            changed = true;
+          }
+        }
+        if (sketch.toAttachment && sketch.toAttachment.nodeId === nodeId) {
+          const pt = floorLayout.getAnchorPoint(nodeId, sketch.toAttachment.anchorIndex);
+          if (pt) {
+            points[points.length - 1] = pt;
+            changed = true;
+          }
+        }
+        if (changed) sketchLayer.update(sketch.id, { points });
+      }
     }
 
     function resize(): void {
@@ -473,52 +596,124 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       const bounds = camera.getVisibleWorldBounds(viewport, NODE_RADIUS * 4);
       const sel = selectionRef.current;
 
+      // Falcon, 2026-09-05: if the sketch tool got disarmed by some
+      // other means (switching tools, F8, etc.) while a multi-segment
+      // chain was mid-flight, abandon it here rather than leaving a
+      // stale chain that would otherwise resume on the next armed
+      // click as if nothing happened.
+      if (!sketchArmedRef.current && sketchChainPoints.length > 0) {
+        sketchChainPoints = [];
+        sketchChainAttachments = [];
+        sketchLastCommitScreen = undefined;
+      }
+      if (sketchStyleRef.current !== lastSketchStyle) {
+        lastSketchStyle = sketchStyleRef.current;
+        if (sketchChainPoints.length > 0) {
+          sketchChainPoints = [];
+          sketchChainAttachments = [];
+          sketchLastCommitScreen = undefined;
+        }
+      }
+
       // --- Planning sketches (Falcon, 2026-09-03) — drawn first, so
       // real nodes/paths always read on top of a draft guide. Purely
       // visual: dashed, muted, no simulation meaning at all. ---
       for (const sketch of sketchLayer.getAll()) {
-        const a = camera.worldToScreen(sketch.from, viewport);
-        const b = camera.worldToScreen(sketch.to, viewport);
-        const isSelected =
+        const isSketchSelected =
           (sel?.type === 'sketch' && sel.id === sketch.id) ||
           (sel?.type === 'multi' && sel.sketchIds.includes(sketch.id));
-        ctx!.save();
-        ctx!.setLineDash([7, 5]);
-        ctx!.strokeStyle = isSelected ? 'rgba(124, 58, 237, 0.9)' : 'rgba(124, 58, 237, 0.45)';
-        ctx!.lineWidth = isSelected ? Math.max(2, 3 * camera.zoom) : Math.max(1.5, 2 * camera.zoom);
-        ctx!.beginPath();
-        ctx!.moveTo(a.x, a.y);
-        ctx!.lineTo(b.x, b.y);
-        ctx!.stroke();
-        ctx!.restore();
-        // Falcon, 2026-09-05: a sketch should read as having a
-        // direction even though nothing flows along it — from -> to
-        // is that direction, same visual language as a real path's
-        // own arrow. Loose (unattached) ends get a small hollow ring
-        // instead of a filled port dot, so it's obvious at a glance
-        // which ends still need a node to snap onto.
-        drawStraightDirectionArrow(ctx!, sketch.from, sketch.to, camera, viewport);
-        if (!sketch.fromAttachment) drawLooseEndpointMarker(ctx!, sketch.from, camera, viewport);
-        if (!sketch.toAttachment) drawLooseEndpointMarker(ctx!, sketch.to, camera, viewport);
+        const selectedSegmentIndex = sel?.type === 'sketch' && sel.id === sketch.id ? sel.segmentIndex : undefined;
+
+        // Falcon, 2026-09-05 ("l3 connected non linear paths ... then
+        // the middle path was converted to arc/curve path"): every
+        // segment draws through curveBetween/bezierCurveTo whether
+        // it's straight or bowed -- a bow of 0 degenerates to a
+        // visually straight line, so there's no need for two separate
+        // draw paths.
+        for (let s = 0; s < sketch.segments.length; s++) {
+          const from = sketch.points[s]!;
+          const to = sketch.points[s + 1]!;
+          const bezier = curveBetween(from, to, sketch.segments[s]!.bow);
+          const isSegmentSelected = selectedSegmentIndex === s;
+          const a = camera.worldToScreen(bezier.p0, viewport);
+          const p1 = camera.worldToScreen(bezier.p1, viewport);
+          const p2 = camera.worldToScreen(bezier.p2, viewport);
+          const b = camera.worldToScreen(bezier.p3, viewport);
+          ctx!.save();
+          ctx!.setLineDash([7, 5]);
+          ctx!.strokeStyle = isSegmentSelected
+            ? 'rgba(245, 158, 11, 0.95)'
+            : isSketchSelected
+              ? 'rgba(124, 58, 237, 0.9)'
+              : 'rgba(124, 58, 237, 0.45)';
+          ctx!.lineWidth = isSegmentSelected
+            ? Math.max(2.5, 3.5 * camera.zoom)
+            : isSketchSelected
+              ? Math.max(2, 3 * camera.zoom)
+              : Math.max(1.5, 2 * camera.zoom);
+          ctx!.beginPath();
+          ctx!.moveTo(a.x, a.y);
+          ctx!.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, b.x, b.y);
+          ctx!.stroke();
+          ctx!.restore();
+          // A direction arrow reads clearly on a straight leg; a
+          // curved leg's own arrow is deferred (Falcon, 2026-09-05:
+          // "just the curve alone for now", same scope boundary as
+          // tangent continuity).
+          if (sketch.segments[s]!.bow === 0) drawStraightDirectionArrow(ctx!, from, to, camera, viewport);
+        }
+        // Falcon, 2026-09-05 ("there is no way i can snap a sketch to
+        // a node's port"): a pinned end used to draw NOTHING of its
+        // own -- it just happened to sit on top of the node's own
+        // (always-drawn, tiny) port dot, which reads identically to
+        // "close but not actually attached". Loose ends still get the
+        // same hollow ring as before; pinned ends now get an
+        // unmistakably different solid green ring right on top of
+        // that port, so the two states are never confused for one
+        // another again. Only the TRUE first/last waypoint is a real
+        // "end"; interior points are plain shape joints and never
+        // attachable.
+        if (sketch.fromAttachment) {
+          drawPinnedEndpointMarker(ctx!, sketch.points[0]!, camera, viewport);
+        } else {
+          drawLooseEndpointMarker(ctx!, sketch.points[0]!, camera, viewport);
+        }
+        if (sketch.toAttachment) {
+          drawPinnedEndpointMarker(ctx!, sketch.points[sketch.points.length - 1]!, camera, viewport);
+        } else {
+          drawLooseEndpointMarker(ctx!, sketch.points[sketch.points.length - 1]!, camera, viewport);
+        }
       }
-      if (pointerMode === 'sketch-draw' && sketchDrawOrigin && sketchDrawCurrent) {
+      if (pointerMode === 'sketch-draw' && sketchChainPoints.length > 0 && sketchDrawCurrent) {
+        // Falcon, 2026-09-05 ("l3 connected non linear paths"): a
+        // multi-segment chain is built one click at a time -- this
+        // draws every already-committed waypoint as a solid run PLUS
+        // one more live segment out to wherever the NEXT click would
+        // land, so the whole in-progress shape (not just its last
+        // leg) stays visible between clicks.
         const headWorld =
           hoveredAnchor && !hoveredAnchor.occupied
             ? hoveredAnchor.point
             : (hoveredPathSnapPoint ?? sketchDrawCurrent);
-        const a = camera.worldToScreen(sketchDrawOrigin, viewport);
-        const b = camera.worldToScreen(headWorld, viewport);
+        const chainStart = sketchChainPoints[0]!;
+        const a = camera.worldToScreen(chainStart, viewport);
         ctx!.save();
         ctx!.setLineDash([7, 5]);
         ctx!.strokeStyle = 'rgba(124, 58, 237, 0.7)';
         ctx!.lineWidth = Math.max(1.5, 2 * camera.zoom);
         ctx!.beginPath();
         ctx!.moveTo(a.x, a.y);
-        ctx!.lineTo(b.x, b.y);
+        for (let i = 1; i < sketchChainPoints.length; i++) {
+          const p = camera.worldToScreen(sketchChainPoints[i]!, viewport);
+          ctx!.lineTo(p.x, p.y);
+        }
+        const headScreen = camera.worldToScreen(headWorld, viewport);
+        ctx!.lineTo(headScreen.x, headScreen.y);
         ctx!.stroke();
         ctx!.restore();
-        if (sketchFromAttachment) {
-          drawAnchorRing(ctx!, camera.worldToScreen(sketchDrawOrigin, viewport), camera.zoom, 'rgba(124, 58, 237, 0.9)');
+        const b = headScreen;
+        if (sketchChainAttachments[0]) {
+          drawAnchorRing(ctx!, a, camera.zoom, 'rgba(124, 58, 237, 0.9)');
         }
         // Falcon, 2026-09-05: "the path should also have green and
         // red at the end when drawing mode or sketch mode was
@@ -530,7 +725,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         drawEndpointDot(ctx!, a, camera.zoom, ANCHOR_ROLE_COLOR.out);
         drawEndpointDot(ctx!, b, camera.zoom, ANCHOR_ROLE_COLOR.in);
       }
-      if ((pointerMode === 'wire' || pointerMode === 'sketch-draw') && hoveredAnchor) {
+      if ((pointerMode === 'wire' || pointerMode === 'style-wire' || pointerMode === 'sketch-draw') && hoveredAnchor) {
         const screenPt = camera.worldToScreen(hoveredAnchor.point, viewport);
         drawAnchorRing(
           ctx!,
@@ -597,6 +792,28 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         ) {
           drawCurveSelectionHighlight(ctx!, curve, camera, viewport);
         }
+      }
+
+      // Style-wire drag line when the origin is FLOATING (Falcon,
+      // 2026-09-05: permissive start, mirroring sketch-draw) -- the
+      // pinned-origin case is handled by the wireFromNodeId block
+      // right below via a node-position lookup, which a floating
+      // origin has no node to look up.
+      if (pointerMode === 'style-wire' && !wireFromNodeId && styleDrawOrigin && wireCurrentWorld) {
+        const headWorld = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor.point : wireCurrentWorld;
+        const a = camera.worldToScreen(styleDrawOrigin, viewport);
+        const b = camera.worldToScreen(headWorld, viewport);
+        ctx!.save();
+        ctx!.setLineDash([6, 4]);
+        ctx!.strokeStyle = 'rgba(37, 99, 235, 0.7)';
+        ctx!.lineWidth = Math.max(1.5, 2 * camera.zoom);
+        ctx!.beginPath();
+        ctx!.moveTo(a.x, a.y);
+        ctx!.lineTo(b.x, b.y);
+        ctx!.stroke();
+        ctx!.restore();
+        drawEndpointDot(ctx!, a, camera.zoom, ANCHOR_ROLE_COLOR.out);
+        drawEndpointDot(ctx!, b, camera.zoom, ANCHOR_ROLE_COLOR.in);
       }
 
       // Live wire-drag line, drawn under the nodes so the node bodies
@@ -709,10 +926,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       | 'node-down'
       | 'edge-down'
       | 'sketch-down'
+      | 'sketch-move'
       | 'wire'
+      | 'style-wire'
       | 'move'
       | 'placement'
-      | 'apply-style'
       | 'sketch-draw'
       | 'marquee';
     let pointerMode: PointerMode = 'idle';
@@ -721,15 +939,56 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     let pendingNodeHitId: NodeId | undefined;
     let pendingEdgeHitId: string | undefined;
     let pendingSketchHitId: string | undefined;
+    // Falcon, 2026-09-05 ("click directly on that segment"): which
+    // leg of pendingSketchHitId the press actually landed on, if it
+    // turns into a drill-down click (see onPointerUp).
+    let pendingSketchSegmentIndex: number | undefined;
+    // Falcon, 2026-09-05 ("the sketch cannot be moved like its locked
+    // on a position" -> chose "pinned" for the follow-up: a pinned
+    // end is locked in by design, move the node instead): whole-
+    // sketch drag-to-move, but only ever offered when NEITHER end is
+    // attached -- computed once at grab time (pendingSketchCanMove),
+    // then acted on in onPointerMove once the drag clears the click
+    // threshold. sketchMoveOriginalPoints/-OriginWorld snapshot the
+    // shape and the press position the instant that transition
+    // happens, so the whole drag is a single delta applied to the
+    // ORIGINAL points every frame (not compounding tiny per-frame
+    // deltas, which would drift under rounding).
+    let pendingSketchCanMove = false;
+    let sketchMoveOriginalPoints: Point[] | undefined;
+    let sketchMoveOriginWorld: Point | undefined;
     let wireFromNodeId: NodeId | undefined;
     let wireCurrentWorld: Point | undefined;
     // Precise port targeting (Falcon, 2026-09-05): the exact dot a
     // wire/sketch drag started or is currently hovering, if any.
     let wireFromAnchorIndex: number | undefined;
     let hoveredAnchor: AnchorHit | undefined;
-    let sketchDrawOrigin: Point | undefined;
+    // Falcon, 2026-09-05 ("why i still cant draw other paths like how
+    // the sketch get drawn?"): the style-wire drag's fixed start
+    // point, set on every armed-style pointerdown regardless of
+    // whether it landed on a real port -- a style-drawn path can
+    // start floating too and fall back to becoming a sketch (see
+    // onPointerUp).
+    let styleDrawOrigin: Point | undefined;
     let sketchDrawCurrent: Point | undefined;
-    let sketchFromAttachment: SketchAttachment | null = null;
+    // Falcon, 2026-09-05 ("l3 connected non linear paths (sketched)"):
+    // a multi-segment sketch chain's committed waypoints so far, plus
+    // which (if any) real port each is pinned to -- only ever
+    // meaningful at index 0 and the LAST index, since every interior
+    // point is a plain shape waypoint. Persists ACROSS pointerdown/up
+    // cycles while a chain is being built (see onPointerUp's
+    // stayingInChain check) -- unlike every other pointer mode's
+    // state, this one isn't reset at the end of a single down/up.
+    let sketchChainPoints: Point[] = [];
+    let sketchChainAttachments: (SketchAttachment | null)[] = [];
+    let sketchLastCommitScreen: { x: number; y: number } | undefined;
+    let sketchLastCommitTime = 0;
+    // Falcon, 2026-09-05: if the Sketch-style dropdown gets
+    // switched away from 'polypath' mid-chain (armed the whole
+    // time, so the disarm-abandon check below doesn't fire),
+    // abandon the stale chain too rather than leaving orphaned
+    // points a later 'single' drag would silently inherit.
+    let lastSketchStyle: SketchStyle = sketchStyleRef.current;
     // Path-to-path visual snap (Falcon, 2026-09-05: "allow snapping
     // paths ... to other paths") -- alignment only, no attachment
     // recorded; only ever set when no port dot is already hovered.
@@ -778,24 +1037,56 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       }
 
       if (armedEdgeStyleRef.current) {
-        pointerMode = 'apply-style';
+        // Falcon, 2026-09-05: "I want to draw the selected path
+        // directly ... no need to draw or sketch first in order to
+        // convert it later", then "why i still cant draw other paths
+        // like how the sketch get drawn?" -- this now mirrors sketch-
+        // draw's own permissiveness exactly: ANY drag start is
+        // accepted, snapping onto a free port if it begins right on
+        // one, else starting from a plain floating point. A
+        // stationary click still restyles whatever existing edge is
+        // under the cursor at release, same as before -- see
+        // onPointerUp, which now decides between restyle / new edge /
+        // sketch-fallback all under this one 'style-wire' mode.
+        pointerMode = 'style-wire';
+        const anchorHit = floorLayout.findNearestAnchor(worldPoint, PORT_SNAP_RADIUS_PX / camera.zoom);
+        if (anchorHit && !anchorHit.occupied) {
+          wireFromNodeId = anchorHit.nodeId;
+          wireFromAnchorIndex = anchorHit.anchorIndex;
+          styleDrawOrigin = anchorHit.point;
+        } else {
+          wireFromNodeId = undefined;
+          wireFromAnchorIndex = undefined;
+          styleDrawOrigin = worldPoint;
+        }
         return;
       }
 
       if (sketchArmedRef.current) {
         pointerMode = 'sketch-draw';
-        // Precise port targeting (Falcon, 2026-09-05): start pinned to
-        // a real port if the drag begins right on one, otherwise a
-        // plain floating point exactly like before.
-        const anchorHit = floorLayout.findNearestAnchor(worldPoint, PORT_SNAP_RADIUS_PX / camera.zoom);
-        if (anchorHit && !anchorHit.occupied) {
-          sketchFromAttachment = { nodeId: anchorHit.nodeId, anchorIndex: anchorHit.anchorIndex };
-          sketchDrawOrigin = anchorHit.point;
-        } else {
-          sketchFromAttachment = null;
-          sketchDrawOrigin = worldPoint;
+        if (sketchStyleRef.current === 'single') {
+          // Falcon, 2026-09-05 ("no way to end the continuous lines"
+          // -> "single path" style): the original one-drag-one-segment
+          // gesture -- the origin is captured right here on press
+          // (snapping onto a free port if the drag starts right on
+          // one), and release commits the far end and finalizes
+          // immediately (see onPointerUp) instead of waiting for a
+          // second click.
+          const anchorHit = floorLayout.findNearestAnchor(worldPoint, SKETCH_PORT_SNAP_RADIUS_PX / camera.zoom);
+          const originAttachment: SketchAttachment | null =
+            anchorHit && !anchorHit.occupied
+              ? { nodeId: anchorHit.nodeId, anchorIndex: anchorHit.anchorIndex }
+              : null;
+          sketchChainPoints = [anchorHit && !anchorHit.occupied ? anchorHit.point : worldPoint];
+          sketchChainAttachments = [originAttachment];
         }
-        sketchDrawCurrent = sketchDrawOrigin;
+        // 'polypath' ("l3 connected non linear paths (sketched) ...
+        // Click to place each point"): a chain is built entirely from
+        // clicks (see onPointerUp), not one continuous drag, so
+        // pointerdown itself doesn't need to compute or commit
+        // anything here -- it just keeps this gesture alive long
+        // enough for onPointerUp to tell a click from a drag and
+        // commit wherever the release lands.
         return;
       }
 
@@ -826,10 +1117,18 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         return;
       }
 
-      const sketchId = hitTestSketch(worldPoint);
-      if (sketchId) {
+      const sketchHit = hitTestSketch(worldPoint);
+      if (sketchHit) {
         pointerMode = 'sketch-down';
-        pendingSketchHitId = sketchId;
+        pendingSketchHitId = sketchHit.id;
+        pendingSketchSegmentIndex = sketchHit.segmentIndex;
+        // Falcon, 2026-09-05 ("pinned" -- a pinned end is locked in by
+        // design, move the node instead): a sketch with EITHER end
+        // attached never becomes draggable here, no matter how far
+        // the pointer travels -- see onPointerMove's sketch-down ->
+        // sketch-move transition, which checks this same flag.
+        const hitSketch = sketchLayer.get(sketchHit.id);
+        pendingSketchCanMove = !!hitSketch && !hitSketch.fromAttachment && !hitSketch.toAttachment;
         return;
       }
 
@@ -890,11 +1189,42 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // click threshold then selects nothing new (see onPointerUp).
       }
 
+      if (pointerMode === 'sketch-down' && pendingSketchCanMove && totalMove > CLICK_MOVE_THRESHOLD_PX) {
+        // Falcon, 2026-09-05 ("pinned"): only ever reached when
+        // NEITHER end is attached (pendingSketchCanMove, set at
+        // grab-time in onPointerDown) -- a sketch with a pinned end
+        // stays 'sketch-down' with no visible effect here, exactly
+        // like dragging a locked node above, and a release past the
+        // click threshold does nothing (see onPointerUp).
+        const hitSketch = pendingSketchHitId ? sketchLayer.get(pendingSketchHitId) : undefined;
+        if (hitSketch) {
+          pointerMode = 'sketch-move';
+          sketchMoveOriginalPoints = hitSketch.points.map((p) => ({ x: p.x, y: p.y }));
+          sketchMoveOriginWorld = toWorld(dragOriginScreen.x, dragOriginScreen.y);
+        }
+      }
+
+      if (pointerMode === 'sketch-move' && pendingSketchHitId && sketchMoveOriginalPoints && sketchMoveOriginWorld) {
+        // Falcon, 2026-09-05 ("the sketch cannot be moved"): the whole
+        // shape translates as one rigid body -- every point shifts by
+        // the SAME delta, computed from the drag's ORIGIN each frame
+        // (not the previous frame's point) so tiny per-frame errors
+        // never accumulate into drift. Applying an equal delta to
+        // every point also can't distort any segment's curve: bow is
+        // a fraction of the (to - from) vector, and that vector is
+        // unchanged when both its ends move together.
+        const current = toWorld(e.clientX, e.clientY);
+        const dx = current.x - sketchMoveOriginWorld.x;
+        const dy = current.y - sketchMoveOriginWorld.y;
+        const points = sketchMoveOriginalPoints.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+        sketchLayer.update(pendingSketchHitId, { points });
+      }
+
       if (pointerMode === 'marquee') {
         marqueeCurrent = toWorld(e.clientX, e.clientY);
       }
 
-      if (pointerMode === 'wire') {
+      if (pointerMode === 'wire' || pointerMode === 'style-wire') {
         wireCurrentWorld = toWorld(e.clientX, e.clientY);
         const hit = floorLayout.findNearestAnchor(wireCurrentWorld, PORT_SNAP_RADIUS_PX / camera.zoom);
         hoveredAnchor = hit && hit.nodeId !== wireFromNodeId ? hit : undefined;
@@ -902,14 +1232,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
       if (pointerMode === 'sketch-draw') {
         sketchDrawCurrent = toWorld(e.clientX, e.clientY);
-        hoveredAnchor = floorLayout.findNearestAnchor(sketchDrawCurrent, PORT_SNAP_RADIUS_PX / camera.zoom);
+        hoveredAnchor = floorLayout.findNearestAnchor(sketchDrawCurrent, SKETCH_PORT_SNAP_RADIUS_PX / camera.zoom);
         // Path-to-path visual snap only matters when no port dot is
         // already close enough to take priority (Falcon, 2026-09-05:
         // ports are the "real" targets; other paths are alignment
         // only).
         hoveredPathSnapPoint = hoveredAnchor
           ? undefined
-          : nearestPointOnAnyPath(sketchDrawCurrent, PORT_SNAP_RADIUS_PX / camera.zoom);
+          : nearestPointOnAnyPath(sketchDrawCurrent, SKETCH_PORT_SNAP_RADIUS_PX / camera.zoom);
       }
 
       if (pointerMode === 'move' && groupMoveActive && groupOriginalPositions && pendingNodeHitId && moveGrabOffset) {
@@ -944,18 +1274,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
               for (const edge of edgesTouchingNode(id)) {
                 floorLayout.recomputeEdgeCurve(edge.id, edge.source, edge.target);
               }
-              for (const sketch of sketchLayer.getAll()) {
-                let patch: Partial<Sketch> | null = null;
-                if (sketch.fromAttachment && sketch.fromAttachment.nodeId === id) {
-                  const pt = floorLayout.getAnchorPoint(id, sketch.fromAttachment.anchorIndex);
-                  if (pt) patch = { ...(patch ?? {}), from: pt };
-                }
-                if (sketch.toAttachment && sketch.toAttachment.nodeId === id) {
-                  const pt = floorLayout.getAnchorPoint(id, sketch.toAttachment.anchorIndex);
-                  if (pt) patch = { ...(patch ?? {}), to: pt };
-                }
-                if (patch) sketchLayer.update(sketch.id, patch);
-              }
+              syncSketchEndpointsToNode(id);
             }
           }
         }
@@ -978,18 +1297,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // (moved) port, same spirit as recomputeEdgeCurve above —
         // Falcon, 2026-09-05: a "planned connection" should track the
         // node it's pinned to.
-        for (const sketch of sketchLayer.getAll()) {
-          let patch: Partial<Sketch> | null = null;
-          if (sketch.fromAttachment && sketch.fromAttachment.nodeId === pendingNodeHitId) {
-            const pt = floorLayout.getAnchorPoint(pendingNodeHitId, sketch.fromAttachment.anchorIndex);
-            if (pt) patch = { ...(patch ?? {}), from: pt };
-          }
-          if (sketch.toAttachment && sketch.toAttachment.nodeId === pendingNodeHitId) {
-            const pt = floorLayout.getAnchorPoint(pendingNodeHitId, sketch.toAttachment.anchorIndex);
-            if (pt) patch = { ...(patch ?? {}), to: pt };
-          }
-          if (patch) sketchLayer.update(sketch.id, patch);
-        }
+        syncSketchEndpointsToNode(pendingNodeHitId);
       }
     }
 
@@ -1003,11 +1311,6 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       if (pointerMode === 'placement') {
         if (isClick && placementKindRef.current) {
           onPlaceNodeRef.current(placementKindRef.current, snapToGridPoint(worldPoint));
-        }
-      } else if (pointerMode === 'apply-style') {
-        if (isClick && armedEdgeStyleRef.current) {
-          const edgeId = hitTestEdge(worldPoint);
-          if (edgeId) onApplyEdgeStyleRef.current(edgeId, armedEdgeStyleRef.current);
         }
       } else if (pointerMode === 'wire' && wireFromNodeId) {
         // Precise port targeting (Falcon, 2026-09-05): a release right
@@ -1041,16 +1344,121 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
             );
           }
         }
-      } else if (pointerMode === 'sketch-draw' && sketchDrawOrigin) {
-        // A real drag only — a plain click while armed draws nothing,
-        // same spirit as requiring an actual gesture for wiring.
-        if (!isClick) {
-          const toAnchorHit = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor : undefined;
-          const finalTo = toAnchorHit ? toAnchorHit.point : (hoveredPathSnapPoint ?? worldPoint);
-          const toAttachment = toAnchorHit ? { nodeId: toAnchorHit.nodeId, anchorIndex: toAnchorHit.anchorIndex } : null;
-          onCreateSketchRef.current(sketchDrawOrigin, finalTo, sketchFromAttachment, toAttachment);
+      } else if (pointerMode === 'style-wire' && armedEdgeStyleRef.current) {
+        const style = armedEdgeStyleRef.current;
+        if (isClick) {
+          // A stationary click still restyles whatever existing edge
+          // is under the cursor -- no longer depends on where the
+          // click started (Falcon, 2026-09-05: "why i still cant draw
+          // other paths like how the sketch get drawn?").
+          const edgeId = hitTestEdge(worldPoint);
+          if (edgeId) onApplyEdgeStyleRef.current(edgeId, style);
+        } else {
+          // A real drag: try a genuine node-to-node edge first,
+          // mirroring the 'wire' branch above exactly -- but the
+          // origin may itself be floating (wireFromNodeId undefined),
+          // which can never form a real edge no matter where it
+          // lands.
+          const bodyHit = !hoveredAnchor ? hitTestNode(worldPoint) : undefined;
+          if (hoveredAnchor && wireFromNodeId && hoveredAnchor.nodeId !== wireFromNodeId) {
+            if (!hoveredAnchor.occupied) {
+              onCreateEdgeRef.current(
+                wireFromNodeId,
+                hoveredAnchor.nodeId,
+                { sourceAnchor: wireFromAnchorIndex, targetAnchor: hoveredAnchor.anchorIndex },
+                style,
+              );
+            } else {
+              onConnectionRejectedRef.current?.('That port is already connected.');
+            }
+          } else if (wireFromNodeId && bodyHit === wireFromNodeId) {
+            // Released back on the very node the drag started from --
+            // a no-op, same as a plain 'wire' drag snapping onto
+            // itself.
+          } else if (wireFromNodeId && bodyHit) {
+            onCreateEdgeRef.current(
+              wireFromNodeId,
+              bodyHit,
+              wireFromAnchorIndex !== undefined ? { sourceAnchor: wireFromAnchorIndex } : undefined,
+              style,
+            );
+          } else if (styleDrawOrigin) {
+            // Falcon, 2026-09-05: "falls back to a sketch" -- either
+            // the origin was floating, or the release didn't land on
+            // a real node/port either, so this becomes a plain
+            // planning sketch instead, exactly like sketch-draw's own
+            // fallback. Sketches don't carry a style of their own
+            // (picked later at convert time), so the armed style is
+            // simply spent, not carried over.
+            const toAnchorHit = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor : undefined;
+            const fromAttachment: SketchAttachment | null =
+              wireFromNodeId !== undefined && wireFromAnchorIndex !== undefined
+                ? { nodeId: wireFromNodeId, anchorIndex: wireFromAnchorIndex }
+                : null;
+            const toAttachment: SketchAttachment | null = toAnchorHit
+              ? { nodeId: toAnchorHit.nodeId, anchorIndex: toAnchorHit.anchorIndex }
+              : null;
+            const finalTo = toAnchorHit ? toAnchorHit.point : worldPoint;
+            onCreateSketchRef.current([styleDrawOrigin, finalTo], [{ bow: 0 }], fromAttachment, toAttachment);
+          }
+        }
+      } else if (pointerMode === 'sketch-draw') {
+        const toAnchorHit = hoveredAnchor && !hoveredAnchor.occupied ? hoveredAnchor : undefined;
+        const committedPoint = toAnchorHit ? toAnchorHit.point : (hoveredPathSnapPoint ?? worldPoint);
+        const committedAttachment: SketchAttachment | null = toAnchorHit
+          ? { nodeId: toAnchorHit.nodeId, anchorIndex: toAnchorHit.anchorIndex }
+          : null;
+        if (sketchStyleRef.current === 'single') {
+          // One drag, one segment -- the origin was already captured
+          // on press, so this release is always the second (and
+          // last) point; finalize right away instead of waiting for
+          // a double-click.
+          sketchChainPoints.push(committedPoint);
+          sketchChainAttachments.push(committedAttachment);
+          finalizeSketchChain();
+        } else {
+          // Falcon, 2026-09-05 ("Click to place each point ... double-
+          // click ... to finish"): every release commits a waypoint at
+          // wherever it landed (snapping onto a free port if close
+          // enough), UNLESS it lands close enough in time and space to
+          // the previous commit to count as a double-click -- that
+          // finishes the chain instead (see SKETCH_DOUBLE_CLICK_MS).
+          const screenPoint = { x: e.clientX, y: e.clientY };
+          const isDoubleClick =
+            sketchLastCommitScreen !== undefined &&
+            Date.now() - sketchLastCommitTime < SKETCH_DOUBLE_CLICK_MS &&
+            Math.hypot(screenPoint.x - sketchLastCommitScreen.x, screenPoint.y - sketchLastCommitScreen.y) <=
+              CLICK_MOVE_THRESHOLD_PX * 2;
+          if (isDoubleClick) {
+            finalizeSketchChain();
+          } else {
+            sketchChainPoints.push(committedPoint);
+            sketchChainAttachments.push(committedAttachment);
+            sketchLastCommitScreen = screenPoint;
+            sketchLastCommitTime = Date.now();
+          }
         }
       } else if (pointerMode === 'sketch-down' && isClick && pendingSketchHitId) {
+        // Falcon, 2026-09-05 ("click directly on that segment"):
+        // clicking a specific leg of an ALREADY-selected multi-
+        // segment sketch drills into just that segment; any other
+        // click (a fresh sketch, or a 1-segment sketch with nothing
+        // to drill into) selects the whole thing, same as before.
+        const alreadySelected =
+          selectionRef.current?.type === 'sketch' && selectionRef.current.id === pendingSketchHitId;
+        const clickedSketch = sketchLayer.get(pendingSketchHitId);
+        const canDrillDown = alreadySelected && !!clickedSketch && clickedSketch.segments.length > 1;
+        onSelectRef.current(
+          canDrillDown
+            ? { type: 'sketch', id: pendingSketchHitId, segmentIndex: pendingSketchSegmentIndex }
+            : { type: 'sketch', id: pendingSketchHitId },
+        );
+      } else if (pointerMode === 'sketch-move' && pendingSketchHitId) {
+        // Falcon, 2026-09-05 ("the sketch cannot be moved"): every
+        // pointermove during the drag already applied the sketch's
+        // new position -- select the whole sketch on release, same
+        // as a plain click would, rather than leaving the prior
+        // selection (or none) in place.
         onSelectRef.current({ type: 'sketch', id: pendingSketchHitId });
       } else if (pointerMode === 'move' && pendingNodeHitId) {
         // FBP014 (2026-09-05): a group move already applied every
@@ -1066,60 +1474,136 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // selection instead of replacing it -- a stationary click
         // outside armed mode still just selects the one node, same
         // as always.
-        if (multiSelectArmedRef.current) {
+        if (
+          multiSelectArmedRef.current &&
+          (quickSelectFilterRef.current === 'nodes' || quickSelectFilterRef.current === 'all')
+        ) {
           const parts = normalizeMultiParts(selectionRef.current);
           const already = parts.nodeIds.includes(pendingNodeHitId);
           const nodeIds = already
             ? parts.nodeIds.filter((id) => id !== pendingNodeHitId)
             : [...parts.nodeIds, pendingNodeHitId];
           onSelectRef.current(collapseSelection({ ...parts, nodeIds }));
-        } else {
+        } else if (!multiSelectArmedRef.current) {
           onSelectRef.current({ type: 'node', id: pendingNodeHitId });
         }
+        // else: multi-select is armed but scoped to paths/sketches --
+        // a plain click on a node does nothing, keeping the box-drag
+        // the only way to add to a filtered selection.
+
       } else if (pointerMode === 'edge-down' && isClick && pendingEdgeHitId) {
         onSelectRef.current({ type: 'edge', id: pendingEdgeHitId });
       } else if (pointerMode === 'pan' && isClick) {
         onSelectRef.current(null);
       } else if (pointerMode === 'marquee' && marqueeOrigin && marqueeCurrent) {
-        // FBP014 (2026-09-05): every node whose CENTER falls inside
-        // the dragged rectangle joins the selection -- merged with
+        // FBP014 (2026-09-05), scoped by Falcon's quick-select filter
+        // (2026-09-05): which kind of item counts as "inside" the
+        // dragged rectangle depends on quickSelectFilterRef -- a
+        // "Paths only"/"Sketches only" pick arms this same marquee
+        // tool narrowed to just that kind, so a box that also happens
+        // to cross a node or sketch ignores it entirely; the default
+        // (plain-armed) filter is 'nodes', matching the original
+        // node-center-in-rectangle behavior exactly. Merged with
         // whatever was already selected (so successive drags/toggles
         // build up a group) rather than replacing it. A marquee that
-        // encloses nothing clears the selection, same spirit as an
-        // empty-space click in the default (un-armed) pan mode.
+        // encloses nothing of the active kind clears the selection,
+        // same spirit as an empty-space click in the default
+        // (un-armed) pan mode.
         const minX = Math.min(marqueeOrigin.x, marqueeCurrent.x);
         const maxX = Math.max(marqueeOrigin.x, marqueeCurrent.x);
         const minY = Math.min(marqueeOrigin.y, marqueeCurrent.y);
         const maxY = Math.max(marqueeOrigin.y, marqueeCurrent.y);
-        const enclosed: NodeId[] = [];
-        for (const node of graph.getAllNodes()) {
-          const pos = floorLayout.getNodePosition(node.id);
-          if (!pos) continue;
-          if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) enclosed.push(node.id);
+        const inRect = (p: Point): boolean => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+        const filter = quickSelectFilterRef.current;
+
+        const enclosedNodeIds: NodeId[] = [];
+        const enclosedEdgeIds: EdgeId[] = [];
+        const enclosedSketchIds: string[] = [];
+
+        // 'all' runs every check below (no kind restriction); a
+        // specific kind only runs its own -- independent ifs, not a
+        // chain, since 'all' needs more than one to fire.
+        if (filter === 'all' || filter === 'nodes') {
+          for (const node of graph.getAllNodes()) {
+            const pos = floorLayout.getNodePosition(node.id);
+            if (pos && inRect(pos)) enclosedNodeIds.push(node.id);
+          }
         }
-        if (enclosed.length > 0) {
+        if (filter === 'all' || filter === 'paths') {
+          const samples = 24;
+          for (const edge of graph.getAllEdges()) {
+            const curve = floorLayout.getEdgeCurve(edge.id);
+            if (!curve) continue;
+            for (let i = 0; i <= samples; i++) {
+              if (inRect(curve.getPointAtProgress(i / samples))) {
+                enclosedEdgeIds.push(edge.id);
+                break;
+              }
+            }
+          }
+        }
+        if (filter === 'all' || filter === 'sketches') {
+          const samples = 20;
+          for (const sketch of sketchLayer.getAll()) {
+            let enclosed = false;
+            for (let s = 0; s < sketch.segments.length && !enclosed; s++) {
+              const curve = new BezierPath(
+                curveBetween(sketch.points[s]!, sketch.points[s + 1]!, sketch.segments[s]!.bow),
+              );
+              for (let i = 0; i <= samples; i++) {
+                if (inRect(curve.getPointAtProgress(i / samples))) {
+                  enclosed = true;
+                  break;
+                }
+              }
+            }
+            if (enclosed) enclosedSketchIds.push(sketch.id);
+          }
+        }
+
+        const totalEnclosed = enclosedNodeIds.length + enclosedEdgeIds.length + enclosedSketchIds.length;
+        if (totalEnclosed > 0) {
           const parts = normalizeMultiParts(selectionRef.current);
-          const nodeIds = [...new Set([...parts.nodeIds, ...enclosed])];
-          onSelectRef.current(collapseSelection({ ...parts, nodeIds }));
+          const nodeIds = [...new Set([...parts.nodeIds, ...enclosedNodeIds])];
+          const edgeIds = [...new Set([...parts.edgeIds, ...enclosedEdgeIds])];
+          const sketchIds = [...new Set([...parts.sketchIds, ...enclosedSketchIds])];
+          onSelectRef.current(collapseSelection({ nodeIds, edgeIds, sketchIds }));
         } else {
           onSelectRef.current(null);
         }
       }
 
-      pointerMode = 'idle';
+      // Falcon, 2026-09-05 ("l3 connected non linear paths"): a
+      // multi-segment chain spans many pointerdown/up cycles -- unlike
+      // every other gesture here, it must NOT reset back to 'idle'
+      // (or clear the live preview state) between individual clicks,
+      // since the chain-preview render block and the anchor-ring/
+      // path-snap-marker blocks all still gate on pointerMode ===
+      // 'sketch-draw'. finalizeSketchChain/cancelSketchChain already
+      // reset pointerMode themselves once the chain is actually done,
+      // so by the time this runs after either of those, chain.length
+      // is back to 0 and this correctly falls through to the normal
+      // reset below.
+      const stayingInChain = pointerMode === 'sketch-draw' && sketchChainPoints.length > 0;
+      if (!stayingInChain) {
+        pointerMode = 'idle';
+        hoveredAnchor = undefined;
+        sketchDrawCurrent = undefined;
+        hoveredPathSnapPoint = undefined;
+      }
       dragOriginScreen = null;
       dragLastScreen = null;
       pendingNodeHitId = undefined;
       pendingEdgeHitId = undefined;
       pendingSketchHitId = undefined;
+      pendingSketchSegmentIndex = undefined;
+      pendingSketchCanMove = false;
+      sketchMoveOriginalPoints = undefined;
+      sketchMoveOriginWorld = undefined;
       wireFromNodeId = undefined;
       wireCurrentWorld = undefined;
       wireFromAnchorIndex = undefined;
-      hoveredAnchor = undefined;
-      sketchDrawOrigin = undefined;
-      sketchDrawCurrent = undefined;
-      sketchFromAttachment = null;
-      hoveredPathSnapPoint = undefined;
+      styleDrawOrigin = undefined;
       wireGesture = false;
       moveLocked = false;
       moveGrabOffset = null;
@@ -1151,9 +1635,40 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
      * leave. */
     function onHoverMove(e: PointerEvent): void {
       onCursorWorldPositionChangeRef.current?.(toWorld(e.clientX, e.clientY));
+      // Falcon, 2026-09-05 ("l3 connected non linear paths"): a multi-
+      // segment chain is built from individual clicks, not one
+      // continuous drag -- the rubber-band preview (and even the very
+      // first click's own port-snap detection) need to track the
+      // cursor on plain hover, not only during an actively-held
+      // pointer (onPointerMove above only runs during a captured
+      // drag, which a between-clicks hover isn't).
+      if (sketchArmedRef.current) {
+        sketchDrawCurrent = toWorld(e.clientX, e.clientY);
+        hoveredAnchor = floorLayout.findNearestAnchor(sketchDrawCurrent, SKETCH_PORT_SNAP_RADIUS_PX / camera.zoom);
+        hoveredPathSnapPoint = hoveredAnchor
+          ? undefined
+          : nearestPointOnAnyPath(sketchDrawCurrent, SKETCH_PORT_SNAP_RADIUS_PX / camera.zoom);
+      }
     }
     function onHoverLeave(): void {
       onCursorWorldPositionChangeRef.current?.(null);
+    }
+
+    /** Falcon, 2026-09-05 ("double-click (or press Enter/Escape) to
+     * finish the chain"): Enter finishes the chain with whatever's
+     * already committed (without adding a point at the live cursor);
+     * Escape discards it outright. Scoped to only fire while a chain
+     * actually has at least one committed point, so it never steals
+     * Enter/Escape from anything else on the page. */
+    function onSketchChainKeyDown(e: KeyboardEvent): void {
+      if (sketchChainPoints.length === 0) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finalizeSketchChain();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelSketchChain();
+      }
     }
 
     canvas.addEventListener('pointerdown', onPointerDown);
@@ -1162,6 +1677,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     canvas.addEventListener('pointermove', onHoverMove);
     canvas.addEventListener('pointerleave', onHoverLeave);
     canvas.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('keydown', onSketchChainKeyDown);
 
     return () => {
       cancelAnimationFrame(raf);
@@ -1173,10 +1689,12 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       canvas.removeEventListener('pointermove', onHoverMove);
       canvas.removeEventListener('pointerleave', onHoverLeave);
       canvas.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onSketchChainKeyDown);
     };
     // Interaction props (selection, onSelect, placementKind,
     // onPlaceNode, onCreateEdge, snapToGrid, gridSpacing,
-    // armedEdgeStyle, onApplyEdgeStyle, multiSelectArmed, panArmed)
+    // armedEdgeStyle, onApplyEdgeStyle, multiSelectArmed,
+    // quickSelectFilter, panArmed)
     // are intentionally excluded — they're read through refs above so
     // a click doesn't tear down and recreate the SimEngine/driver.
     // onRunningChange is invoked through a ref too, for the same
@@ -1263,6 +1781,27 @@ function drawLooseEndpointMarker(ctx: CanvasRenderingContext2D, worldPoint: Poin
   ctx.arc(screen.x, screen.y, r, 0, Math.PI * 2);
   ctx.strokeStyle = 'rgba(124, 58, 237, 0.75)';
   ctx.lineWidth = Math.max(1, 1.5 * camera.zoom);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Falcon, 2026-09-05 ("there is no way i can snap a sketch to a
+ * node's port"): the affirmative counterpart to
+ * drawLooseEndpointMarker -- a small SOLID green ring right on the
+ * port a sketch end is actually pinned to, so "pinned" reads as
+ * clearly different from "loose" as the colors/fill make it, instead
+ * of the pinned case drawing nothing at all and just hoping the
+ * coincidence with the node's own port dot reads as confirmation. */
+function drawPinnedEndpointMarker(ctx: CanvasRenderingContext2D, worldPoint: Point, camera: Camera, viewport: Viewport): void {
+  const screen = camera.worldToScreen(worldPoint, viewport);
+  const r = Math.max(3, 4 * camera.zoom);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(46, 204, 113, 0.95)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(20, 90, 50, 0.9)';
+  ctx.lineWidth = Math.max(1, 1 * camera.zoom);
   ctx.stroke();
   ctx.restore();
 }

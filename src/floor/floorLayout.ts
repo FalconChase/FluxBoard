@@ -1,5 +1,5 @@
 import type { EdgeId, NodeId } from '../core/types';
-import { BezierPath, curveBetween, type Point } from './bezier';
+import { BezierPath, MultiSegmentPath, curveBetween, type EdgePath, type Point } from './bezier';
 import { octagonPortAnchor, OCTAGON_PORT_COUNT } from '../skin/octagon';
 
 /** World-space node radius, shared by every layer that needs to know
@@ -62,11 +62,28 @@ export interface AnchorHit {
  */
 export class FloorLayout {
   private nodePositions = new Map<NodeId, Point>();
-  private edgeCurves = new Map<EdgeId, BezierPath>();
+  private edgeCurves = new Map<EdgeId, EdgePath>();
   /** The bow each edge's curve was last built with — kept so a moved
    * node's edges can be rebuilt (Milestone 5 drag-to-move) without
    * losing their original bend. */
   private edgeBow = new Map<EdgeId, number>();
+  /** Falcon, 2026-09-05 ("one continuous path... treating it as
+   * simple paths connected as one"): an edge converted from a
+   * MULTI-segment sketch carries interior shape points here, same
+   * spirit as Sketch's own points[] but with only the interior ones
+   * stored -- the two true ends are always derived live from this
+   * edge's own anchors/node positions (edgeAnchors below), exactly
+   * like the single-segment case already does, never stored as
+   * fixed coordinates. Absent (or empty) for the vast majority of
+   * ordinary edges, which keep behaving exactly as before this
+   * existed. */
+  private edgeInteriorPoints = new Map<EdgeId, Point[]>();
+  /** Falcon, 2026-09-05: one bow per segment for a multi-segment edge
+   * -- length is always edgeInteriorPoints.get(id)!.length + 1. Only
+   * ever set together with edgeInteriorPoints (setEdgeSegments), and
+   * cleared together with it. An ordinary single-segment edge keeps
+   * using the plain edgeBow map above instead. */
+  private edgeSegmentBows = new Map<EdgeId, number[]>();
   /** Which of a node's 8 anchor indices (0-7, skin/octagon.ts compass
    * order) are currently occupied — by an edge OR a sketch
    * reservation, see class doc above. */
@@ -238,6 +255,24 @@ export class FloorLayout {
     this.anchorReservations.clear();
   }
 
+  /** Falcon, 2026-09-05 ("one continuous path... treating it as
+   * simple paths connected as one"): the ONE place any edge's curve
+   * actually gets constructed -- every rebuild site below (initial
+   * creation, a moved node, reassigning which port an edge is on,
+   * changing its bow, restoring from a save) funnels through here
+   * instead of building a BezierPath directly, so "does this edge
+   * have a multi-segment shape" only ever needs checking in one spot.
+   * An ordinary edge (no entry in edgeInteriorPoints) is completely
+   * unaffected -- same single BezierPath as always. */
+  private buildEdgeGeometry(edgeId: EdgeId, fromPoint: Point, toPoint: Point, bow: number): EdgePath {
+    const interior = this.edgeInteriorPoints.get(edgeId);
+    if (interior && interior.length > 0) {
+      const bows = this.edgeSegmentBows.get(edgeId) ?? [...interior.map(() => 0), 0];
+      return new MultiSegmentPath([fromPoint, ...interior, toPoint], bows);
+    }
+    return new BezierPath(curveBetween(fromPoint, toPoint, bow));
+  }
+
   /** Builds (and caches) an edge's curve from its endpoints' current node
    * positions. By default auto-picks (and books) the nearest free
    * anchor at each end — the source's anchor faces the target and vice
@@ -257,7 +292,7 @@ export class FloorLayout {
     edgeId: EdgeId,
     fromNodeId: NodeId,
     toNodeId: NodeId,
-    bow = 0.15,
+    bow = 0,
     explicitAnchors?: { sourceAnchor?: number; targetAnchor?: number },
   ): boolean {
     const from = this.nodePositions.get(fromNodeId);
@@ -292,7 +327,7 @@ export class FloorLayout {
 
     const fromAnchorPoint = octagonPortAnchor(from, NODE_RADIUS, sourceAnchor);
     const toAnchorPoint = octagonPortAnchor(to, NODE_RADIUS, targetAnchor);
-    this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromAnchorPoint, toAnchorPoint, bow)));
+    this.edgeCurves.set(edgeId, this.buildEdgeGeometry(edgeId, fromAnchorPoint, toAnchorPoint, bow));
     this.edgeBow.set(edgeId, bow);
     return true;
   }
@@ -306,7 +341,7 @@ export class FloorLayout {
    * anchors — a path stays on whichever side it was wired to even as
    * the node moves around it. */
   recomputeEdgeCurve(edgeId: EdgeId, fromNodeId: NodeId, toNodeId: NodeId): void {
-    const bow = this.edgeBow.get(edgeId) ?? 0.15;
+    const bow = this.edgeBow.get(edgeId) ?? 0;
     const from = this.nodePositions.get(fromNodeId);
     const to = this.nodePositions.get(toNodeId);
     if (!from || !to) {
@@ -315,10 +350,10 @@ export class FloorLayout {
     const anchors = this.edgeAnchors.get(edgeId);
     const fromPoint = anchors ? octagonPortAnchor(from, NODE_RADIUS, anchors.sourceAnchor) : from;
     const toPoint = anchors ? octagonPortAnchor(to, NODE_RADIUS, anchors.targetAnchor) : to;
-    this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromPoint, toPoint, bow)));
+    this.edgeCurves.set(edgeId, this.buildEdgeGeometry(edgeId, fromPoint, toPoint, bow));
   }
 
-  getEdgeCurve(edgeId: EdgeId): BezierPath | undefined {
+  getEdgeCurve(edgeId: EdgeId): EdgePath | undefined {
     return this.edgeCurves.get(edgeId);
   }
 
@@ -354,23 +389,25 @@ export class FloorLayout {
     if (end === 'source') anchors.sourceAnchor = newAnchorIndex;
     else anchors.targetAnchor = newAnchorIndex;
 
-    const bow = this.edgeBow.get(edgeId) ?? 0.15;
+    const bow = this.edgeBow.get(edgeId) ?? 0;
     const fromPos = this.nodePositions.get(anchors.sourceNodeId);
     const toPos = this.nodePositions.get(anchors.targetNodeId);
     if (fromPos && toPos) {
       const fromPoint = octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor);
       const toPoint = octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor);
-      this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromPoint, toPoint, bow)));
+      this.edgeCurves.set(edgeId, this.buildEdgeGeometry(edgeId, fromPoint, toPoint, bow));
     }
     return true;
   }
 
   /** The bow an edge's curve was last built with — 0 means a
    * straight line (Falcon, 2026-09-03: "linear" path type), any
-   * other value a gentle curve ("curve" path type, `curveBetween`'s
-   * own 0.15 cosmetic default when one hasn't been set explicitly). */
+   * other value a gentle curve ("curve" path type). Falls back to 0
+   * (linear) when one hasn't been set explicitly — every new-path
+   * creation path defaults here now (Falcon, 2026-09-05), not
+   * `curveBetween`'s old 0.15 cosmetic default. */
   getEdgeBow(edgeId: EdgeId): number {
-    return this.edgeBow.get(edgeId) ?? 0.15;
+    return this.edgeBow.get(edgeId) ?? 0;
   }
 
   /** Sets an edge's path SHAPE — 0 for a dead-straight "linear" path,
@@ -389,7 +426,7 @@ export class FloorLayout {
     if (!fromPos || !toPos) return;
     const fromPoint = octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor);
     const toPoint = octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor);
-    this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromPoint, toPoint, bow)));
+    this.edgeCurves.set(edgeId, this.buildEdgeGeometry(edgeId, fromPoint, toPoint, bow));
   }
 
   /** Rebuilds an edge's curve at EXACT, caller-specified anchors
@@ -426,7 +463,7 @@ export class FloorLayout {
 
     const fromAnchorPoint = octagonPortAnchor(from, NODE_RADIUS, sourceAnchor);
     const toAnchorPoint = octagonPortAnchor(to, NODE_RADIUS, targetAnchor);
-    this.edgeCurves.set(edgeId, new BezierPath(curveBetween(fromAnchorPoint, toAnchorPoint, bow)));
+    this.edgeCurves.set(edgeId, this.buildEdgeGeometry(edgeId, fromAnchorPoint, toAnchorPoint, bow));
     this.edgeBow.set(edgeId, bow);
     return true;
   }
@@ -435,6 +472,72 @@ export class FloorLayout {
     this.releaseEdgeAnchors(edgeId);
     this.edgeCurves.delete(edgeId);
     this.edgeBow.delete(edgeId);
+    this.edgeInteriorPoints.delete(edgeId);
+    this.edgeSegmentBows.delete(edgeId);
+  }
+
+  /** Falcon, 2026-09-05 ("one continuous path... treating it as
+   * simple paths connected as one"): layers a multi-segment shape
+   * onto an edge that ALREADY exists (setEdgeCurve/restoreEdgeCurve
+   * has already booked its two real anchors) -- called once, right
+   * after creating the underlying single edge, when converting a
+   * multi-segment sketch to a path. `interiorPoints` holds only the
+   * shape points BETWEEN the two node-anchored ends (never the ends
+   * themselves, which stay live-derived from this edge's own
+   * anchors); `segmentBows` must have exactly interiorPoints.length+1
+   * entries. Passing an empty interiorPoints array clears any
+   * previously-set multi-segment shape, reverting to the plain
+   * single-bow edge every ordinary path already is. */
+  setEdgeSegments(edgeId: EdgeId, interiorPoints: Point[], segmentBows: number[]): void {
+    if (interiorPoints.length === 0) {
+      this.edgeInteriorPoints.delete(edgeId);
+      this.edgeSegmentBows.delete(edgeId);
+    } else {
+      this.edgeInteriorPoints.set(edgeId, interiorPoints);
+      this.edgeSegmentBows.set(edgeId, segmentBows);
+    }
+    const anchors = this.edgeAnchors.get(edgeId);
+    if (!anchors) return;
+    const fromPos = this.nodePositions.get(anchors.sourceNodeId);
+    const toPos = this.nodePositions.get(anchors.targetNodeId);
+    if (!fromPos || !toPos) return;
+    const fromPoint = octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor);
+    const toPoint = octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor);
+    const bow = this.edgeBow.get(edgeId) ?? 0;
+    this.edgeCurves.set(edgeId, this.buildEdgeGeometry(edgeId, fromPoint, toPoint, bow));
+  }
+
+  /** Falcon, 2026-09-05: read-only views of a multi-segment edge's
+   * stored shape -- undefined for an ordinary single-segment edge.
+   * Used by persistence.ts (saving/restoring the shape alongside the
+   * plain bow every edge already saves) and, later, any per-segment
+   * editing UI. */
+  getEdgeInteriorPoints(edgeId: EdgeId): Point[] | undefined {
+    return this.edgeInteriorPoints.get(edgeId);
+  }
+
+  getEdgeSegmentBows(edgeId: EdgeId): number[] | undefined {
+    return this.edgeSegmentBows.get(edgeId);
+  }
+
+  /** Falcon, 2026-09-05: updates ONE segment's bow on an edge that
+   * already has a multi-segment shape -- a no-op if this edge has no
+   * interior points at all (an ordinary edge uses setEdgeBow
+   * instead). Mirrors SketchLayer.update's per-segment bow write. */
+  setEdgeSegmentBow(edgeId: EdgeId, segmentIndex: number, bow: number): void {
+    const interior = this.edgeInteriorPoints.get(edgeId);
+    const bows = this.edgeSegmentBows.get(edgeId);
+    if (!interior || interior.length === 0 || !bows) return;
+    const nextBows = bows.map((b, i) => (i === segmentIndex ? bow : b));
+    this.edgeSegmentBows.set(edgeId, nextBows);
+    const anchors = this.edgeAnchors.get(edgeId);
+    if (!anchors) return;
+    const fromPos = this.nodePositions.get(anchors.sourceNodeId);
+    const toPos = this.nodePositions.get(anchors.targetNodeId);
+    if (!fromPos || !toPos) return;
+    const fromPoint = octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor);
+    const toPoint = octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor);
+    this.edgeCurves.set(edgeId, new MultiSegmentPath([fromPoint, ...interior, toPoint], nextBows));
   }
 
   /** Falcon, 2026-09-05: "dont allow overlapping of nodes and paths

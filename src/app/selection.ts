@@ -9,7 +9,19 @@ import type { NodeId, EdgeId } from '../core/types';
 export type Selection =
   | { type: 'node'; id: NodeId }
   | { type: 'edge'; id: EdgeId }
-  | { type: 'sketch'; id: string }
+  | {
+      type: 'sketch';
+      id: string;
+      /** Falcon, 2026-09-05 ("l3 connected non linear paths"):
+       * drills into ONE segment of an already-selected multi-segment
+       * sketch (click a specific leg a second time) so its own
+       * properties -- including "Convert to arc" -- can be edited
+       * independently of the sketch as a whole. undefined/omitted
+       * means the WHOLE sketch is selected, same as before this
+       * existed; meaningless (and never set) for a 1-segment sketch,
+       * since there's nothing to drill into. */
+      segmentIndex?: number;
+    }
   /** Multi-select tool (FBP014, 2026-09-05) -- two or more items
    * selected together so Delete acts on the whole group at once.
    * Only `nodeIds` participate in drag-to-move-the-group and

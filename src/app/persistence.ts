@@ -67,6 +67,14 @@ interface EdgeGeometry {
   sourceAnchor: number;
   targetAnchor: number;
   bow: number;
+  /** Falcon, 2026-09-05 ("one continuous path... treating it as
+   * simple paths connected as one"): present only for an edge
+   * converted from a multi-segment sketch -- optional so every
+   * pre-existing save (and every ordinary single-segment edge in a
+   * NEW save) parses exactly as before, same convention as
+   * CanvasSettings.canvasBackground/ObjectRegistry.objectTypes. */
+  interiorPoints?: Point[];
+  segmentBows?: number[];
 }
 
 interface NodeSkinEntry {
@@ -119,10 +127,13 @@ export function serializeState(
   for (const edge of edges) {
     const anchors = floorLayout.getEdgeAnchors(edge.id);
     if (anchors) {
+      const interiorPoints = floorLayout.getEdgeInteriorPoints(edge.id);
+      const segmentBows = floorLayout.getEdgeSegmentBows(edge.id);
       edgeGeometry[edge.id] = {
         sourceAnchor: anchors.sourceAnchor,
         targetAnchor: anchors.targetAnchor,
         bow: floorLayout.getEdgeBow(edge.id),
+        ...(interiorPoints && interiorPoints.length > 0 ? { interiorPoints, segmentBows } : {}),
       };
     }
     edgeSkin[edge.id] = skinConfig.getEdgeSkin(edge.id);
@@ -235,6 +246,13 @@ export function populateState(
         geometry.targetAnchor,
         geometry.bow,
       );
+      // Falcon, 2026-09-05: layer a saved multi-segment shape back
+      // on top of the plain single-bow curve restoreEdgeCurve just
+      // built -- a no-op for every ordinary edge, which never has
+      // these two fields at all.
+      if (geometry.interiorPoints && geometry.segmentBows) {
+        floorLayout.setEdgeSegments(edge.id, geometry.interiorPoints, geometry.segmentBows);
+      }
     }
     const skin = saved.edgeSkin[edge.id];
     if (skin) skinConfig.setEdgeSkin(edge.id, skin);

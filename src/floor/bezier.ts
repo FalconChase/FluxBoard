@@ -46,8 +46,23 @@ interface LengthSample {
   length: number;
 }
 
+/** Falcon, 2026-09-05 ("one continuous path... treating it as
+ * simple paths connected as one"): the shape every edge's curve is
+ * ultimately consumed as, by every reader anywhere in the app
+ * (rendering, item interpolation, the speed-lock feature's length
+ * lookup, hit-testing) — none of them ever reach past these three
+ * members. That's what makes MultiSegmentPath below a drop-in
+ * replacement for a plain BezierPath: FloorLayout can hand back
+ * either one from getEdgeCurve and nothing downstream has to know or
+ * care which it got. */
+export interface EdgePath {
+  readonly totalLength: number;
+  getPointAtProgress(progress: number): Point;
+  getTangentAngleAtProgress(progress: number): number;
+}
+
 /** Arc-length-parameterized cubic bezier — the floor layer's curve type. */
-export class BezierPath {
+export class BezierPath implements EdgePath {
   readonly totalLength: number;
   private readonly samples: LengthSample[];
   private readonly bezier: CubicBezier;
@@ -102,11 +117,17 @@ export class BezierPath {
   }
 }
 
-/** A gentle curve between two points (rather than a dead-straight line)
- * so curve geometry is actually exercised even for a simple two-node
- * graph. `bow` is a fraction of the direct distance, offset perpendicular
- * to it. */
-export function curveBetween(from: Point, to: Point, bow = 0.15): CubicBezier {
+/** A curve between two points. `bow` is a fraction of the direct
+ * distance, offset perpendicular to it — 0 is a dead-straight line
+ * (Falcon, 2026-09-05: "the default when converting from sketch to a
+ * path should be linear not curved" -- resolved as every new-path
+ * creation path defaulting to bow=0, this function's own default
+ * included, rather than the gentle curve new edges used to start
+ * with). Picking "Curve" for an edge in the properties panel still
+ * starts it at a visibly-curved 0.15 (PropertiesPanel.tsx's
+ * PathShapeField) -- that's a distinct, still-curved starting point
+ * for an explicit user choice, not this creation-time default. */
+export function curveBetween(from: Point, to: Point, bow = 0): CubicBezier {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const nx = -dy;
@@ -119,4 +140,65 @@ export function curveBetween(from: Point, to: Point, bow = 0.15): CubicBezier {
     p2: { x: from.x + (dx * 2) / 3 + offsetX, y: from.y + (dy * 2) / 3 + offsetY },
     p3: to,
   };
+}
+
+
+/** Falcon, 2026-09-05 ("one continuous path... treating it as simple
+ * paths (curve/linear) connected as one"): an ordered chain of plain
+ * BezierPath segments (each independently straight or bowed, same
+ * curveBetween/bow model every single-segment edge already uses)
+ * walked as ONE seamless EdgePath -- a global 0-1 progress maps onto
+ * whichever segment it falls in, proportional to each segment's own
+ * arc length, so an item crossing the seam between two segments moves
+ * at a visually constant pace rather than jumping. Deliberately NOT
+ * tangent-continuous at the joins (same scope boundary sketches
+ * already settled on) -- a segment's own curve never reshapes to
+ * blend into its neighbor's, it just needs to reach the exact same
+ * point the next one starts from, which sharing `points` guarantees. */
+export class MultiSegmentPath implements EdgePath {
+  readonly totalLength: number;
+  private readonly segments: { path: BezierPath; startLength: number }[];
+
+  /** `points` must have exactly `bows.length + 1` entries -- points[i]
+   * to points[i+1] is one segment, curved by bows[i]. */
+  constructor(points: Point[], bows: number[]) {
+    const segments: { path: BezierPath; startLength: number }[] = [];
+    let cumulative = 0;
+    for (let i = 0; i < bows.length; i++) {
+      const path = new BezierPath(curveBetween(points[i]!, points[i + 1]!, bows[i]!));
+      segments.push({ path, startLength: cumulative });
+      cumulative += path.totalLength;
+    }
+    this.segments = segments;
+    this.totalLength = cumulative;
+  }
+
+  getPointAtProgress(progress: number): Point {
+    const first = this.segments[0];
+    if (!first) return { x: 0, y: 0 }; // defensive -- never constructed with zero segments in practice
+    if (this.totalLength === 0) return first.path.getPointAtProgress(0);
+
+    const clamped = Math.max(0, Math.min(1, progress));
+    const targetLength = clamped * this.totalLength;
+    for (let i = 0; i < this.segments.length; i++) {
+      const seg = this.segments[i]!;
+      const segEnd = seg.startLength + seg.path.totalLength;
+      // Last segment always claims anything left over (guards against
+      // floating-point targetLength landing a hair past the final
+      // segment's own cumulative length).
+      if (targetLength <= segEnd || i === this.segments.length - 1) {
+        const localLength = targetLength - seg.startLength;
+        const localT = seg.path.totalLength === 0 ? 0 : localLength / seg.path.totalLength;
+        return seg.path.getPointAtProgress(Math.max(0, Math.min(1, localT)));
+      }
+    }
+    return first.path.getPointAtProgress(0); // unreachable; keeps TS happy
+  }
+
+  getTangentAngleAtProgress(progress: number): number {
+    const eps = 0.001;
+    const a = this.getPointAtProgress(Math.max(0, progress - eps));
+    const b = this.getPointAtProgress(Math.min(1, progress + eps));
+    return Math.atan2(b.y - a.y, b.x - a.x);
+  }
 }
