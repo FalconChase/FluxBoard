@@ -146,7 +146,10 @@ interface FluxCanvasProps {
    * creation (a native HTML5 drag-and-drop, which App.tsx alone can
    * generate an id for) round-trips through a prop. */
   annotationLayer: AnnotationLayer;
-  onDropAnnotation: (icon: AnnotationIconKind, worldPoint: Point) => void;
+  onDropAnnotation: (
+    payload: { kind: 'icon'; icon: AnnotationIconKind } | { kind: 'text' },
+    worldPoint: Point,
+  ) => void;
 
   /** FBP014 (2026-09-05): while armed, an empty-canvas drag draws a
    * marquee (rubber-band select) instead of panning, and clicking a
@@ -485,10 +488,19 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
      * last, reads as "on top") wins a click over an older one sitting
      * at nearly the same spot, same tie-break spirit as node z-order. */
     function hitTestAnnotation(worldPoint: Point): string | undefined {
-      const toleranceWorld = ANNOTATION_HIT_RADIUS_PX / camera.zoom;
       const all = annotationLayer.getAll();
       for (let i = all.length - 1; i >= 0; i--) {
         const a = all[i]!;
+        // Falcon, 2026-09-09 ("insert textbox"): a text-kind
+        // annotation has no fixed-size icon badge to click on -- a
+        // rough width-from-character-count heuristic beats forcing
+        // every click to land exactly on the icon-sized radius,
+        // without needing a real text-measurement pass just to
+        // hit-test (rendering below still measures for real, for the
+        // selection outline).
+        const radiusPx =
+          a.kind === 'text' ? Math.max(ANNOTATION_HIT_RADIUS_PX, (a.label ?? 'Text').length * 3.4) : ANNOTATION_HIT_RADIUS_PX;
+        const toleranceWorld = radiusPx / camera.zoom;
         if (Math.hypot(a.position.x - worldPoint.x, a.position.y - worldPoint.y) <= toleranceWorld) return a.id;
       }
       return undefined;
@@ -943,19 +955,47 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       // on top of nodes/paths/sketches so they always read clearly. ---
       for (const annotation of annotationLayer.getAll()) {
         const screen = camera.worldToScreen(annotation.position, viewport);
-        const r = ANNOTATION_ICON_SIZE * camera.zoom * 0.5;
         const isSelected = sel?.type === 'annotation' && sel.id === annotation.id;
+
+        if (annotation.kind === 'text') {
+          // Falcon, 2026-09-09 ("insert textbox"): plain text, no
+          // glyph/badge at all -- an empty one still renders a faint
+          // "Text" placeholder so a freshly-dropped box is findable
+          // and clickable before anything's been typed into it.
+          const hasLabel = !!annotation.label;
+          const text = hasLabel ? annotation.label! : 'Text';
+          ctx!.save();
+          ctx!.font = '600 13px system-ui, sans-serif';
+          ctx!.textAlign = 'center';
+          ctx!.textBaseline = 'middle';
+          ctx!.fillStyle = hasLabel ? '#1f2430' : 'rgba(31, 36, 48, 0.4)';
+          ctx!.fillText(text, screen.x, screen.y);
+          if (isSelected) {
+            const metrics = ctx!.measureText(text);
+            const w = metrics.width + 14;
+            const h = 22;
+            ctx!.setLineDash([4, 3]);
+            ctx!.strokeStyle = 'rgba(37, 99, 235, 0.85)';
+            ctx!.lineWidth = 1.5;
+            ctx!.strokeRect(screen.x - w / 2, screen.y - h / 2, w, h);
+          }
+          ctx!.restore();
+          continue;
+        }
+
+        const icon = annotation.icon ?? 'marker';
+        const r = ANNOTATION_ICON_SIZE * camera.zoom * 0.5;
         ctx!.save();
         ctx!.beginPath();
         ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
         ctx!.fillStyle = '#ffffff';
         ctx!.fill();
-        ctx!.strokeStyle = ANNOTATION_ICON_COLOR[annotation.icon];
+        ctx!.strokeStyle = ANNOTATION_ICON_COLOR[icon];
         ctx!.lineWidth = isSelected ? 2.5 : 1.5;
         ctx!.stroke();
-        ctx!.fillStyle = ANNOTATION_ICON_COLOR[annotation.icon];
-        ctx!.strokeStyle = ANNOTATION_ICON_COLOR[annotation.icon];
-        annotationIcons[annotation.icon](ctx!, screen.x, screen.y, r * 1.5);
+        ctx!.fillStyle = ANNOTATION_ICON_COLOR[icon];
+        ctx!.strokeStyle = ANNOTATION_ICON_COLOR[icon];
+        annotationIcons[icon](ctx!, screen.x, screen.y, r * 1.5);
         if (isSelected) {
           ctx!.beginPath();
           ctx!.arc(screen.x, screen.y, r + 4, 0, Math.PI * 2);
@@ -1904,10 +1944,15 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     }
     function onDrop(e: DragEvent): void {
       e.preventDefault();
+      const worldPoint = toWorld(e.clientX, e.clientY);
+      const isText = e.dataTransfer?.getData('application/x-fluxboard-annotation-text');
+      if (isText) {
+        onDropAnnotationRef.current({ kind: 'text' }, worldPoint);
+        return;
+      }
       const icon = e.dataTransfer?.getData('application/x-fluxboard-annotation-icon');
       if (!icon) return;
-      const worldPoint = toWorld(e.clientX, e.clientY);
-      onDropAnnotationRef.current(icon as AnnotationIconKind, worldPoint);
+      onDropAnnotationRef.current({ kind: 'icon', icon: icon as AnnotationIconKind }, worldPoint);
     }
     canvas.addEventListener('dragover', onDragOver);
     canvas.addEventListener('drop', onDrop);

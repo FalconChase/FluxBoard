@@ -17,9 +17,19 @@ export type AnnotationIconKind = 'marker' | 'warning' | 'info' | 'arrow' | 'star
 export interface Annotation {
   id: string;
   position: Point;
-  icon: AnnotationIconKind;
-  /** Free text shown next to the icon — optional, an icon alone is a
-   * valid annotation. */
+  /** Falcon, 2026-09-09 ("insert textbox feature"): 'icon' (the
+   * original shape — a colored badge + glyph, optional label below
+   * it) vs 'text' (plain text only, no glyph/badge at all). Optional
+   * so every annotation created before this existed — all icon-kind —
+   * parses unchanged; App.tsx/FluxCanvas treat a missing `kind` as
+   * 'icon'. */
+  kind?: 'icon' | 'text';
+  /** Only meaningful when kind is 'icon' (or absent) — ignored for a
+   * plain text box. */
+  icon?: AnnotationIconKind;
+  /** Free text shown next to the icon (icon kind) or AS the whole
+   * annotation (text kind) — optional for an icon annotation (an icon
+   * alone is valid), effectively the whole point for a text one. */
   label?: string;
 }
 

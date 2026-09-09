@@ -499,19 +499,29 @@ export function Ribbon({
         )}
 
         {activeTab === 'insert' && (
-          <RibbonGroup title="Icons">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <div style={{ display: 'flex', gap: 4 }}>
-                {ANNOTATION_ICON_ORDER.map((kind) => (
-                  <AnnotationSwatchButton key={kind} kind={kind} />
-                ))}
+          <>
+            <RibbonGroup title="Icons">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {ANNOTATION_ICON_ORDER.map((kind) => (
+                    <AnnotationSwatchButton key={kind} kind={kind} />
+                  ))}
+                </div>
+                <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, maxWidth: 420, margin: '4px 0 0' }}>
+                  Drag an icon onto the canvas to drop a free-floating annotation there (no simulation meaning) —
+                  select it on the canvas afterward to type a label or move it.
+                </p>
               </div>
-              <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, maxWidth: 420, margin: '4px 0 0' }}>
-                Drag an icon onto the canvas to drop a free-floating annotation there (no simulation meaning) — pick
-                it up on the canvas afterward to type a label or move it.
-              </p>
-            </div>
-          </RibbonGroup>
+            </RibbonGroup>
+            <RibbonGroup title="Text">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <TextBoxSwatchButton />
+                <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, maxWidth: 260, margin: '4px 0 0' }}>
+                  Drag onto the canvas to drop a plain text box — no icon, no simulation meaning.
+                </p>
+              </div>
+            </RibbonGroup>
+          </>
         )}
 
         {(activeTab === 'manage' || activeTab === 'layers' || activeTab === 'tools') && (
@@ -670,6 +680,52 @@ function AnnotationSwatchButton({ kind }: { kind: AnnotationIconKind }) {
     >
       <canvas ref={canvasRef} />
       <span style={swatchLabelStyle}>{ANNOTATION_ICON_LABEL[kind]}</span>
+    </button>
+  );
+}
+
+/** INSERT tab's plain text box tool (Falcon, 2026-09-09: "insert
+ * textbox feature", scoped to "pure text, no icon"). Same draggable
+ * convention as AnnotationSwatchButton just above, a separate
+ * dataTransfer MIME type (no payload data needed — its presence alone
+ * says "drop a text box here") so FluxCanvas's onDrop can tell the two
+ * apart without overloading the icon key with a fake sentinel value. */
+function TextBoxSwatchButton() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const size = 28;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    ctx.font = '700 15px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = theme.text1;
+    ctx.fillText('T', size / 2, size / 2 + 1);
+  }, []);
+
+  return (
+    <button
+      type="button"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/x-fluxboard-annotation-text', '1');
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
+      title="Drag onto the canvas to place a plain text box"
+      style={swatchButtonStyle(false)}
+    >
+      <canvas ref={canvasRef} />
+      <span style={swatchLabelStyle}>Text</span>
     </button>
   );
 }

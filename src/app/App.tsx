@@ -1226,13 +1226,21 @@ export function App() {
     setArmedEdgeStyle(null);
   }
 
-  /** INSERT tab (Falcon, 2026-09-09): drag an icon from the ribbon
-   * and drop it on the canvas to place a free-floating annotation
-   * there — no simulation meaning, purely explanatory. Selects the
-   * new annotation so its label can be typed right away. */
-  function handleDropAnnotation(icon: AnnotationIconKind, position: Point): void {
+  /** INSERT tab (Falcon, 2026-09-09): drag an icon OR the plain
+   * "Text" tool from the ribbon and drop it on the canvas to place a
+   * free-floating annotation there — no simulation meaning, purely
+   * explanatory. Selects the new annotation so its label can be typed
+   * right away. */
+  function handleDropAnnotation(
+    payload: { kind: 'icon'; icon: AnnotationIconKind } | { kind: 'text' },
+    position: Point,
+  ): void {
     const id = `annotation-${nextIdRef.current++}`;
-    annotationLayer.add({ id, position, icon });
+    if (payload.kind === 'text') {
+      annotationLayer.add({ id, position, kind: 'text' });
+    } else {
+      annotationLayer.add({ id, position, kind: 'icon', icon: payload.icon });
+    }
     setSelection({ type: 'annotation', id });
   }
 

@@ -1207,45 +1207,54 @@ function AnnotationProperties({
 
   if (!annotation) return <p style={{ fontSize: 12, color: theme.danger }}>Annotation no longer exists.</p>;
 
+  const isText = annotation.kind === 'text';
+
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Annotation</div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{isText ? 'Text box' : 'Annotation'}</div>
       <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
-        A free-floating {ANNOTATION_ICON_LABEL[annotation.icon]} marker — purely explanatory, no simulation meaning.
+        {isText
+          ? 'A free-floating text box — purely explanatory, no simulation meaning.'
+          : `A free-floating ${ANNOTATION_ICON_LABEL[annotation.icon ?? 'marker']} marker — purely explanatory, no simulation meaning.`}
       </p>
 
-      <div style={sectionTitleStyle}>Icon</div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        {(Object.keys(annotationIcons) as (keyof typeof annotationIcons)[]).map((kind) => (
-          <button
-            key={kind}
-            type="button"
-            title={ANNOTATION_ICON_LABEL[kind]}
-            onClick={() => annotationLayer.update(annotationId, { icon: kind })}
-            style={{
-              width: 26,
-              height: 26,
-              borderRadius: 13,
-              border: `2px solid ${kind === annotation.icon ? theme.accent : theme.borderStrong}`,
-              background: '#ffffff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              padding: 0,
-            }}
-          >
-            <AnnotationIconGlyph kind={kind} />
-          </button>
-        ))}
-      </div>
+      {!isText && (
+        <>
+          <div style={sectionTitleStyle}>Icon</div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+            {(Object.keys(annotationIcons) as (keyof typeof annotationIcons)[]).map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                title={ANNOTATION_ICON_LABEL[kind]}
+                onClick={() => annotationLayer.update(annotationId, { icon: kind })}
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: 13,
+                  border: `2px solid ${kind === annotation.icon ? theme.accent : theme.borderStrong}`,
+                  background: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <AnnotationIconGlyph kind={kind} />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <div style={rowStyle}>
-        <label style={labelStyle}>Label</label>
+        <label style={labelStyle}>{isText ? 'Text' : 'Label'}</label>
         <input
           type="text"
           value={label}
-          placeholder="(no label)"
+          placeholder={isText ? 'Type your text…' : '(no label)'}
+          autoFocus={isText && !annotation.label}
           style={inputStyle}
           onChange={(e) => {
             setLabel(e.target.value);
@@ -1260,7 +1269,7 @@ function AnnotationProperties({
         onClick={onDelete}
         style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
       >
-        Delete annotation
+        Delete {isText ? 'text box' : 'annotation'}
       </button>
     </div>
   );
