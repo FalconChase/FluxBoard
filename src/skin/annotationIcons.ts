@@ -196,7 +196,25 @@ const moneyLine: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
   ctx.restore();
 };
 
-export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money' | 'moneyAlt' | 'moneyStack' | 'moneyLine', AnnotationIconDrawFn> = {
+/** Services — a pasted-in gear/sparkle-cluster glyph (Falcon,
+ * 2026-09-09), stroke-only "currentColor" (fill="none",
+ * stroke-width="2", viewBox 0 0 24 24) -- same baked-in-verbatim
+ * Path2D + ctx.stroke() approach as `moneyLine`. */
+const SERVICES_PATH = new Path2D(
+  'M6 9a3 3 0 1 0 0-6a3 3 0 0 0 0 6Zm0-6V0m0 12V9M0 6h3m6 0h3M2 2l2 2m4 4l2 2m0-8L8 4M4 8l-2 2m16 2a3 3 0 1 0 0-6a3 3 0 0 0 0 6Zm0-6V3m0 12v-3m-6-3h3m6 0h3M14 5l2 2m4 4l2 2m0-8l-2 2m-4 4l-2 2m-5 8a3 3 0 1 0 0-6a3 3 0 0 0 0 6Zm0-6v-3m0 12v-3m-6-3h3m6 0h3M5 14l2 2m4 4l2 2m0-8l-2 2m-4 4l-2 2',
+);
+const services: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 24;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-12, -12);
+  ctx.lineWidth = 2;
+  ctx.stroke(SERVICES_PATH);
+  ctx.restore();
+};
+
+export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money' | 'moneyAlt' | 'moneyStack' | 'moneyLine' | 'services', AnnotationIconDrawFn> = {
   marker,
   warning,
   info,
@@ -207,6 +225,7 @@ export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | '
   moneyAlt,
   moneyStack,
   moneyLine,
+  services,
 };
 
 /** Falcon, 2026-09-09 ("also want to have it or those icons to
@@ -232,6 +251,7 @@ export const ANNOTATION_ICON_COLOR: Record<keyof typeof annotationIcons, string>
   moneyAlt: '#0d9488',
   moneyStack: '#ca8a04',
   moneyLine: '#334155',
+  services: '#6366f1',
 };
 
 export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string> = {
@@ -245,9 +265,10 @@ export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string>
   moneyAlt: 'Money (alt)',
   moneyStack: 'Money (stack)',
   moneyLine: 'Money (line)',
+  services: 'Services',
 };
 
-export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money', 'moneyAlt', 'moneyStack', 'moneyLine'];
+export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money', 'moneyAlt', 'moneyStack', 'moneyLine', 'services'];
 
 /** Falcon, 2026-09-09 ("font style" — separate from the bold/italic
  * "type" controls): a small fixed picker of CSS font-family stacks
