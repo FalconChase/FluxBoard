@@ -5,6 +5,7 @@ import type { EdgeSkin } from '../skin/pathSkin';
 import { ObjectRegistry, type ObjectTypeDef } from '../skin/ObjectRegistry';
 import { GroupRegistry, type GroupDef } from '../skin/GroupRegistry';
 import { SketchLayer, type Sketch } from './sketchLayer';
+import { AnnotationLayer, type Annotation } from './annotationLayer';
 import type { CanvasBackground } from './theme';
 import type { EdgeId, NodeDef, EdgeDef, NodeId } from '../core/types';
 import type { Point } from '../floor/bezier';
@@ -92,6 +93,12 @@ export interface SavedFile {
   nodeSkin: Record<NodeId, NodeSkinEntry>;
   edgeSkin: Record<EdgeId, EdgeSkin>;
   sketches: Sketch[];
+  /** Canvas annotations (INSERT tab, 2026-09-09) — optional so
+   * pre-existing saves (no version bump, same convention as
+   * canvasBackground/objectTypes/groups) parse unchanged;
+   * populateState falls back to no annotations at all when
+   * absent. */
+  annotations?: Annotation[];
   settings: CanvasSettings;
   /** OBJECTS registry (FBP011, 2026-09-05) — optional so pre-existing
    * saves (no version bump needed, same convention as
@@ -114,6 +121,7 @@ export function serializeState(
   floorLayout: FloorLayout,
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
+  annotationLayer: AnnotationLayer,
   objectRegistry: ObjectRegistry,
   groupRegistry: GroupRegistry,
   settings: CanvasSettings,
@@ -155,6 +163,7 @@ export function serializeState(
     nodeSkin,
     edgeSkin,
     sketches: sketchLayer.getAll(),
+    annotations: annotationLayer.getAll(),
     settings,
     objectTypes: objectRegistry.list(),
     groups: groupRegistry.getAll(),
@@ -175,6 +184,7 @@ export function clearAllStores(
   floorLayout: FloorLayout,
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
+  annotationLayer: AnnotationLayer,
   objectRegistry: ObjectRegistry,
   groupRegistry: GroupRegistry,
 ): void {
@@ -190,6 +200,10 @@ export function clearAllStores(
 
   for (const sketch of sketchLayer.getAll()) {
     sketchLayer.remove(sketch.id);
+  }
+
+  for (const annotation of annotationLayer.getAll()) {
+    annotationLayer.remove(annotation.id);
   }
 
   // Every node above is already gone, so no sketch reservation could
@@ -229,6 +243,7 @@ export function populateState(
   floorLayout: FloorLayout,
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
+  annotationLayer: AnnotationLayer,
   objectRegistry: ObjectRegistry,
   groupRegistry: GroupRegistry,
 ): CanvasSettings {
@@ -291,6 +306,13 @@ export function populateState(
     }
   }
 
+  // Falcon, 2026-09-09: annotations are pure UI scratch with no
+  // reservation/anchor bookkeeping at all (unlike sketches) -- just
+  // re-add every saved one directly.
+  for (const annotation of saved.annotations ?? []) {
+    annotationLayer.add(annotation);
+  }
+
   // Falcon, 2026-09-06: re-seed groups last, once every node/edge/
   // sketch id they might reference already exists — absent on a
   // pre-existing save (optional field, no version bump), which is
@@ -341,6 +363,7 @@ export function makeBlankProjectData(settings: CanvasSettings): SavedFile {
     nodeSkin: {},
     edgeSkin: {},
     sketches: [],
+    annotations: [],
     settings,
     objectTypes: [],
     groups: [],

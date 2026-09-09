@@ -6,6 +6,8 @@ import { octagonVertices, traceClosedPath } from '../skin/octagon';
 import type { EdgeStyle } from '../skin/pathSkin';
 import type { SketchStyle } from './FluxCanvas';
 import { hexWithAlpha } from '../skin/canvasUtil';
+import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_ICON_ORDER } from '../skin/annotationIcons';
+import type { AnnotationIconKind } from './annotationLayer';
 import {
   theme,
   CANVAS_BACKGROUND_LABELS,
@@ -496,7 +498,23 @@ export function Ribbon({
           </>
         )}
 
-        {(activeTab === 'insert' || activeTab === 'manage' || activeTab === 'layers' || activeTab === 'tools') && (
+        {activeTab === 'insert' && (
+          <RibbonGroup title="Icons">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {ANNOTATION_ICON_ORDER.map((kind) => (
+                  <AnnotationSwatchButton key={kind} kind={kind} />
+                ))}
+              </div>
+              <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, maxWidth: 420, margin: '4px 0 0' }}>
+                Drag an icon onto the canvas to drop a free-floating annotation there (no simulation meaning) — pick
+                it up on the canvas afterward to type a label or move it.
+              </p>
+            </div>
+          </RibbonGroup>
+        )}
+
+        {(activeTab === 'manage' || activeTab === 'layers' || activeTab === 'tools') && (
           <PlaceholderTabContent tab={activeTab} />
         )}
       </div>
@@ -506,7 +524,6 @@ export function Ribbon({
 
 function PlaceholderTabContent({ tab }: { tab: RibbonTab }) {
   const copy: Record<string, string> = {
-    insert: 'Insert — icon/label overlays for explaining a flow (e.g. a "cash" icon riding a path). Not built yet.',
     manage: 'Manage — bulk project/graph operations. Not built yet.',
     layers: 'Layers — stacking floors along a z-axis. Not built yet.',
     tools: 'Tools — measurement and guide tools. Not built yet.',
@@ -602,6 +619,57 @@ function NodeSwatchButton({ kind, armed, onClick }: { kind: NodeKind; armed: boo
     <button type="button" onClick={onClick} title={`Place a ${kind}`} style={swatchButtonStyle(armed)}>
       <canvas ref={canvasRef} />
       <span style={swatchLabelStyle}>{kind}</span>
+    </button>
+  );
+}
+
+/** INSERT tab icon swatch (Falcon, 2026-09-09: "free-floating on
+ * canvas for now" / "click-and-drag"): draggable rather than arm-
+ * then-click like every other palette here, since Falcon specifically
+ * picked drag-and-drop for this one — dataTransfer carries the icon
+ * kind as plain text, read back by FluxCanvas's onDrop handler. */
+function AnnotationSwatchButton({ kind }: { kind: AnnotationIconKind }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const size = 28;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    const center = { x: size / 2, y: size / 2 };
+    const r = size * 0.42;
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = ANNOTATION_ICON_COLOR[kind];
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+    ctx.fillStyle = ANNOTATION_ICON_COLOR[kind];
+    annotationIcons[kind](ctx, center.x, center.y, r * 1.5);
+  }, [kind]);
+
+  return (
+    <button
+      type="button"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/x-fluxboard-annotation-icon', kind);
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
+      title={`Drag onto the canvas to place a ${ANNOTATION_ICON_LABEL[kind]} annotation`}
+      style={swatchButtonStyle(false)}
+    >
+      <canvas ref={canvasRef} />
+      <span style={swatchLabelStyle}>{ANNOTATION_ICON_LABEL[kind]}</span>
     </button>
   );
 }

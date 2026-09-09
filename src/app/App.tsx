@@ -14,6 +14,7 @@ import { PropertiesPanel } from './PropertiesPanel';
 import { ObjectRegistryManager } from './ObjectRegistryManager';
 import { collapseSelection, type Selection } from './selection';
 import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type Sketch, type SketchAttachment, type SketchSegment } from './sketchLayer';
+import { AnnotationLayer, type AnnotationIconKind } from './annotationLayer';
 import { ObjectRegistry } from '../skin/ObjectRegistry';
 import { GroupRegistry } from '../skin/GroupRegistry';
 import { theme, type CanvasBackground } from './theme';
@@ -187,6 +188,10 @@ export function App() {
   const floorLayout = useMemo(() => buildDemoFloorLayout(), []);
   const skinConfig = useMemo(() => buildDemoSkinConfig(), []);
   const sketchLayer = useMemo(() => new SketchLayer(), []);
+  // Canvas annotations (INSERT tab, 2026-09-09) — same "stable
+  // singleton, mutated directly, single source of truth" convention
+  // as every other store here.
+  const annotationLayer = useMemo(() => new AnnotationLayer(), []);
   // OBJECTS registry (FBP011, 2026-09-05) — same "stable singleton,
   // mutated directly, single source of truth" convention as the four
   // stores above (design doc §4.6).
@@ -422,7 +427,7 @@ export function App() {
           tickIntervalMs: tickIntervalMsRef.current,
           canvasBackground: canvasBackgroundRef.current,
         };
-        const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
+        const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry, settings);
         await saveProjectFile(id, data);
         manifest = {
           activeProjectId: id,
@@ -435,8 +440,8 @@ export function App() {
 
       const activeData = await loadProjectFile(manifest.activeProjectId);
       if (activeData) {
-        clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
-        const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
+        clearAllStores(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry);
+        const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry);
         setGridSpacing(settings.gridSpacing);
         setTickIntervalMs(settings.tickIntervalMs);
         setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -444,6 +449,7 @@ export function App() {
           ...activeData.nodes.map((n) => n.id),
           ...activeData.edges.map((e) => e.id),
           ...activeData.sketches.map((s) => s.id),
+          ...(activeData.annotations ?? []).map((a) => a.id),
         ]);
       }
       // else: the active project's file is missing (outside Tauri, or
@@ -485,7 +491,7 @@ export function App() {
         tickIntervalMs: tickIntervalMsRef.current,
         canvasBackground: canvasBackgroundRef.current,
       };
-      const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
+      const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry, settings);
       void saveProjectFile(activeProjectIdRef.current, saved);
     }
 
@@ -519,7 +525,7 @@ export function App() {
       tickIntervalMs: tickIntervalMsRef.current,
       canvasBackground: canvasBackgroundRef.current,
     };
-    return serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
+    return serializeState(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry, settings);
   }
 
   /** `settings` deliberately excluded (undo/redo scope note above) —
@@ -553,8 +559,8 @@ export function App() {
     const snap = undoHistoryRef.current[index];
     if (!snap) return;
     undoRestoringRef.current = true;
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
-    populateState(snap, graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry);
+    populateState(snap, graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry);
     // The returned settings are deliberately NOT applied here — see
     // the undo/redo scope note above; today's live grid/tick/theme
     // values are left exactly as they were.
@@ -658,7 +664,7 @@ export function App() {
       tickIntervalMs: tickIntervalMsRef.current,
       canvasBackground: canvasBackgroundRef.current,
     };
-    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
+    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry, settings);
     await saveProjectFile(activeProjectIdRef.current, saved);
   }
 
@@ -682,9 +688,9 @@ export function App() {
     if (id === activeProjectIdRef.current) return;
     await flushActiveProjectSave();
     const data = await loadProjectFile(id);
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry);
     if (data) {
-      const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
+      const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry);
       setGridSpacing(settings.gridSpacing);
       setTickIntervalMs(settings.tickIntervalMs);
       setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -692,6 +698,7 @@ export function App() {
         ...data.nodes.map((n) => n.id),
         ...data.edges.map((e) => e.id),
         ...data.sketches.map((s) => s.id),
+        ...(data.annotations ?? []).map((a) => a.id),
       ]);
     } else {
       nextIdRef.current = 1;
@@ -717,7 +724,7 @@ export function App() {
     const settings: CanvasSettings = { gridSpacing: 8, tickIntervalMs: 400, canvasBackground: 'white' };
     const data = makeBlankProjectData(settings);
     await saveProjectFile(id, data);
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, annotationLayer, objectRegistry, groupRegistry);
     setGridSpacing(settings.gridSpacing);
     setTickIntervalMs(settings.tickIntervalMs);
     setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -882,6 +889,8 @@ export function App() {
       for (const sketchId of selection.sketchIds) deleteSketchOnly(sketchId);
     } else if (selection.type === 'sketch') {
       deleteSketchOnly(selection.id);
+    } else if (selection.type === 'annotation') {
+      annotationLayer.remove(selection.id);
     } else {
       deleteEdgeOnly(selection.id);
     }
@@ -1215,6 +1224,20 @@ export function App() {
   function handleApplyEdgeStyle(edgeId: EdgeId, style: EdgeStyle): void {
     skinConfig.setEdgeSkin(edgeId, { style });
     setArmedEdgeStyle(null);
+  }
+
+  /** INSERT tab (Falcon, 2026-09-09): drag an icon from the ribbon
+   * and drop it on the canvas to place a free-floating annotation
+   * there — no simulation meaning, purely explanatory. Selects the
+   * new annotation so its label can be typed right away. */
+  function handleDropAnnotation(icon: AnnotationIconKind, position: Point): void {
+    const id = `annotation-${nextIdRef.current++}`;
+    annotationLayer.add({ id, position, icon });
+    setSelection({ type: 'annotation', id });
+  }
+
+  function handleUpdateAnnotationLabel(id: string, label: string): void {
+    annotationLayer.update(id, { label });
   }
 
   function handleCreateSketch(
@@ -1576,6 +1599,8 @@ export function App() {
             sketchArmed={sketchArmed}
             sketchStyle={sketchStyle}
             onCreateSketch={handleCreateSketch}
+            annotationLayer={annotationLayer}
+            onDropAnnotation={handleDropAnnotation}
             multiSelectArmed={multiSelectArmed}
             quickSelectFilter={quickSelectFilter}
             moveArmed={moveArmed}
@@ -1590,8 +1615,10 @@ export function App() {
           skinConfig={skinConfig}
           floorLayout={floorLayout}
           sketchLayer={sketchLayer}
+          annotationLayer={annotationLayer}
           objectRegistry={objectRegistry}
           onDelete={handleDeleteSelection}
+          onUpdateAnnotationLabel={handleUpdateAnnotationLabel}
           onDuplicate={handleDuplicateSelection}
           onConvertSketch={handleConvertSketchToPath}
           onPinSketchEnd={handlePinSketchEnd}

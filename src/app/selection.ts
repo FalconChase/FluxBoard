@@ -10,6 +10,18 @@ export type Selection =
   | { type: 'node'; id: NodeId }
   | { type: 'edge'; id: EdgeId }
   | {
+      /** Falcon, 2026-09-09 (INSERT tab's icon/label overlay concept,
+       * scoped to free-floating markers): a canvas annotation
+       * (app/annotationLayer.ts) — pure UI scratch, not a real
+       * GraphModel node/edge, carries no simulation meaning.
+       * Deliberately left OUT of the 'multi' selection below for this
+       * first pass (annotations aren't part of the multi-select
+       * quick-select flyout's kinds yet) — a scope call, not an
+       * oversight. */
+      type: 'annotation';
+      id: string;
+    }
+  | {
       type: 'sketch';
       id: string;
       /** Falcon, 2026-09-05 ("l3 connected non linear paths"):

@@ -22,6 +22,8 @@ import {
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
 import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type SketchAttachment, type SketchSegment } from './sketchLayer';
+import { AnnotationLayer, type AnnotationIconKind } from './annotationLayer';
+import { annotationIcons, ANNOTATION_ICON_COLOR } from '../skin/annotationIcons';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
 /** Falcon, 2026-09-05 ("no way to end the continuous lines... so im
@@ -136,6 +138,16 @@ interface FluxCanvasProps {
     toAttachment?: SketchAttachment | null,
   ) => void;
 
+  /** INSERT tab (Falcon, 2026-09-09): free-floating icon+label
+   * annotations, dragged from the ribbon and dropped on the canvas —
+   * pure UI scratch, no simulation meaning. Mutated directly like
+   * sketchLayer (design doc §4.6's "single source of truth"
+   * convention), so App.tsx never needs a move callback -- only
+   * creation (a native HTML5 drag-and-drop, which App.tsx alone can
+   * generate an id for) round-trips through a prop. */
+  annotationLayer: AnnotationLayer;
+  onDropAnnotation: (icon: AnnotationIconKind, worldPoint: Point) => void;
+
   /** FBP014 (2026-09-05): while armed, an empty-canvas drag draws a
    * marquee (rubber-band select) instead of panning, and clicking a
    * node toggles it into/out of the current multi selection instead
@@ -203,6 +215,13 @@ const PORT_SNAP_RADIUS_PX = 14;
  * for it being noticeably easier to actually land a snap while
  * sketching. */
 const SKETCH_PORT_SNAP_RADIUS_PX = 22;
+/** Falcon, 2026-09-09 (INSERT tab): screen-space click/drag radius
+ * around an annotation's icon -- kept in screen space, like
+ * PORT_SNAP_RADIUS_PX, so it feels the same size at any zoom level. */
+const ANNOTATION_HIT_RADIUS_PX = 16;
+/** World-space size an annotation's icon glyph renders at, before
+ * camera.zoom scaling -- roughly matches a node's own icon size. */
+const ANNOTATION_ICON_SIZE = 18;
 /** Falcon, 2026-09-05 ("Click to place each point... double-click...
  * to finish the chain"): two clicks land inside this window (ms) AND
  * within CLICK_MOVE_THRESHOLD_PX*2 of each other to count as a
@@ -261,6 +280,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     sketchArmed,
     sketchStyle,
     onCreateSketch,
+    annotationLayer,
+    onDropAnnotation,
     multiSelectArmed,
     quickSelectFilter,
     moveArmed,
@@ -305,6 +326,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   sketchStyleRef.current = sketchStyle;
   const onCreateSketchRef = useRef(onCreateSketch);
   onCreateSketchRef.current = onCreateSketch;
+  const onDropAnnotationRef = useRef(onDropAnnotation);
+  onDropAnnotationRef.current = onDropAnnotation;
   const multiSelectArmedRef = useRef(multiSelectArmed);
   multiSelectArmedRef.current = multiSelectArmed;
   const quickSelectFilterRef = useRef(quickSelectFilter);
@@ -452,6 +475,21 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
             if (dist <= toleranceWorld) return { id: sketch.id, segmentIndex: s };
           }
         }
+      }
+      return undefined;
+    }
+
+    /** Falcon, 2026-09-09 (INSERT tab): topmost annotation whose icon
+     * is within ANNOTATION_HIT_RADIUS_PX of worldPoint -- reverse
+     * iteration order so a more-recently-dropped annotation (drawn
+     * last, reads as "on top") wins a click over an older one sitting
+     * at nearly the same spot, same tie-break spirit as node z-order. */
+    function hitTestAnnotation(worldPoint: Point): string | undefined {
+      const toleranceWorld = ANNOTATION_HIT_RADIUS_PX / camera.zoom;
+      const all = annotationLayer.getAll();
+      for (let i = all.length - 1; i >= 0; i--) {
+        const a = all[i]!;
+        if (Math.hypot(a.position.x - worldPoint.x, a.position.y - worldPoint.y) <= toleranceWorld) return a.id;
       }
       return undefined;
     }
@@ -900,6 +938,46 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         }
       }
 
+      // --- Annotations (INSERT tab, Falcon 2026-09-09): free-
+      // floating icon+label markers, no simulation meaning -- drawn
+      // on top of nodes/paths/sketches so they always read clearly. ---
+      for (const annotation of annotationLayer.getAll()) {
+        const screen = camera.worldToScreen(annotation.position, viewport);
+        const r = ANNOTATION_ICON_SIZE * camera.zoom * 0.5;
+        const isSelected = sel?.type === 'annotation' && sel.id === annotation.id;
+        ctx!.save();
+        ctx!.beginPath();
+        ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+        ctx!.fillStyle = '#ffffff';
+        ctx!.fill();
+        ctx!.strokeStyle = ANNOTATION_ICON_COLOR[annotation.icon];
+        ctx!.lineWidth = isSelected ? 2.5 : 1.5;
+        ctx!.stroke();
+        ctx!.fillStyle = ANNOTATION_ICON_COLOR[annotation.icon];
+        ctx!.strokeStyle = ANNOTATION_ICON_COLOR[annotation.icon];
+        annotationIcons[annotation.icon](ctx!, screen.x, screen.y, r * 1.5);
+        if (isSelected) {
+          ctx!.beginPath();
+          ctx!.arc(screen.x, screen.y, r + 4, 0, Math.PI * 2);
+          ctx!.strokeStyle = 'rgba(37, 99, 235, 0.85)';
+          ctx!.lineWidth = 2;
+          ctx!.stroke();
+        }
+        if (annotation.label) {
+          ctx!.font = '600 11px system-ui, sans-serif';
+          ctx!.textAlign = 'center';
+          ctx!.textBaseline = 'top';
+          const labelY = screen.y + r + 4;
+          const metrics = ctx!.measureText(annotation.label);
+          const padX = 4;
+          ctx!.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx!.fillRect(screen.x - metrics.width / 2 - padX, labelY - 1, metrics.width + padX * 2, 14);
+          ctx!.fillStyle = '#1f2430';
+          ctx!.fillText(annotation.label, screen.x, labelY);
+        }
+        ctx!.restore();
+      }
+
       // FBP014 (2026-09-05): the marquee rectangle itself, drawn last
       // so it reads on top of everything while the drag is live.
       if (marqueeOrigin && marqueeCurrent) {
@@ -936,6 +1014,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       | 'edge-down'
       | 'sketch-down'
       | 'sketch-move'
+      | 'annotation-down'
+      | 'annotation-move'
       | 'wire'
       | 'style-wire'
       | 'move'
@@ -949,6 +1029,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     let pendingNodeHitId: NodeId | undefined;
     let pendingEdgeHitId: string | undefined;
     let pendingSketchHitId: string | undefined;
+    // Falcon, 2026-09-09 (INSERT tab): the annotation under an
+    // 'annotation-down'/'annotation-move' drag, and the point it
+    // started at -- same single-delta-from-original convention as
+    // sketchMoveOriginalPoints/-OriginWorld just below, so a whole
+    // drag never compounds tiny per-frame rounding.
+    let pendingAnnotationHitId: string | undefined;
+    let annotationMoveOriginalPosition: Point | undefined;
+    let annotationMoveOriginWorld: Point | undefined;
     // Falcon, 2026-09-05 ("click directly on that segment"): which
     // leg of pendingSketchHitId the press actually landed on, if it
     // turns into a drill-down click (see onPointerUp).
@@ -1190,6 +1278,15 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         return;
       }
 
+      const annotationHit = hitTestAnnotation(worldPoint);
+      if (annotationHit) {
+        pointerMode = 'annotation-down';
+        pendingAnnotationHitId = annotationHit;
+        annotationMoveOriginalPosition = annotationLayer.get(annotationHit)?.position;
+        annotationMoveOriginWorld = worldPoint;
+        return;
+      }
+
       // FBP014 (2026-09-05): empty canvas while the multi-select tool
       // is armed draws a marquee instead of panning -- panning from
       // empty space stays free the rest of the time, same as always.
@@ -1302,6 +1399,27 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const dy = current.y - sketchMoveOriginWorld.y;
         const points = sketchMoveOriginalPoints.map((p) => ({ x: p.x + dx, y: p.y + dy }));
         sketchLayer.update(pendingSketchHitId, { points });
+      }
+
+      if (pointerMode === 'annotation-down' && totalMove > CLICK_MOVE_THRESHOLD_PX) {
+        pointerMode = 'annotation-move';
+      }
+
+      if (
+        pointerMode === 'annotation-move' &&
+        pendingAnnotationHitId &&
+        annotationMoveOriginalPosition &&
+        annotationMoveOriginWorld
+      ) {
+        // Falcon, 2026-09-09 (INSERT tab): same single-delta-from-
+        // origin convention as sketch-move just above, so the drag
+        // never drifts under rounding.
+        const current = toWorld(e.clientX, e.clientY);
+        const dx = current.x - annotationMoveOriginWorld.x;
+        const dy = current.y - annotationMoveOriginWorld.y;
+        annotationLayer.update(pendingAnnotationHitId, {
+          position: { x: annotationMoveOriginalPosition.x + dx, y: annotationMoveOriginalPosition.y + dy },
+        });
       }
 
       if (pointerMode === 'marquee') {
@@ -1544,6 +1662,13 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // as a plain click would, rather than leaving the prior
         // selection (or none) in place.
         onSelectRef.current({ type: 'sketch', id: pendingSketchHitId });
+      } else if (pointerMode === 'annotation-down' && isClick && pendingAnnotationHitId) {
+        onSelectRef.current({ type: 'annotation', id: pendingAnnotationHitId });
+      } else if (pointerMode === 'annotation-move' && pendingAnnotationHitId) {
+        // Every pointermove during the drag already applied the
+        // annotation's new position -- select it on release, same as
+        // sketch-move above.
+        onSelectRef.current({ type: 'annotation', id: pendingAnnotationHitId });
       } else if (pointerMode === 'move' && pendingNodeHitId) {
         // FBP014 (2026-09-05): a group move already applied every
         // member's new position on each pointermove above -- leave
@@ -1770,6 +1895,23 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onSketchChainKeyDown);
 
+    // INSERT tab (Falcon, 2026-09-09): a native HTML5 drag-and-drop
+    // from the ribbon's icon swatches -- dragover must call
+    // preventDefault or the browser refuses the drop entirely.
+    // dataTransfer carries the icon kind as plain text.
+    function onDragOver(e: DragEvent): void {
+      e.preventDefault();
+    }
+    function onDrop(e: DragEvent): void {
+      e.preventDefault();
+      const icon = e.dataTransfer?.getData('application/x-fluxboard-annotation-icon');
+      if (!icon) return;
+      const worldPoint = toWorld(e.clientX, e.clientY);
+      onDropAnnotationRef.current(icon as AnnotationIconKind, worldPoint);
+    }
+    canvas.addEventListener('dragover', onDragOver);
+    canvas.addEventListener('drop', onDrop);
+
     return () => {
       cancelAnimationFrame(raf);
       driverRef.current = null;
@@ -1781,6 +1923,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       canvas.removeEventListener('pointerleave', onHoverLeave);
       canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onSketchChainKeyDown);
+      canvas.removeEventListener('dragover', onDragOver);
+      canvas.removeEventListener('drop', onDrop);
     };
     // Interaction props (selection, onSelect, placementKind,
     // onPlaceNode, onCreateEdge, snapToGrid, gridSpacing,

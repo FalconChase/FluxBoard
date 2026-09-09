@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { GraphModel } from '../core/GraphModel';
 import type { EdgeDef, NodeDef } from '../core/types';
 import { getPortCapacity } from '../core/nodes/portCapacity';
@@ -8,6 +8,8 @@ import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
 import type { ObjectRegistry } from '../skin/ObjectRegistry';
 import type { Selection } from './selection';
 import type { Sketch, SketchLayer } from './sketchLayer';
+import type { AnnotationLayer } from './annotationLayer';
+import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL } from '../skin/annotationIcons';
 import { theme } from './theme';
 
 interface PropertiesPanelProps {
@@ -21,6 +23,11 @@ interface PropertiesPanelProps {
   skinConfig: SkinConfig;
   floorLayout: FloorLayout;
   sketchLayer: SketchLayer;
+  /** Canvas annotations (INSERT tab, 2026-09-09) — free-floating
+   * icon+label markers, no simulation meaning. */
+  annotationLayer: AnnotationLayer;
+  /** Edits an annotation's free-text label in place. */
+  onUpdateAnnotationLabel: (id: string, label: string) => void;
   /** OBJECTS registry (FBP011, 2026-09-05) — lets SourceFields/
    * SorterFields/MixerFields offer a dropdown of actually-registered
    * item types instead of a free-text field that can silently
@@ -96,6 +103,8 @@ export function PropertiesPanel({
   skinConfig,
   floorLayout,
   sketchLayer,
+  annotationLayer,
+  onUpdateAnnotationLabel,
   objectRegistry,
   onDelete,
   onDuplicate,
@@ -189,6 +198,14 @@ export function PropertiesPanel({
             onDelete={onDelete}
             onConvertSketch={onConvertSketch}
             onPinSketchEnd={onPinSketchEnd}
+          />
+        )}
+        {selection?.type === 'annotation' && (
+          <AnnotationProperties
+            annotationId={selection.id}
+            annotationLayer={annotationLayer}
+            onUpdateLabel={onUpdateAnnotationLabel}
+            onDelete={onDelete}
           />
         )}
       </div>
@@ -1163,6 +1180,117 @@ function SketchSegmentProperties({
       </button>
     </div>
   );
+}
+
+/** INSERT tab (Falcon, 2026-09-09, scoped to "free-floating on canvas
+ * for now"): a canvas annotation's own properties -- which icon it
+ * uses, its free-text label, and delete. Reads/writes AnnotationLayer
+ * directly (design doc §4.6's "single source of truth" convention,
+ * same as SketchProperties reads/writes SketchLayer) except for the
+ * label, which is bounced through App.tsx's onUpdateLabel just so
+ * every keystroke doesn't need its own local-state dance here -- kept
+ * as local state anyway so typing feels immediate rather than
+ * re-reading the store on every render. */
+function AnnotationProperties({
+  annotationId,
+  annotationLayer,
+  onUpdateLabel,
+  onDelete,
+}: {
+  annotationId: string;
+  annotationLayer: AnnotationLayer;
+  onUpdateLabel: (id: string, label: string) => void;
+  onDelete: () => void;
+}) {
+  const annotation = annotationLayer.get(annotationId);
+  const [label, setLabel] = useState(annotation?.label ?? '');
+
+  if (!annotation) return <p style={{ fontSize: 12, color: theme.danger }}>Annotation no longer exists.</p>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>Annotation</div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
+        A free-floating {ANNOTATION_ICON_LABEL[annotation.icon]} marker — purely explanatory, no simulation meaning.
+      </p>
+
+      <div style={sectionTitleStyle}>Icon</div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+        {(Object.keys(annotationIcons) as (keyof typeof annotationIcons)[]).map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            title={ANNOTATION_ICON_LABEL[kind]}
+            onClick={() => annotationLayer.update(annotationId, { icon: kind })}
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: 13,
+              border: `2px solid ${kind === annotation.icon ? theme.accent : theme.borderStrong}`,
+              background: '#ffffff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          >
+            <AnnotationIconGlyph kind={kind} />
+          </button>
+        ))}
+      </div>
+
+      <div style={rowStyle}>
+        <label style={labelStyle}>Label</label>
+        <input
+          type="text"
+          value={label}
+          placeholder="(no label)"
+          style={inputStyle}
+          onChange={(e) => {
+            setLabel(e.target.value);
+            onUpdateLabel(annotationId, e.target.value);
+          }}
+        />
+      </div>
+
+      <div style={sectionTitleStyle}>Danger zone</div>
+      <button
+        type="button"
+        onClick={onDelete}
+        style={{ ...smallButtonStyle, width: '100%', color: theme.danger, borderColor: theme.dangerSoft }}
+      >
+        Delete annotation
+      </button>
+    </div>
+  );
+}
+
+/** Tiny canvas-drawn preview of one annotation icon glyph, used by the
+ * icon-picker swatches above -- same "draw at real size, small" idea
+ * as Ribbon.tsx's NodeSwatchButton. */
+function AnnotationIconGlyph({ kind }: { kind: keyof typeof annotationIcons }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const size = 18;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = ANNOTATION_ICON_COLOR[kind];
+    ctx.strokeStyle = ANNOTATION_ICON_COLOR[kind];
+    annotationIcons[kind](ctx, size / 2, size / 2, size * 0.42);
+  }, [kind]);
+
+  return <canvas ref={canvasRef} />;
 }
 
 function EdgeProperties({
