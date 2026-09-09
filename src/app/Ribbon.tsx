@@ -94,11 +94,17 @@ interface RibbonProps {
    * selection — mirrors sketchArmed's arm-then-act flow. */
   multiSelectArmed: boolean;
   onArmMultiSelect: (armed: boolean) => void;
-  /** FBP014 (2026-09-05): forces every drag to pan, even one starting
-   * on a node/path/sketch (an empty-canvas drag already pans for
-   * free without this). */
-  panArmed: boolean;
-  onArmPan: (armed: boolean) => void;
+  /** FBP016 (2026-09-06): the ribbon MODIFY group's Move/Rotate tools
+   * -- arm-then-drag "modes", same convention Pan/Multi-select already
+   * use, replacing the now-redundant Pan/hand tool (empty-canvas drag
+   * already pans for free without arming anything). Both apply only
+   * to the current selection when it's a single path or sketch --
+   * Falcon, 2026-09-06: "move,flip(horisontally,vertically),
+   * rotate(path and sketches only)". */
+  moveArmed: boolean;
+  onArmMove: (armed: boolean) => void;
+  rotateArmed: boolean;
+  onArmRotate: (armed: boolean) => void;
 
   canDelete: boolean;
   onDeleteSelection: () => void;
@@ -109,6 +115,17 @@ interface RibbonProps {
   /** Multi-select's hover flyout (2026-09-05) — replaces the
    * selection with every item of the given kind(s) and arms the tool. */
   onQuickSelect: (kind: QuickSelectKind) => void;
+  /** FBP016 (2026-09-06): direct-apply Modify actions -- Flip mirrors
+   * the selected path/sketch's interior shape across its own
+   * horizontal/vertical center axis (its two true endpoints never
+   * move); Group/Ungroup fold the current multi-selection into a
+   * persisted GroupRegistry entry (or dissolve one back apart). */
+  canFlip: boolean;
+  onFlipSelection: (axis: 'horizontal' | 'vertical') => void;
+  canGroup: boolean;
+  onGroupSelection: () => void;
+  canUngroup: boolean;
+  onUngroupSelection: () => void;
 
   /** FBP011 (2026-09-05): opens the OBJECTS registry manager — a
    * modal overlay (ObjectRegistryManager.tsx) rather than a ribbon-
@@ -131,9 +148,10 @@ interface RibbonProps {
  * approved as the "FluxBoard Ribbon UI" design mockup, then "Full
  * port now", 2026-09-04). HOME absorbs what used to be the left
  * panel's NODES/PATHS/OBJECTS tabs plus a MODIFY group — Delete,
- * Multi-select, Duplicate and Pan are all real now (FBP014,
- * 2026-09-05: the deferred Tools-tab concept, folded in here instead
- * of a separate tab). Objects opens ObjectRegistryManager.tsx (FBP011,
+ * Multi-select, Duplicate, Move, Rotate, Flip, Group and Ungroup are
+ * all real now (FBP014, 2026-09-05: the deferred Tools-tab concept,
+ * folded in here instead of a separate tab; FBP016, 2026-09-06:
+ * Move/Flip/Rotate/Group/Ungroup, replacing the old Pan/hand tool). Objects opens ObjectRegistryManager.tsx (FBP011,
  * 2026-09-05 — first-pass registry: shape/size/color per item type,
  * a modal rather than a ribbon group since a type is a referenced
  * library entry, not an arm-then-place kind). VIEW absorbs the
@@ -163,13 +181,21 @@ export function Ribbon({
   onSketchStyleChange,
   multiSelectArmed,
   onArmMultiSelect,
-  panArmed,
-  onArmPan,
+  moveArmed,
+  onArmMove,
+  rotateArmed,
+  onArmRotate,
   canDelete,
   onDeleteSelection,
   canDuplicate,
   onDuplicateSelection,
   onQuickSelect,
+  canFlip,
+  onFlipSelection,
+  canGroup,
+  onGroupSelection,
+  canUngroup,
+  onUngroupSelection,
   onOpenObjectsManager,
   snapToGrid,
   onToggleSnapToGrid,
@@ -386,11 +412,46 @@ export function Ribbon({
                   icon={<DuplicateIcon />}
                 />
                 <RibbonIconButton
-                  label="Pan"
-                  title="Drag anywhere to pan, even starting on a node or path — empty-canvas drag already pans for free without this"
-                  active={panArmed}
-                  onClick={() => onArmPan(!panArmed)}
-                  icon={<PanIcon />}
+                  label="Move"
+                  title="Drag to reshape the selected path/sketch's curve — its two ends stay pinned"
+                  active={moveArmed}
+                  onClick={() => onArmMove(!moveArmed)}
+                  icon={<MoveIcon />}
+                />
+                <RibbonIconButton
+                  label="Rotate"
+                  title="Drag to spin the selected path/sketch's curve around its own center — snaps near 15° steps"
+                  active={rotateArmed}
+                  onClick={() => onArmRotate(!rotateArmed)}
+                  icon={<RotateIcon />}
+                />
+                <RibbonIconButton
+                  label="Flip H"
+                  title={canFlip ? "Mirror the selected path/sketch's curve left-right" : 'Select a path or sketch first'}
+                  disabled={!canFlip}
+                  onClick={() => onFlipSelection('horizontal')}
+                  icon={<FlipHIcon />}
+                />
+                <RibbonIconButton
+                  label="Flip V"
+                  title={canFlip ? "Mirror the selected path/sketch's curve top-bottom" : 'Select a path or sketch first'}
+                  disabled={!canFlip}
+                  onClick={() => onFlipSelection('vertical')}
+                  icon={<FlipVIcon />}
+                />
+                <RibbonIconButton
+                  label="Group"
+                  title={canGroup ? 'Fold the current selection into one persisted group' : 'Select 2+ ungrouped items first'}
+                  disabled={!canGroup}
+                  onClick={onGroupSelection}
+                  icon={<GroupIcon />}
+                />
+                <RibbonIconButton
+                  label="Ungroup"
+                  title={canUngroup ? 'Dissolve this group back into its individual items' : 'Select a group first'}
+                  disabled={!canUngroup}
+                  onClick={onUngroupSelection}
+                  icon={<UngroupIcon />}
                 />
               </div>
             </RibbonGroup>
@@ -893,10 +954,53 @@ function DuplicateIcon() {
     </svg>
   );
 }
-function PanIcon() {
+function MoveIcon() {
   return (
     <svg {...iconProps()}>
-      <path d="M6 8.5V3a1 1 0 1 1 2 0v4.5M8 7.5V2.3a1 1 0 1 1 2 0V7.5M10 7.8V3.6a1 1 0 1 1 2 0v6.9c0 2.5-1.8 4.5-4.5 4.5S3 13 3 10.5v-2a1 1 0 1 1 2 0" />
+      <path d="M8 2.5v11M2.5 8h11" />
+      <path d="M8 2.5 6 4.5M8 2.5 10 4.5M8 13.5 6 11.5M8 13.5 10 11.5M2.5 8 4.5 6M2.5 8 4.5 10M13.5 8 11.5 6M13.5 8 11.5 10" />
+    </svg>
+  );
+}
+function RotateIcon() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M12.5 8A4.5 4.5 0 1 1 10.7 4.4" />
+      <path d="M12.8 2.6 12.5 5.6 9.6 5.1" />
+    </svg>
+  );
+}
+function FlipHIcon() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M8 2v12" strokeDasharray="1.6 1.6" />
+      <path d="M5.5 4.5 3 6v4l2.5 1.5Z" />
+      <path d="M10.5 4.5 13 6v4l-2.5 1.5Z" />
+    </svg>
+  );
+}
+function FlipVIcon() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M2 8h12" strokeDasharray="1.6 1.6" />
+      <path d="M4.5 5.5 6 3h4l1.5 2.5Z" />
+      <path d="M4.5 10.5 6 13h4l1.5-2.5Z" />
+    </svg>
+  );
+}
+function GroupIcon() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
+      <rect x="6.5" y="6.5" width="7" height="7" rx="1" />
+    </svg>
+  );
+}
+function UngroupIcon() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="2" y="2.5" width="5.2" height="5.2" rx="1" />
+      <rect x="8.8" y="8.3" width="5.2" height="5.2" rx="1" />
     </svg>
   );
 }

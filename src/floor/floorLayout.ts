@@ -1,5 +1,5 @@
 import type { EdgeId, NodeId } from '../core/types';
-import { BezierPath, MultiSegmentPath, curveBetween, type EdgePath, type Point } from './bezier';
+import { BezierPath, MultiSegmentPath, curveBetween, bendPoint, type EdgePath, type Point } from './bezier';
 import { octagonPortAnchor, OCTAGON_PORT_COUNT } from '../skin/octagon';
 
 /** World-space node radius, shared by every layer that needs to know
@@ -538,6 +538,59 @@ export class FloorLayout {
     const fromPoint = octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor);
     const toPoint = octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor);
     this.edgeCurves.set(edgeId, new MultiSegmentPath([fromPoint, ...interior, toPoint], nextBows));
+  }
+
+  /** The two TRUE (node-anchored) endpoints of an edge's curve, in
+   * world space -- undefined if the edge has no recorded anchors or
+   * either node has no position yet. Shared by the ribbon's Move/
+   * Flip/Rotate MODIFY tools (Falcon, 2026-09-06) so they all reason
+   * about the same two fixed points every one of them keeps pinned. */
+  getEdgeEndpoints(edgeId: EdgeId): { from: Point; to: Point } | undefined {
+    const anchors = this.edgeAnchors.get(edgeId);
+    if (!anchors) return undefined;
+    const fromPos = this.nodePositions.get(anchors.sourceNodeId);
+    const toPos = this.nodePositions.get(anchors.targetNodeId);
+    if (!fromPos || !toPos) return undefined;
+    return {
+      from: octagonPortAnchor(fromPos, NODE_RADIUS, anchors.sourceAnchor),
+      to: octagonPortAnchor(toPos, NODE_RADIUS, anchors.targetAnchor),
+    };
+  }
+
+  /** The edge's current reshape-able interior points (Falcon,
+   * 2026-09-06: Move/Flip/Rotate "reshape the curve, endpoints stay
+   * pinned") -- whatever's already stored via setEdgeSegments, or,
+   * for an ordinary single-bow edge that's never been reshaped
+   * before, the ONE implied bend point its bow already describes
+   * (bezier.ts's bendPoint -- the same perpendicular-offset formula
+   * curveBetween itself uses). Read-only -- doesn't write/promote
+   * anything, so it's safe to call just to check what a Move/Flip/
+   * Rotate drag would start from. */
+  getEdgeReshapePoints(edgeId: EdgeId): Point[] {
+    const interior = this.edgeInteriorPoints.get(edgeId);
+    if (interior && interior.length > 0) return interior;
+    const ends = this.getEdgeEndpoints(edgeId);
+    if (!ends) return [];
+    return [bendPoint(ends.from, ends.to, this.edgeBow.get(edgeId) ?? 0)];
+  }
+
+  /** Overwrites an edge's reshape-able interior points -- the ONLY
+   * way Move/Flip/Rotate ever write back. Promotes a plain single-bow
+   * edge to a real stored multi-segment shape the first time this is
+   * called (via setEdgeSegments): the new per-segment bows carry over
+   * the edge's existing plain bow on every segment so the very first
+   * frame of a drag doesn't visually jump, then are left alone (this
+   * function never touches them again) so later per-segment bow
+   * edits made through the properties panel survive further Move/
+   * Flip/Rotate calls untouched. */
+  setEdgeReshapePoints(edgeId: EdgeId, points: Point[]): void {
+    const bow = this.edgeBow.get(edgeId) ?? 0;
+    const existingBows = this.edgeSegmentBows.get(edgeId);
+    const bows =
+      existingBows && existingBows.length === points.length + 1
+        ? existingBows
+        : points.map(() => bow).concat(bow);
+    this.setEdgeSegments(edgeId, points, bows);
   }
 
   /** Falcon, 2026-09-05: "dont allow overlapping of nodes and paths

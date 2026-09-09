@@ -127,6 +127,84 @@ export class BezierPath implements EdgePath {
  * starts it at a visibly-curved 0.15 (PropertiesPanel.tsx's
  * PathShapeField) -- that's a distinct, still-curved starting point
  * for an explicit user choice, not this creation-time default. */
+
+/** Falcon, 2026-09-06 ("move, flip(horizontally,vertically), rotate
+ * (path and sketches only) ... reshape the curve, endpoints stay
+ * pinned"): shared pure geometry for the ribbon MODIFY group's Move/
+ * Flip/Rotate tools. Every one of these operates ONLY on a shape's
+ * INTERIOR points -- a path's two node-anchored ends or a sketch's
+ * points[0]/points[last] are never passed in here, which is what
+ * keeps them pinned no matter what the interior does.
+ *
+ * `bendPoint` is also what "promotes" a plain single-bow path/sketch
+ * (which has no real interior point stored at all, just a bow
+ * scalar) into one real, movable point the first time any of these
+ * tools touches it -- the exact same perpendicular-offset convention
+ * curveBetween above already uses, so the promoted point sits
+ * exactly where the existing curve already bends through. */
+export function bendPoint(from: Point, to: Point, bow: number): Point {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  return { x: (from.x + to.x) / 2 + -dy * bow, y: (from.y + to.y) / 2 + dx * bow };
+}
+
+/** Bounding-box center of every point a shape currently has -- its
+ * two true (pinned) endpoints PLUS its interior points -- the fixed
+ * reference Flip/Rotate mirror or spin around, so a shape transforms
+ * "in place" relative to its own footprint rather than some
+ * arbitrary world origin. */
+export function shapeCenter(allPoints: Point[]): Point {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of allPoints) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+}
+
+export function translatePoints(points: Point[], dx: number, dy: number): Point[] {
+  return points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+}
+
+/** Mirrors every point across the vertical ('horizontal' flip -- left
+ * and right swap) or horizontal ('vertical' flip -- top and bottom
+ * swap) line through `center`. */
+export function flipPoints(points: Point[], center: Point, axis: 'horizontal' | 'vertical'): Point[] {
+  return points.map((p) =>
+    axis === 'horizontal' ? { x: 2 * center.x - p.x, y: p.y } : { x: p.x, y: 2 * center.y - p.y },
+  );
+}
+
+const ROTATE_SNAP_STEP_RAD = (15 * Math.PI) / 180;
+const ROTATE_SNAP_TOLERANCE_RAD = (4 * Math.PI) / 180;
+
+/** Falcon, 2026-09-06: "rotatable but snappable also when needed" --
+ * a free continuous rotation everywhere, magnetically snapping to
+ * the nearest 15° step whenever the raw angle already landed within
+ * 4° of one. */
+export function snapRotationAngle(angleRad: number): number {
+  const nearest = Math.round(angleRad / ROTATE_SNAP_STEP_RAD) * ROTATE_SNAP_STEP_RAD;
+  return Math.abs(angleRad - nearest) <= ROTATE_SNAP_TOLERANCE_RAD ? nearest : angleRad;
+}
+
+/** Rotates every point by `angleRad` around `center` (snapped per
+ * snapRotationAngle above). */
+export function rotatePoints(points: Point[], center: Point, angleRad: number): Point[] {
+  const snapped = snapRotationAngle(angleRad);
+  const cos = Math.cos(snapped);
+  const sin = Math.sin(snapped);
+  return points.map((p) => {
+    const dx = p.x - center.x;
+    const dy = p.y - center.y;
+    return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
+  });
+}
+
 export function curveBetween(from: Point, to: Point, bow = 0): CubicBezier {
   const dx = to.x - from.x;
   const dy = to.y - from.y;

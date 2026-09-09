@@ -3,7 +3,7 @@ import { FloorLayout, NODE_RADIUS } from '../floor/floorLayout';
 import { FluxCanvas, type FluxCanvasHandle, type SketchStyle } from './FluxCanvas';
 import { GraphModel } from '../core/GraphModel';
 import type { EdgeId, NodeId, NodeKind } from '../core/types';
-import type { Point } from '../floor/bezier';
+import { shapeCenter, flipPoints, type Point } from '../floor/bezier';
 import { SkinConfig } from '../skin/SkinConfig';
 import { getPortCapacity } from '../core/nodes/portCapacity';
 import type { EdgeStyle } from '../skin/pathSkin';
@@ -13,8 +13,9 @@ import { StatusBar } from './StatusBar';
 import { PropertiesPanel } from './PropertiesPanel';
 import { ObjectRegistryManager } from './ObjectRegistryManager';
 import { collapseSelection, type Selection } from './selection';
-import { SketchLayer, type Sketch, type SketchAttachment, type SketchSegment } from './sketchLayer';
+import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type Sketch, type SketchAttachment, type SketchSegment } from './sketchLayer';
 import { ObjectRegistry } from '../skin/ObjectRegistry';
+import { GroupRegistry } from '../skin/GroupRegistry';
 import { theme, type CanvasBackground } from './theme';
 import {
   clearAllStores,
@@ -190,6 +191,9 @@ export function App() {
   // mutated directly, single source of truth" convention as the four
   // stores above (design doc §4.6).
   const objectRegistry = useMemo(() => new ObjectRegistry(), []);
+  // FBP016 (2026-09-06): local groups -- same "mutated directly,
+  // single source of truth" instance pattern as every other store here.
+  const groupRegistry = useMemo(() => new GroupRegistry(), []);
 
   // Milestone 5 (minimal-chrome scope, FBP008 resolved): selection +
   // node placement + body-to-body wiring. graph/floorLayout/skinConfig
@@ -243,7 +247,10 @@ export function App() {
    * the plain ribbon button; a quick-select pick narrows it right
    * after (handleQuickSelect). */
   const [quickSelectFilter, setQuickSelectFilter] = useState<'all' | 'nodes' | 'paths' | 'sketches'>('nodes');
-  const [panArmed, setPanArmed] = useState(false);
+  // FBP016 (2026-09-06): Move/Rotate -- replaces panArmed's old slot
+  // (Falcon: "remove the redundant pan/hand on modify section").
+  const [moveArmed, setMoveArmed] = useState(false);
+  const [rotateArmed, setRotateArmed] = useState(false);
   const [gridSpacing, setGridSpacing] = useState(8);
   const [tickIntervalMs, setTickIntervalMs] = useState(400);
   // Falcon, 2026-09-04: "I WANT THE BOARD OR THE WORKSPACE BE SET TO
@@ -415,7 +422,7 @@ export function App() {
           tickIntervalMs: tickIntervalMsRef.current,
           canvasBackground: canvasBackgroundRef.current,
         };
-        const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
+        const data = legacy ?? serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
         await saveProjectFile(id, data);
         manifest = {
           activeProjectId: id,
@@ -428,8 +435,8 @@ export function App() {
 
       const activeData = await loadProjectFile(manifest.activeProjectId);
       if (activeData) {
-        clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
-        const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+        clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
+        const settings = populateState(activeData, graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
         setGridSpacing(settings.gridSpacing);
         setTickIntervalMs(settings.tickIntervalMs);
         setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -478,7 +485,7 @@ export function App() {
         tickIntervalMs: tickIntervalMsRef.current,
         canvasBackground: canvasBackgroundRef.current,
       };
-      const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
+      const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
       void saveProjectFile(activeProjectIdRef.current, saved);
     }
 
@@ -512,7 +519,7 @@ export function App() {
       tickIntervalMs: tickIntervalMsRef.current,
       canvasBackground: canvasBackgroundRef.current,
     };
-    return serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
+    return serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
   }
 
   /** `settings` deliberately excluded (undo/redo scope note above) —
@@ -546,8 +553,8 @@ export function App() {
     const snap = undoHistoryRef.current[index];
     if (!snap) return;
     undoRestoringRef.current = true;
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
-    populateState(snap, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
+    populateState(snap, graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
     // The returned settings are deliberately NOT applied here — see
     // the undo/redo scope note above; today's live grid/tick/theme
     // values are left exactly as they were.
@@ -651,7 +658,7 @@ export function App() {
       tickIntervalMs: tickIntervalMsRef.current,
       canvasBackground: canvasBackgroundRef.current,
     };
-    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, settings);
+    const saved = serializeState(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry, settings);
     await saveProjectFile(activeProjectIdRef.current, saved);
   }
 
@@ -675,9 +682,9 @@ export function App() {
     if (id === activeProjectIdRef.current) return;
     await flushActiveProjectSave();
     const data = await loadProjectFile(id);
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
     if (data) {
-      const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+      const settings = populateState(data, graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
       setGridSpacing(settings.gridSpacing);
       setTickIntervalMs(settings.tickIntervalMs);
       setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -710,7 +717,7 @@ export function App() {
     const settings: CanvasSettings = { gridSpacing: 8, tickIntervalMs: 400, canvasBackground: 'white' };
     const data = makeBlankProjectData(settings);
     await saveProjectFile(id, data);
-    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry);
+    clearAllStores(graph, floorLayout, skinConfig, sketchLayer, objectRegistry, groupRegistry);
     setGridSpacing(settings.gridSpacing);
     setTickIntervalMs(settings.tickIntervalMs);
     setCanvasBackground(settings.canvasBackground ?? 'white');
@@ -788,9 +795,11 @@ export function App() {
     const removedEdgeIds = graph.removeNode(nodeId);
     floorLayout.removeNodePosition(nodeId);
     skinConfig.removeNode(nodeId);
+    groupRegistry.removeNodeMember(nodeId);
     for (const edgeId of removedEdgeIds) {
       floorLayout.removeEdgeCurve(edgeId);
       skinConfig.removeEdge(edgeId);
+      groupRegistry.removeEdgeMember(edgeId);
     }
     for (const sketch of sketchLayer.getAll()) {
       let patch: Partial<Sketch> | null = null;
@@ -813,6 +822,7 @@ export function App() {
     graph.removeEdge(edgeId);
     floorLayout.removeEdgeCurve(edgeId);
     skinConfig.removeEdge(edgeId);
+    groupRegistry.removeEdgeMember(edgeId);
   }
 
   /** Plain sketch removal — same extraction as `deleteEdgeOnly`, for
@@ -822,6 +832,44 @@ export function App() {
     if (sketch?.fromAttachment) floorLayout.releaseReservation(`${sketchId}:from`);
     if (sketch?.toAttachment) floorLayout.releaseReservation(`${sketchId}:to`);
     sketchLayer.remove(sketchId);
+    groupRegistry.removeSketchMember(sketchId);
+  }
+
+  /** FBP016 (2026-09-06, "use multiselect then those will get group
+   * into one group ... clicking [a member] the selection base"):
+   * every click-driven selection from FluxCanvas (a node/edge/sketch
+   * click, or a segment drill-in) routes through here instead of raw
+   * setSelection, so a member that belongs to a persisted group gets
+   * expanded to the whole group's multi-selection -- UNLESS that
+   * exact group is already the current selection, in which case this
+   * click drills into the one member clicked (mirrors the existing
+   * sketch-segment drill-in convention exactly: click selects the
+   * whole thing, click again drills into the specific part). Marquee/
+   * quick-select-built multi selections never pass through here (they
+   * already arrive as {type:'multi'} with no groupId), so they're
+   * untouched by this. */
+  function handleSelect(next: Selection | null): void {
+    if (next && (next.type === 'node' || next.type === 'edge' || next.type === 'sketch')) {
+      const groupId =
+        next.type === 'node'
+          ? groupRegistry.groupOfNode(next.id)
+          : next.type === 'edge'
+            ? groupRegistry.groupOfEdge(next.id)
+            : groupRegistry.groupOfSketch(next.id);
+      if (groupId) {
+        const alreadyThisGroup = selection?.type === 'multi' && selection.groupId === groupId;
+        if (!alreadyThisGroup) {
+          const def = groupRegistry.get(groupId);
+          if (def) {
+            setSelection({ type: 'multi', nodeIds: def.nodeIds, edgeIds: def.edgeIds, sketchIds: def.sketchIds, groupId });
+            return;
+          }
+        }
+        // Already the selected group (or its def somehow vanished) --
+        // fall through to select the specific member clicked.
+      }
+    }
+    setSelection(next);
   }
 
   function handleDeleteSelection(): void {
@@ -912,6 +960,81 @@ export function App() {
     }
 
     setSelection(newIds.length === 1 ? { type: 'node', id: newIds[0]! } : { type: 'multi', nodeIds: newIds, edgeIds: [], sketchIds: [] });
+  }
+
+  /** FBP016 (2026-09-06, "flip(horisontally,vertically) ...
+   * (path and sketches only)"): mirrors the selected path/sketch's
+   * INTERIOR curve points across its own bounding-box center axis --
+   * its two true endpoints (a path's node-anchored ends, a sketch's
+   * pinned/floating ends) never move. A dead-straight (no bend at
+   * all) path/sketch has nothing to mirror, so this is a harmless
+   * no-op for one. Click-to-apply, same convention as Duplicate --
+   * no drag gesture needed since the transform is fully determined
+   * by the shape's own current geometry. */
+  function handleFlipSelection(axis: 'horizontal' | 'vertical'): void {
+    if (!selection) return;
+    if (selection.type === 'edge') {
+      const ends = floorLayout.getEdgeEndpoints(selection.id);
+      if (!ends) return;
+      const interior = floorLayout.getEdgeReshapePoints(selection.id);
+      if (interior.length === 0) return;
+      const center = shapeCenter([ends.from, ends.to, ...interior]);
+      floorLayout.setEdgeReshapePoints(selection.id, flipPoints(interior, center, axis));
+    } else if (selection.type === 'sketch') {
+      const sketch = sketchLayer.get(selection.id);
+      if (!sketch) return;
+      const interior = getSketchReshapePoints(sketch);
+      if (interior.length === 0) return;
+      const center = shapeCenter(sketch.points);
+      sketchLayer.update(selection.id, applySketchReshapePoints(sketch, flipPoints(interior, center, axis)));
+    }
+  }
+
+  /** FBP016 (2026-09-06, "use multiselect then those will get group
+   * into one group as a local group"): folds the current multi
+   * selection into a new persisted GroupRegistry entry. Refuses (with
+   * a flashed reason, same silent-rejection convention as everything
+   * else) if any member already belongs to a DIFFERENT group rather
+   * than silently stealing it away -- a marquee/quick-select drag can
+   * scoop up members of an existing group without ever going through
+   * handleSelect's single-click interception, so this has to check
+   * for itself. */
+  function handleGroupSelection(): void {
+    if (!selection || selection.type !== 'multi' || selection.groupId) return;
+    const { nodeIds, edgeIds, sketchIds } = selection;
+    const total = nodeIds.length + edgeIds.length + sketchIds.length;
+    if (total < 2) return;
+    const conflicting = new Set<string>();
+    for (const id of nodeIds) {
+      const g = groupRegistry.groupOfNode(id);
+      if (g) conflicting.add(g);
+    }
+    for (const id of edgeIds) {
+      const g = groupRegistry.groupOfEdge(id);
+      if (g) conflicting.add(g);
+    }
+    for (const id of sketchIds) {
+      const g = groupRegistry.groupOfSketch(id);
+      if (g) conflicting.add(g);
+    }
+    if (conflicting.size > 0) {
+      flashMessage('Some of these already belong to another group — ungroup them first.');
+      return;
+    }
+    const id = `group-${nextIdRef.current++}`;
+    groupRegistry.create(id, nodeIds, edgeIds, sketchIds);
+    setSelection({ type: 'multi', nodeIds, edgeIds, sketchIds, groupId: id });
+  }
+
+  /** FBP016 (2026-09-06, "ungroup/explode reverting the group into as
+   * before regardless of other modifications"): dissolves the
+   * selected group's STRUCTURE only -- every member keeps whatever
+   * position/edits it picked up while grouped, and stays selected
+   * afterward as a plain (no longer persisted) multi selection. */
+  function handleUngroupSelection(): void {
+    if (!selection || selection.type !== 'multi' || !selection.groupId) return;
+    groupRegistry.dissolve(selection.groupId);
+    setSelection({ type: 'multi', nodeIds: selection.nodeIds, edgeIds: selection.edgeIds, sketchIds: selection.sketchIds });
   }
 
   function handlePlaceNode(kind: NodeKind, worldPoint: Point): void {
@@ -1017,7 +1140,8 @@ export function App() {
     setArmedEdgeStyle(null);
     setSketchArmed(false);
     setMultiSelectArmed(false);
-    setPanArmed(false);
+    setMoveArmed(false);
+    setRotateArmed(false);
     setPlacementKind(kind);
   }
 
@@ -1025,7 +1149,8 @@ export function App() {
     setPlacementKind(null);
     setSketchArmed(false);
     setMultiSelectArmed(false);
-    setPanArmed(false);
+    setMoveArmed(false);
+    setRotateArmed(false);
     setArmedEdgeStyle(style);
   }
 
@@ -1033,7 +1158,8 @@ export function App() {
     setPlacementKind(null);
     setArmedEdgeStyle(null);
     setMultiSelectArmed(false);
-    setPanArmed(false);
+    setMoveArmed(false);
+    setRotateArmed(false);
     setSketchArmed(armed);
   }
 
@@ -1041,17 +1167,31 @@ export function App() {
     setPlacementKind(null);
     setArmedEdgeStyle(null);
     setSketchArmed(false);
-    setPanArmed(false);
+    setMoveArmed(false);
+    setRotateArmed(false);
     setMultiSelectArmed(armed);
     setQuickSelectFilter('nodes');
   }
 
-  function handleArmPan(armed: boolean): void {
+  /** FBP016 (2026-09-06): Move/Rotate -- replaces handleArmPan's old
+   * slot in the same mutual-exclusion pattern (arming one clears
+   * every other tool, including each other). */
+  function handleArmMove(armed: boolean): void {
     setPlacementKind(null);
     setArmedEdgeStyle(null);
     setSketchArmed(false);
     setMultiSelectArmed(false);
-    setPanArmed(armed);
+    setRotateArmed(false);
+    setMoveArmed(armed);
+  }
+
+  function handleArmRotate(armed: boolean): void {
+    setPlacementKind(null);
+    setArmedEdgeStyle(null);
+    setSketchArmed(false);
+    setMultiSelectArmed(false);
+    setMoveArmed(false);
+    setRotateArmed(armed);
   }
 
   /** Multi-select's hover flyout (2026-09-05, Falcon: "when i hover
@@ -1327,17 +1467,23 @@ export function App() {
               : quickSelectFilter === 'all'
                 ? 'Drag over the canvas — every node, path, and sketch inside the box will be selected.'
                 : 'Click nodes to toggle them into the selection, or drag over empty canvas to select the nodes inside the box.'
-          : panArmed
-            ? 'Drag anywhere to pan — even starting on a node or path.'
-            : selection?.type === 'node'
-              ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
-              : selection?.type === 'multi'
-                ? `${selection.nodeIds.length + selection.edgeIds.length + selection.sketchIds.length} items selected — drag a node to move the group, Delete to remove, Duplicate to clone the nodes.`
-                : selection?.type === 'edge'
-                  ? 'Path selected — edit it in the properties panel, Delete to remove.'
-                  : selection?.type === 'sketch'
-                    ? 'Sketch selected — Delete to remove, or Convert to path in the properties panel once both ends are pinned.'
-                    : 'Click a node or path to select it, choose something from the ribbon to add, or Shift+drag from one node to another to connect them.';
+          : moveArmed
+            ? selection?.type === 'edge' || selection?.type === 'sketch'
+              ? 'Drag anywhere to reshape the selected path/sketch — its two ends stay pinned.'
+              : 'Select a path or sketch, then drag to move its shape.'
+            : rotateArmed
+              ? selection?.type === 'edge' || selection?.type === 'sketch'
+                ? 'Drag anywhere to rotate the selected path/sketch around its own center — snaps near 15° steps.'
+                : 'Select a path or sketch, then drag to rotate its shape.'
+              : selection?.type === 'node'
+                ? 'Node selected — drag to move it (if unlocked), Shift+drag to wire, Delete to remove.'
+                : selection?.type === 'multi'
+                  ? `${selection.nodeIds.length + selection.edgeIds.length + selection.sketchIds.length} items selected${selection.groupId ? ' (grouped)' : ''} — drag a node to move the group, Delete to remove, Duplicate to clone the nodes.`
+                  : selection?.type === 'edge'
+                    ? 'Path selected — edit it in the properties panel, Delete to remove.'
+                    : selection?.type === 'sketch'
+                      ? 'Sketch selected — Delete to remove, or Convert to path in the properties panel once both ends are pinned.'
+                      : 'Click a node or path to select it, choose something from the ribbon to add, or Shift+drag from one node to another to connect them.';
 
   return (
     <div
@@ -1369,13 +1515,25 @@ export function App() {
         onSketchStyleChange={setSketchStyle}
         multiSelectArmed={multiSelectArmed}
         onArmMultiSelect={handleArmMultiSelect}
-        panArmed={panArmed}
-        onArmPan={handleArmPan}
+        moveArmed={moveArmed}
+        onArmMove={handleArmMove}
+        rotateArmed={rotateArmed}
+        onArmRotate={handleArmRotate}
         canDelete={selection !== null}
         onDeleteSelection={handleDeleteSelection}
         canDuplicate={selection?.type === 'node' || (selection?.type === 'multi' && selection.nodeIds.length > 0)}
         onDuplicateSelection={handleDuplicateSelection}
         onQuickSelect={handleQuickSelect}
+        canFlip={selection?.type === 'edge' || selection?.type === 'sketch'}
+        onFlipSelection={handleFlipSelection}
+        canGroup={
+          selection?.type === 'multi' &&
+          !selection.groupId &&
+          selection.nodeIds.length + selection.edgeIds.length + selection.sketchIds.length >= 2
+        }
+        onGroupSelection={handleGroupSelection}
+        canUngroup={selection?.type === 'multi' && !!selection.groupId}
+        onUngroupSelection={handleUngroupSelection}
         onOpenObjectsManager={() => setObjectsManagerOpen(true)}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}
@@ -1404,7 +1562,7 @@ export function App() {
             objectRegistry={objectRegistry}
             tickIntervalMs={tickIntervalMs}
             selection={selection}
-            onSelect={setSelection}
+            onSelect={handleSelect}
             placementKind={placementKind}
             onPlaceNode={handlePlaceNode}
             onCreateEdge={handleCreateEdge}
@@ -1420,7 +1578,8 @@ export function App() {
             onCreateSketch={handleCreateSketch}
             multiSelectArmed={multiSelectArmed}
             quickSelectFilter={quickSelectFilter}
-            panArmed={panArmed}
+            moveArmed={moveArmed}
+            rotateArmed={rotateArmed}
             canvasBackground={canvasBackground}
             onCursorWorldPositionChange={setCursorWorldPosition}
           />

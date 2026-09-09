@@ -163,6 +163,7 @@ export function PropertiesPanel({
             nodeIds={selection.nodeIds}
             edgeIds={selection.edgeIds}
             sketchIds={selection.sketchIds}
+            groupId={selection.groupId}
             graph={graph}
             onDelete={onDelete}
             onDuplicate={onDuplicate}
@@ -302,6 +303,7 @@ function MultiProperties({
   nodeIds,
   edgeIds,
   sketchIds,
+  groupId,
   graph,
   onDelete,
   onDuplicate,
@@ -311,6 +313,12 @@ function MultiProperties({
   nodeIds: string[];
   edgeIds: string[];
   sketchIds: string[];
+  /** FBP016 (2026-09-06): set when this multi selection is a
+   * persisted GroupRegistry entry, not just a transient marquee/
+   * quick-select group -- Ungroup lives in the ribbon's MODIFY group,
+   * this is just a small indicator so it's clear which kind of
+   * selection this is. */
+  groupId?: string;
   graph: GraphModel;
   onDelete: () => void;
   onDuplicate: () => void;
@@ -344,8 +352,16 @@ function MultiProperties({
 
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{total} items selected</div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+        {total} items selected{groupId ? ' — grouped' : ''}
+      </div>
       <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5, marginBottom: 10 }}>{summaryParts.join(', ')}</p>
+      {groupId && (
+        <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginBottom: 10 }}>
+          This is a saved group — clicking any member selects the whole group again. Use Ungroup in the ribbon's
+          Modify group to dissolve it.
+        </p>
+      )}
       {nodeIds.length > 0 && (
         <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
           Drag any selected node to move the whole group together.

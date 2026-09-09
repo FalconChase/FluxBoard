@@ -34,7 +34,21 @@ export type Selection =
    * shrink to exactly one member total collapses back down to the
    * matching singular variant instead -- see `collapseSelection`
    * below, the only place a 'multi' should ever be constructed. */
-  | { type: 'multi'; nodeIds: NodeId[]; edgeIds: EdgeId[]; sketchIds: string[] };
+  | {
+      type: 'multi';
+      nodeIds: NodeId[];
+      edgeIds: EdgeId[];
+      sketchIds: string[];
+      /** Falcon, 2026-09-06 ("use multiselect then those will get
+       * group into one group as a local group"): set when this multi
+       * selection IS a persisted GroupRegistry entry, not just a
+       * transient marquee/quick-select group -- lets the ribbon's
+       * Group/Ungroup buttons and PropertiesPanel tell the two apart
+       * without a separate Selection variant. Undefined for every
+       * ordinary transient multi-select, exactly as before this
+       * existed. */
+      groupId?: string;
+    };
 
 /** The three id arrays a 'multi' selection carries, also usable as a
  * plain working value while building/editing one up before it's

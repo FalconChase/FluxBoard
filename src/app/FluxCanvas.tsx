@@ -5,7 +5,7 @@ import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
 import type { EdgeDef, EdgeId, NodeDef, NodeId, NodeKind } from '../core/types';
-import { curveBetween, BezierPath, type Point } from '../floor/bezier';
+import { curveBetween, BezierPath, shapeCenter, translatePoints, rotatePoints, type Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { ObjectRegistry } from '../skin/ObjectRegistry';
 import { darkenHex } from '../skin/canvasUtil';
@@ -21,7 +21,7 @@ import {
 } from '../skin/pathSkin';
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
-import { SketchLayer, type SketchAttachment, type SketchSegment } from './sketchLayer';
+import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type SketchAttachment, type SketchSegment } from './sketchLayer';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
 /** Falcon, 2026-09-05 ("no way to end the continuous lines... so im
@@ -156,12 +156,18 @@ interface FluxCanvasProps {
    * say, simply ignores that node -- only the active kind(s) join
    * the selection. */
   quickSelectFilter: 'all' | 'nodes' | 'paths' | 'sketches';
-  /** FBP014 (2026-09-05): while armed, EVERY drag pans the camera
-   * regardless of what's under the cursor -- unlike the free empty-
-   * canvas pan that's always available, this lets a drag that starts
-   * on top of a node/path/sketch pan too, without grabbing/moving/
-   * selecting it. */
-  panArmed: boolean;
+  /** FBP016 (2026-09-06): the ribbon MODIFY group's Move/Rotate
+   * tools -- replaces the old Pan tool's slot (Falcon: "remove the
+   * redundant pan/hand on modify section" -- an empty-canvas drag
+   * already pans for free without arming anything). While either is
+   * armed AND the current selection is a single path or sketch, ANY
+   * drag reshapes that selection's interior curve points (its two
+   * true endpoints never move) instead of doing anything else --
+   * regardless of what's under the cursor, same "arm a mode"
+   * convention Pan had. A no-op drag (nothing valid selected yet)
+   * falls through to ordinary click-to-select/pan below. */
+  moveArmed: boolean;
+  rotateArmed: boolean;
 
   /** Falcon, 2026-09-04: "settings on VIEW for workspace theme or
    * background color" -- which preset paints the canvas background +
@@ -257,7 +263,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     onCreateSketch,
     multiSelectArmed,
     quickSelectFilter,
-    panArmed,
+    moveArmed,
+    rotateArmed,
     canvasBackground = 'white',
     onCursorWorldPositionChange,
   },
@@ -302,8 +309,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   multiSelectArmedRef.current = multiSelectArmed;
   const quickSelectFilterRef = useRef(quickSelectFilter);
   quickSelectFilterRef.current = quickSelectFilter;
-  const panArmedRef = useRef(panArmed);
-  panArmedRef.current = panArmed;
+  const moveArmedRef = useRef(moveArmed);
+  moveArmedRef.current = moveArmed;
+  const rotateArmedRef = useRef(rotateArmed);
+  rotateArmedRef.current = rotateArmed;
   const canvasBackgroundRef = useRef(canvasBackground);
   canvasBackgroundRef.current = canvasBackground;
   const onCursorWorldPositionChangeRef = useRef(onCursorWorldPositionChange);
@@ -932,7 +941,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       | 'move'
       | 'placement'
       | 'sketch-draw'
-      | 'marquee';
+      | 'marquee'
+      | 'reshape';
     let pointerMode: PointerMode = 'idle';
     let dragOriginScreen: { x: number; y: number } | null = null;
     let dragLastScreen: { x: number; y: number } | null = null;
@@ -1014,6 +1024,20 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     // like a single node hitting wouldOverlap.
     let groupMoveActive = false;
     let groupOriginalPositions: Map<NodeId, Point> | null = null;
+    // FBP016 (2026-09-06): Move/Rotate's own drag state -- which
+    // selection is being reshaped, its ORIGINAL interior points and
+    // fixed center (both captured once at pointerdown so every frame
+    // recomputes from the same starting shape rather than compounding
+    // per-frame deltas, same anti-drift convention group-move/sketch-
+    // move already use), and (rotate only) the pointer's starting
+    // angle around that center.
+    let reshapeKind: 'edge' | 'sketch' | undefined;
+    let reshapeId: string | undefined;
+    let reshapeTool: 'move' | 'rotate' | undefined;
+    let reshapeOriginalPoints: Point[] | undefined;
+    let reshapeCenter: Point | undefined;
+    let reshapeOriginWorld: Point | undefined;
+    let reshapeStartAngle = 0;
 
     function onPointerDown(e: PointerEvent): void {
       dragOriginScreen = { x: e.clientX, y: e.clientY };
@@ -1022,13 +1046,47 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
       const worldPoint = toWorld(e.clientX, e.clientY);
 
-      // FBP014 (2026-09-05): the Pan tool overrides every hit test --
-      // a drag starting on a node/edge/sketch pans instead of
-      // grabbing it, which is the whole point of arming it explicitly
-      // (empty-canvas drag already pans for free without this).
-      if (panArmedRef.current) {
-        pointerMode = 'pan';
-        return;
+      // FBP016 (2026-09-06): Move/Rotate override every hit test --
+      // a drag starting anywhere reshapes the CURRENT SELECTION (if
+      // it's a single path or sketch) instead of grabbing whatever's
+      // under the cursor, same "arm a mode" convention Pan used to
+      // have this slot for. Falls through to ordinary hit-testing
+      // below when nothing valid is selected yet, so the user can
+      // still click a path/sketch to select it first.
+      if (moveArmedRef.current || rotateArmedRef.current) {
+        const sel = selectionRef.current;
+        let originalPoints: Point[] | undefined;
+        let allPointsForCenter: Point[] | undefined;
+        let kind: 'edge' | 'sketch' | undefined;
+        let id: string | undefined;
+        if (sel?.type === 'edge') {
+          const ends = floorLayout.getEdgeEndpoints(sel.id);
+          if (ends) {
+            originalPoints = floorLayout.getEdgeReshapePoints(sel.id);
+            allPointsForCenter = [ends.from, ends.to, ...originalPoints];
+            kind = 'edge';
+            id = sel.id;
+          }
+        } else if (sel?.type === 'sketch') {
+          const sketch = sketchLayer.get(sel.id);
+          if (sketch) {
+            originalPoints = getSketchReshapePoints(sketch);
+            allPointsForCenter = sketch.points;
+            kind = 'sketch';
+            id = sel.id;
+          }
+        }
+        if (originalPoints && allPointsForCenter && kind && id) {
+          pointerMode = 'reshape';
+          reshapeKind = kind;
+          reshapeId = id;
+          reshapeTool = moveArmedRef.current ? 'move' : 'rotate';
+          reshapeOriginalPoints = originalPoints;
+          reshapeCenter = shapeCenter(allPointsForCenter);
+          reshapeOriginWorld = worldPoint;
+          reshapeStartAngle = Math.atan2(worldPoint.y - reshapeCenter.y, worldPoint.x - reshapeCenter.x);
+          return;
+        }
       }
 
       if (placementKindRef.current) {
@@ -1154,6 +1212,32 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const dy = e.clientY - dragLastScreen.y;
         dragLastScreen = { x: e.clientX, y: e.clientY };
         camera.pan(dx, dy);
+        return;
+      }
+
+      if (pointerMode === 'reshape' && reshapeKind && reshapeId && reshapeOriginalPoints && reshapeCenter) {
+        // FBP016 (2026-09-06): both tools recompute from the ORIGINAL
+        // captured points every frame (never the previous frame's
+        // result), same anti-drift convention as group-move/sketch-
+        // move -- Move translates by the raw world delta since
+        // pointerdown, Rotate spins by the change in angle around the
+        // shape's own fixed center (bezier.ts's rotatePoints applies
+        // the 15°-ish magnetic snap).
+        const current = toWorld(e.clientX, e.clientY);
+        const newPoints =
+          reshapeTool === 'move'
+            ? translatePoints(reshapeOriginalPoints, current.x - reshapeOriginWorld!.x, current.y - reshapeOriginWorld!.y)
+            : rotatePoints(
+                reshapeOriginalPoints,
+                reshapeCenter,
+                Math.atan2(current.y - reshapeCenter.y, current.x - reshapeCenter.x) - reshapeStartAngle,
+              );
+        if (reshapeKind === 'edge') {
+          floorLayout.setEdgeReshapePoints(reshapeId, newPoints);
+        } else {
+          const sketch = sketchLayer.get(reshapeId);
+          if (sketch) sketchLayer.update(reshapeId, applySketchReshapePoints(sketch, newPoints));
+        }
         return;
       }
 
@@ -1611,6 +1695,13 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       marqueeCurrent = undefined;
       groupMoveActive = false;
       groupOriginalPositions = null;
+      reshapeKind = undefined;
+      reshapeId = undefined;
+      reshapeTool = undefined;
+      reshapeOriginalPoints = undefined;
+      reshapeCenter = undefined;
+      reshapeOriginWorld = undefined;
+      reshapeStartAngle = 0;
 
       try {
         canvas!.releasePointerCapture(e.pointerId);
@@ -1694,7 +1785,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     // Interaction props (selection, onSelect, placementKind,
     // onPlaceNode, onCreateEdge, snapToGrid, gridSpacing,
     // armedEdgeStyle, onApplyEdgeStyle, multiSelectArmed,
-    // quickSelectFilter, panArmed)
+    // quickSelectFilter, moveArmed, rotateArmed)
     // are intentionally excluded — they're read through refs above so
     // a click doesn't tear down and recreate the SimEngine/driver.
     // onRunningChange is invoked through a ref too, for the same

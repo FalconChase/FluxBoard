@@ -1,5 +1,5 @@
 import type { NodeId } from '../core/types';
-import type { Point } from '../floor/bezier';
+import { bendPoint, type Point } from '../floor/bezier';
 
 /** One end of a sketch pinned to a real node's port (Falcon,
  * 2026-09-05: "I want it to snap on those dots ... althought I draw a
@@ -46,6 +46,45 @@ export interface Sketch {
   fromAttachment?: SketchAttachment | null;
   /** Same as fromAttachment, but for the LAST point. */
   toAttachment?: SketchAttachment | null;
+}
+
+/** Falcon, 2026-09-06 ("move, flip(horizontally,vertically), rotate
+ * (path and sketches only) ... reshape the curve, endpoints stay
+ * pinned"): the sketch-side half of the ribbon MODIFY group's Move/
+ * Flip/Rotate tools -- mirrors FloorLayout's getEdgeReshapePoints/
+ * setEdgeReshapePoints exactly, just operating on a Sketch's own
+ * points/segments instead of FloorLayout's edge maps. A plain 2-point
+ * sketch (points[0]/points[1], one segment) has no real interior
+ * point yet -- this derives the ONE implied bend point its segment's
+ * bow already describes, same bendPoint formula the edge side uses,
+ * without promoting/mutating anything. */
+export function getSketchReshapePoints(sketch: Sketch): Point[] {
+  if (sketch.points.length > 2) return sketch.points.slice(1, -1);
+  const from = sketch.points[0]!;
+  const to = sketch.points[sketch.points.length - 1]!;
+  const bow = sketch.segments[0]?.bow ?? 0;
+  return [bendPoint(from, to, bow)];
+}
+
+/** Builds the `{points, segments}` patch to hand to SketchLayer.update
+ * for a new set of reshaped interior points -- the ONLY way Move/
+ * Flip/Rotate ever write a sketch back. Promotes a plain 2-point
+ * sketch to a real multi-point shape the first time this is called
+ * (points.length changes), carrying its one existing bow onto every
+ * new segment so the first frame of a drag doesn't visually jump;
+ * once already multi-point, the existing per-segment bows (edited
+ * independently via the properties panel's segment drill-down) are
+ * left untouched. */
+export function applySketchReshapePoints(sketch: Sketch, newInterior: Point[]): Partial<Sketch> {
+  const from = sketch.points[0]!;
+  const to = sketch.points[sketch.points.length - 1]!;
+  const points = [from, ...newInterior, to];
+  let segments = sketch.segments;
+  if (points.length !== sketch.points.length) {
+    const bow = sketch.segments[0]?.bow ?? 0;
+    segments = newInterior.map(() => ({ bow })).concat([{ bow }]);
+  }
+  return { points, segments };
 }
 
 /** The pre-multi-segment shape every sketch used to have — a plain

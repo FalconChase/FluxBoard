@@ -3,6 +3,7 @@ import { FloorLayout } from '../floor/floorLayout';
 import { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeSkin } from '../skin/pathSkin';
 import { ObjectRegistry, type ObjectTypeDef } from '../skin/ObjectRegistry';
+import { GroupRegistry, type GroupDef } from '../skin/GroupRegistry';
 import { SketchLayer, type Sketch } from './sketchLayer';
 import type { CanvasBackground } from './theme';
 import type { EdgeId, NodeDef, EdgeDef, NodeId } from '../core/types';
@@ -98,6 +99,11 @@ export interface SavedFile {
    * populateState falls back to just the built-in default type when
    * absent. */
   objectTypes?: ObjectTypeDef[];
+  /** Local groups (Falcon, 2026-09-06: "group into one group as a
+   * local group") — optional so pre-existing saves (no version bump,
+   * same convention as canvasBackground/objectTypes) parse unchanged;
+   * populateState falls back to no groups at all when absent. */
+  groups?: GroupDef[];
 }
 
 /** Reads everything out of the four live stores (they're the single
@@ -109,6 +115,7 @@ export function serializeState(
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
   objectRegistry: ObjectRegistry,
+  groupRegistry: GroupRegistry,
   settings: CanvasSettings,
 ): SavedFile {
   const nodes = graph.getAllNodes();
@@ -150,6 +157,7 @@ export function serializeState(
     sketches: sketchLayer.getAll(),
     settings,
     objectTypes: objectRegistry.list(),
+    groups: groupRegistry.getAll(),
   };
 }
 
@@ -168,6 +176,7 @@ export function clearAllStores(
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
   objectRegistry: ObjectRegistry,
+  groupRegistry: GroupRegistry,
 ): void {
   for (const node of graph.getAllNodes()) {
     const cascadedEdgeIds = graph.removeNode(node.id);
@@ -194,6 +203,12 @@ export function clearAllStores(
   // project's own saved list right after this runs, same "clear then
   // repopulate the SAME instance" pattern as every other store here.
   objectRegistry.replaceAll([]);
+
+  // Falcon, 2026-09-06: every node/edge/sketch above is already gone,
+  // so no group membership could still be meaningful — same "drop
+  // stale records outright" convention floorLayout.clearReservations
+  // already uses just above.
+  groupRegistry.clear();
 }
 
 /** Populates the given (already-constructed, already-empty) stores
@@ -215,6 +230,7 @@ export function populateState(
   skinConfig: SkinConfig,
   sketchLayer: SketchLayer,
   objectRegistry: ObjectRegistry,
+  groupRegistry: GroupRegistry,
 ): CanvasSettings {
   // Falcon, 2026-09-05 (FBP011): pre-existing saves have no
   // objectTypes field at all (optional, no version bump — same
@@ -275,6 +291,12 @@ export function populateState(
     }
   }
 
+  // Falcon, 2026-09-06: re-seed groups last, once every node/edge/
+  // sketch id they might reference already exists — absent on a
+  // pre-existing save (optional field, no version bump), which is
+  // exactly equivalent to no groups at all.
+  groupRegistry.replaceAll(saved.groups ?? []);
+
   return saved.settings;
 }
 
@@ -321,6 +343,7 @@ export function makeBlankProjectData(settings: CanvasSettings): SavedFile {
     sketches: [],
     settings,
     objectTypes: [],
+    groups: [],
   };
 }
 
