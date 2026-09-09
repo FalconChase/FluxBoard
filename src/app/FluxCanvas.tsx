@@ -1107,16 +1107,16 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const icon = annotation.icon ?? 'marker';
         const r = ANNOTATION_ICON_SIZE * camera.zoom * 0.5;
         ctx!.save();
-        ctx!.beginPath();
-        ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
-        ctx!.fillStyle = '#ffffff';
-        ctx!.fill();
-        ctx!.strokeStyle = ANNOTATION_ICON_COLOR[icon];
-        ctx!.lineWidth = isSelected ? 2.5 : 1.5;
-        ctx!.stroke();
+        // Falcon, 2026-09-09: dropped the white-fill + colored-ring
+        // "badge" that used to sit behind every built-in glyph here --
+        // it read as a redundant extra circle around self-contained
+        // pictograms like the baked-in money icon. The glyph now
+        // draws directly on the canvas, same footprint (r * 1.6, same
+        // scale a custom/imported icon uses) so hit-testing and label
+        // placement below are unaffected.
         ctx!.fillStyle = ANNOTATION_ICON_COLOR[icon];
         ctx!.strokeStyle = ANNOTATION_ICON_COLOR[icon];
-        annotationIcons[icon](ctx!, screen.x, screen.y, r * 1.5);
+        annotationIcons[icon](ctx!, screen.x, screen.y, r * 1.6);
         if (isSelected) {
           ctx!.beginPath();
           ctx!.arc(screen.x, screen.y, r + 4, 0, Math.PI * 2);

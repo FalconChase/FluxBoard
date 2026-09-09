@@ -680,15 +680,12 @@ function AnnotationSwatchButton({ kind }: { kind: AnnotationIconKind }) {
     ctx.clearRect(0, 0, size, size);
     const center = { x: size / 2, y: size / 2 };
     const r = size * 0.42;
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-    ctx.strokeStyle = ANNOTATION_ICON_COLOR[kind];
-    ctx.lineWidth = 1.3;
-    ctx.stroke();
+    // Falcon, 2026-09-09: matches the canvas render -- no more white
+    // badge circle behind the glyph, just the icon itself, so this
+    // ribbon preview shows exactly what dropping it produces.
     ctx.fillStyle = ANNOTATION_ICON_COLOR[kind];
-    annotationIcons[kind](ctx, center.x, center.y, r * 1.5);
+    ctx.strokeStyle = ANNOTATION_ICON_COLOR[kind];
+    annotationIcons[kind](ctx, center.x, center.y, r * 1.6);
   }, [kind]);
 
   return (
