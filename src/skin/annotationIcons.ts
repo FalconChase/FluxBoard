@@ -234,7 +234,201 @@ const goods: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
   ctx.restore();
 };
 
-export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money' | 'moneyAlt' | 'moneyStack' | 'moneyLine' | 'services' | 'goods', AnnotationIconDrawFn> = {
+/** Worker — a pasted-in hard-hat figure glyph (Falcon, 2026-09-09),
+ * a filled "currentColor" icon (viewBox 0 0 24 24). Same
+ * verbatim-Path2D + ctx.fill() approach as `money`/`moneyAlt`. */
+const WORKER_PATH = new Path2D(
+  'M12 15c-4.42 0-8 1.79-8 4v2h16v-2c0-2.21-3.58-4-8-4M8 9a4 4 0 0 0 4 4a4 4 0 0 0 4-4m-4.5-7c-.3 0-.5.21-.5.5v3h-1V3s-2.25.86-2.25 3.75c0 0-.75.14-.75 1.25h10c-.05-1.11-.75-1.25-.75-1.25C16.25 3.86 14 3 14 3v2.5h-1v-3c0-.29-.19-.5-.5-.5z',
+);
+const worker: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 24;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-12, -12);
+  ctx.fill(WORKER_PATH);
+  ctx.restore();
+};
+
+/** City worker — a pasted-in avatar glyph (Falcon, 2026-09-09), filled
+ * "currentColor" (viewBox 0 0 48 48), two paths: a ring-shaped head
+ * (needs the 'evenodd' fill rule -- Path2D.fill()'s second arg -- or
+ * the ring's inner circle fills solid instead of punching a hole) and
+ * a body path (default nonzero rule). */
+const CITY_WORKER_HEAD_PATH = new Path2D(
+  'M34 16c0 5.523-4.477 10-10 10s-10-4.477-10-10S18.477 6 24 6s10 4.477 10 10m-2 0a8 8 0 1 1-16 0a8 8 0 0 1 16 0',
+);
+const CITY_WORKER_BODY_PATH = new Path2D(
+  'M30.5 28a.48.48 0 0 0-.54.262L26 39.572V36l-.575-4.021a1 1 0 0 0 .764-.736l.5-2A1 1 0 0 0 25.72 28h-3.438a1 1 0 0 0-.97 1.242l.5 2a1 1 0 0 0 .764.737L22 36v2.696l-3.96-10.434A.48.48 0 0 0 17.5 28a139 139 0 0 1-1.148.272c-2.262.53-5.058 1.184-6.544 2.16C8.045 31.589 7 32.953 7 34.5V41h34v-6.5c0-1.547-1.045-2.91-2.808-4.068c-1.486-.976-4.282-1.63-6.544-2.16c-.403-.094-.79-.184-1.148-.272',
+);
+const cityWorker: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 48;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-24, -24);
+  ctx.fill(CITY_WORKER_HEAD_PATH, 'evenodd');
+  ctx.fill(CITY_WORKER_BODY_PATH);
+  ctx.restore();
+};
+
+/** Bank — a pasted-in classical-bank-facade glyph (Falcon,
+ * 2026-09-09), filled "currentColor" (viewBox 0 0 1920 1792 -- a
+ * non-square viewBox, unlike every icon baked in so far). Scaled by
+ * its longer dimension (width) so it fits within `size` without
+ * distortion, same aspect-preserving idea CustomIconLibrary's canvas
+ * rendering already uses for non-square imports. */
+const BANK_PATH = new Path2D(
+  'm960 0l960 384v128h-128q0 26-20.5 45t-48.5 19H197q-28 0-48.5-19T128 512H0V384zM256 640h256v768h128V640h256v768h128V640h256v768h128V640h256v768h59q28 0 48.5 19t20.5 45v64H128v-64q0-26 20.5-45t48.5-19h59zm1595 960q28 0 48.5 19t20.5 45v128H0v-128q0-26 20.5-45t48.5-19z',
+);
+const bank: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 1920;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-960, -896);
+  ctx.fill(BANK_PATH);
+  ctx.restore();
+};
+
+/** Buildings — a pasted-in two-tower skyline glyph (Falcon,
+ * 2026-09-09), filled "currentColor" (viewBox 0 0 16 16), two paths:
+ * the building outlines and a grid of small window squares drawn on
+ * top. */
+const BUILDINGS_BODY_PATH = new Path2D(
+  'M14.763.075A.5.5 0 0 1 15 .5v15a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5V14h-1v1.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5V10a.5.5 0 0 1 .342-.474L6 7.64V4.5a.5.5 0 0 1 .276-.447l8-4a.5.5 0 0 1 .487.022M6 8.694L1 10.36V15h5zM7 15h2v-1.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5V15h2V1.309l-7 3.5z',
+);
+const BUILDINGS_WINDOWS_PATH = new Path2D(
+  'M2 11h1v1H2zm2 0h1v1H4zm-2 2h1v1H2zm2 0h1v1H4zm4-4h1v1H8zm2 0h1v1h-1zm-2 2h1v1H8zm2 0h1v1h-1zm2-2h1v1h-1zm0 2h1v1h-1zM8 7h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zM8 5h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm0-2h1v1h-1z',
+);
+const buildings: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 16;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-8, -8);
+  ctx.fill(BUILDINGS_BODY_PATH);
+  ctx.fill(BUILDINGS_WINDOWS_PATH);
+  ctx.restore();
+};
+
+/** Factory — a pasted-in factory-with-smokestacks glyph (Falcon,
+ * 2026-09-09), filled "currentColor" (viewBox 0 0 32 32), a single
+ * (long) path. */
+const FACTORY_PATH = new Path2D(
+  'M5.51 1.5c-.556 0-1.01.454-1.01 1.01v17.233L2.21 20.89a.36.36 0 0 0-.21.32v8.77h2.01v-2.61c0-.21.17-.38.38-.38h4.23c.21 0 .38.17.38.38v2.61h2.01v-2.61c0-.21.17-.38.38-.38h4.23c.21 0 .38.17.38.38v2.61h2.01v.01h3.01v-3.81c0-.21.17-.38.38-.38h5.22c.21 0 .38.17.38.38v3.81h2.98V13.12c0-.63-.51-1.13-1.13-1.13h-9.71c-.63 0-1.13.51-1.13 1.13v3.86l-2.51 1.253V2.51c0-.556-.454-1.01-1.01-1.01h-1.98c-.556 0-1.01.454-1.01 1.01v17.72l-.96.48a.368.368 0 0 1-.54-.33v-2.79c0-.27-.29-.45-.54-.33l-.96.48V2.51c0-.556-.454-1.01-1.01-1.01zM5.5 19.243V17.49h2v.751zm9-1.753v1.243l-2 .998V17.49zM5.5 5.5h2v1.99h-2zm2 5.99v2h-2v-2zm5-5.99h2v1.99h-2zm2 5.99v2h-2v-2zm6.03 4.53c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53v.97c0 .3-.24.53-.53.53zm4.47-1.5v.97c0 .3-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53m3 0v.97c0 .3-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53m-6 2.99v.97c0 .29-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53m3 0v.97c0 .29-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53m3 0v.97c0 .29-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53m-6 2.98v.97c0 .3-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53m3 0v.97c0 .3-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53m3 0v.97c0 .3-.24.53-.53.53h-.94c-.29 0-.53-.24-.53-.53v-.97c0-.29.24-.53.53-.53h.94c.29 0 .53.24.53.53',
+);
+const factory: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 32;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-16, -16);
+  ctx.fill(FACTORY_PATH);
+  ctx.restore();
+};
+
+/** House — a pasted-in house-with-window glyph (Falcon, 2026-09-09),
+ * filled "currentColor" (viewBox 0 0 32 32), two paths -- the source
+ * SVG also wraps them in a clipPath, but that clip rect covers the
+ * full 32x32 canvas (a common icon-library artifact, not an actual
+ * crop), so it's safely dropped here. */
+const HOUSE_WINDOW_PATH = new Path2D(
+  'M23.14 21.002h-4.28c-.48 0-.86-.38-.86-.86v-4.28c0-.47.38-.86.86-.86h4.28c.47 0 .86.38.86.86v4.28c0 .48-.38.86-.86.86',
+);
+const HOUSE_BODY_PATH = new Path2D(
+  'm18.28.923l.004.005l12.755 12.565l.003.003a3.17 3.17 0 0 1-.003 4.546a3.2 3.2 0 0 1-2.039.916v6.151a3.91 3.91 0 0 1 3 3.803v2.09H0v-2.09a3.904 3.904 0 0 1 3-3.804v-6.11a3.23 3.23 0 0 1-2.04-.917a3.183 3.183 0 0 1-.002-4.555l.003-.002L4 10.532v-7.01C4 2.059 5.208 1 6.543 1h2.924c1.102 0 2.092.72 2.42 1.769L13.752.93c1.26-1.252 3.28-1.228 4.526-.008M10 7.432v-3.91A.53.53 0 0 0 9.467 3H6.543A.53.53 0 0 0 6 3.523v7.846zm-5 8.314v11.256h2c0-.55.45-1 1-1v-9.61c0-.75.61-1.36 1.36-1.36h5.29c.75 0 1.36.61 1.36 1.36v9.612c.527.026.95.465.95.998H27V15.706L16.02 4.893zm10 4.756a.5.5 0 1 0-1 0a.5.5 0 0 0 1 0',
+);
+const house: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 32;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-16, -16);
+  ctx.fill(HOUSE_WINDOW_PATH);
+  ctx.fill(HOUSE_BODY_PATH);
+  ctx.restore();
+};
+
+/** Farm — a pasted-in farmland-grid glyph (Falcon, 2026-09-09), filled
+ * "currentColor" (viewBox 0 0 256 256), a single (long) path. */
+const FARM_PATH = new Path2D(
+  'M232 158a6 6 0 0 0 0-12a230.1 230.1 0 0 0-66.11 9.65a260 260 0 0 0-23.07-13.28A248.3 248.3 0 0 1 232 126a6 6 0 0 0 0-12c-6 0-12 .22-18 .62V80a6 6 0 0 0-2.4-4.8l-64-48a6 6 0 0 0-7.2 0l-64 48A6 6 0 0 0 74 80v38.77A264.3 264.3 0 0 0 24 114a6 6 0 0 0 0 12a249 249 0 0 1 195.17 93.75a6 6 0 0 0 4.69 2.25a6 6 0 0 0 4.67-9.75a265 265 0 0 0-18.69-20.94A191 191 0 0 1 232 190a6 6 0 0 0 0-12a199 199 0 0 0-33.21 2.79q-9.63-8.65-20-16.25A218.7 218.7 0 0 1 232 158m-106-23.44V102h36v21.46a259 259 0 0 0-33.93 12ZM86 83l58-43.5L202 83v32.71a261 261 0 0 0-28 4.73V96a6 6 0 0 0-6-6h-48a6 6 0 0 0-6 6v33.85a259 259 0 0 0-28-8.46Zm49.17 136.32a6 6 0 0 1-8.32 1.68A185.14 185.14 0 0 0 24 190a6 6 0 0 1 0-12a197.1 197.1 0 0 1 109.49 33a6 6 0 0 1 1.68 8.32m49.8-7.61a6 6 0 1 1-8.4 8.57A216.8 216.8 0 0 0 24 158a6 6 0 0 1 0-12a228.74 228.74 0 0 1 161 65.71Z',
+);
+const farm: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 256;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-128, -128);
+  ctx.fill(FARM_PATH);
+  ctx.restore();
+};
+
+/** Person — a pasted-in filled figure glyph (Falcon, 2026-09-09),
+ * filled "currentColor" (viewBox 0 0 32 32), a single path. */
+const PERSON_PATH = new Path2D(
+  'M18 30h-4a2 2 0 0 1-2-2v-7a2 2 0 0 1-2-2v-6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v6a2 2 0 0 1-2 2v7a2 2 0 0 1-2 2m-5-18a.94.94 0 0 0-1 1v6h2v9h4v-9h2v-6a.94.94 0 0 0-1-1Zm3-3a4 4 0 1 1 4-4a4 4 0 0 1-4 4m0-6a2 2 0 1 0 2 2a2 2 0 0 0-2-2',
+);
+const person: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 32;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-16, -16);
+  ctx.fill(PERSON_PATH);
+  ctx.restore();
+};
+
+/** Person (outline) — a second, stroke-only person glyph Falcon
+ * pasted right after the filled one (also titled "person" in its
+ * source SVG, hence the distinct key here) -- fill="none",
+ * stroke-width="2", round caps/joins, viewBox 0 0 24 24. A circle
+ * head plus a shoulders path, both stroked rather than filled, same
+ * "currentColor" line-art style as moneyLine/services/goods. */
+const PERSON_OUTLINE_SHOULDERS_PATH = new Path2D(
+  'M17 14h.352a3 3 0 0 1 2.976 2.628l.391 3.124A2 2 0 0 1 18.734 22H5.266a2 2 0 0 1-1.985-2.248l.39-3.124A3 3 0 0 1 6.649 14H7',
+);
+const personOutline: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 24;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-12, -12);
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.arc(12, 7, 5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.stroke(PERSON_OUTLINE_SHOULDERS_PATH);
+  ctx.restore();
+};
+
+export const annotationIcons: Record<
+  | 'marker'
+  | 'warning'
+  | 'info'
+  | 'arrow'
+  | 'star'
+  | 'flag'
+  | 'money'
+  | 'moneyAlt'
+  | 'moneyStack'
+  | 'moneyLine'
+  | 'services'
+  | 'goods'
+  | 'worker'
+  | 'cityWorker'
+  | 'bank'
+  | 'buildings'
+  | 'factory'
+  | 'house'
+  | 'farm'
+  | 'person'
+  | 'personOutline',
+  AnnotationIconDrawFn
+> = {
   marker,
   warning,
   info,
@@ -247,6 +441,15 @@ export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | '
   moneyLine,
   services,
   goods,
+  worker,
+  cityWorker,
+  bank,
+  buildings,
+  factory,
+  house,
+  farm,
+  person,
+  personOutline,
 };
 
 /** Falcon, 2026-09-09 ("also want to have it or those icons to
@@ -274,6 +477,15 @@ export const ANNOTATION_ICON_COLOR: Record<keyof typeof annotationIcons, string>
   moneyLine: '#334155',
   services: '#6366f1',
   goods: '#a16207',
+  worker: '#92400e',
+  cityWorker: '#0369a1',
+  bank: '#1e3a8a',
+  buildings: '#475569',
+  factory: '#57534e',
+  house: '#b45309',
+  farm: '#65a30d',
+  person: '#0f766e',
+  personOutline: '#334155',
 };
 
 export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string> = {
@@ -289,9 +501,18 @@ export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string>
   moneyLine: 'Money (line)',
   services: 'Services',
   goods: 'Goods',
+  worker: 'Worker',
+  cityWorker: 'City worker',
+  bank: 'Bank',
+  buildings: 'Buildings',
+  factory: 'Factory',
+  house: 'House',
+  farm: 'Farm',
+  person: 'Person',
+  personOutline: 'Person (outline)',
 };
 
-export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money', 'moneyAlt', 'moneyStack', 'moneyLine', 'services', 'goods'];
+export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money', 'moneyAlt', 'moneyStack', 'moneyLine', 'services', 'goods', 'worker', 'cityWorker', 'bank', 'buildings', 'factory', 'house', 'farm', 'person', 'personOutline'];
 
 /** Falcon, 2026-09-09 ("font style" — separate from the bold/italic
  * "type" controls): a small fixed picker of CSS font-family stacks
