@@ -591,6 +591,17 @@ function SourceFields({
 }) {
   const [cooldown, setCooldown] = useState(typeof node.config.cooldown === 'number' ? node.config.cooldown : 1);
   const [itemType, setItemType] = useState(typeof node.config.itemType === 'string' ? node.config.itemType : 'item');
+  // Falcon, 2026-09-09 ("resize or sizing feature on the parameters
+  // for the item"): a quick Size field right here rather than making
+  // him open Objects registry every time. This intentionally edits
+  // the shared ObjectRegistry entry's own `size` (objectRegistry is
+  // the single source of truth for it, design doc §4.6) -- not a
+  // per-source override -- so it also affects every other source that
+  // references the same item type, and stays in sync with what
+  // Objects registry itself shows. Local state just mirrors the
+  // registry's current value for the input, same "direct mutation +
+  // local useState mirror" convention as the Locked checkbox below.
+  const [size, setSize] = useState(() => objectRegistry.resolve(itemType).size);
   return (
     <>
       <div style={rowStyle}>
@@ -616,6 +627,25 @@ function SourceFields({
           onChange={(v) => {
             setItemType(v);
             onChange({ itemType: v });
+            setSize(objectRegistry.resolve(v).size);
+          }}
+        />
+      </div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Item size</label>
+        <input
+          type="number"
+          min={2}
+          max={40}
+          value={size}
+          style={inputStyle}
+          title="Resizes the shared item type -- affects every source using it, and matches Objects registry."
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (v > 0) {
+              setSize(v);
+              objectRegistry.update(itemType, { size: v });
+            }
           }}
         />
       </div>
