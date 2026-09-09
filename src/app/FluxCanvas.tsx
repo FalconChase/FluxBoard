@@ -23,7 +23,7 @@ import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
 import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type SketchAttachment, type SketchSegment } from './sketchLayer';
 import { AnnotationLayer, type Annotation, type AnnotationIconKind } from './annotationLayer';
-import { annotationIcons, ANNOTATION_ICON_COLOR } from '../skin/annotationIcons';
+import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_DEFAULT_FONT_FAMILY } from '../skin/annotationIcons';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
 /** Falcon, 2026-09-05 ("no way to end the continuous lines... so im
@@ -245,7 +245,8 @@ function annotationFont(annotation: Annotation, zoom: number): string {
   const px = Math.max(4, (annotation.fontSize ?? ANNOTATION_DEFAULT_FONT_SIZE) * zoom);
   const weight = annotation.bold ? '700' : '600';
   const style = annotation.italic ? 'italic ' : '';
-  return `${style}${weight} ${px}px system-ui, sans-serif`;
+  const family = annotation.fontFamily ?? ANNOTATION_DEFAULT_FONT_FAMILY;
+  return `${style}${weight} ${px}px ${family}`;
 }
 /** Falcon, 2026-09-05 ("Click to place each point... double-click...
  * to finish the chain"): two clicks land inside this window (ms) AND

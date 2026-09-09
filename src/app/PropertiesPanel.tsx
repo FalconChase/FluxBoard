@@ -9,7 +9,7 @@ import type { ObjectRegistry } from '../skin/ObjectRegistry';
 import type { Selection } from './selection';
 import type { Sketch, SketchLayer } from './sketchLayer';
 import type { AnnotationLayer } from './annotationLayer';
-import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL } from '../skin/annotationIcons';
+import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_FONT_FAMILIES, ANNOTATION_DEFAULT_FONT_FAMILY } from '../skin/annotationIcons';
 import { theme } from './theme';
 
 interface PropertiesPanelProps {
@@ -1205,6 +1205,7 @@ function AnnotationProperties({
   const annotation = annotationLayer.get(annotationId);
   const [label, setLabel] = useState(annotation?.label ?? '');
   const [fontSize, setFontSize] = useState(annotation?.fontSize ?? 14);
+  const [fontFamily, setFontFamily] = useState(annotation?.fontFamily ?? ANNOTATION_DEFAULT_FONT_FAMILY);
   const [color, setColor] = useState(annotation?.color ?? '#1f2430');
   const [bold, setBold] = useState(annotation?.bold ?? false);
   const [italic, setItalic] = useState(annotation?.italic ?? false);
@@ -1268,6 +1269,23 @@ function AnnotationProperties({
       </div>
 
       <div style={sectionTitleStyle}>Font</div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Style</label>
+        <select
+          value={fontFamily}
+          style={inputStyle}
+          onChange={(e) => {
+            setFontFamily(e.target.value);
+            annotationLayer.update(annotationId, { fontFamily: e.target.value });
+          }}
+        >
+          {ANNOTATION_FONT_FAMILIES.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         <div style={{ flex: 1 }}>
           <label style={labelStyle}>Size</label>

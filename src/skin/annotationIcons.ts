@@ -143,3 +143,18 @@ export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string>
 };
 
 export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag'];
+
+/** Falcon, 2026-09-09 ("font style" — separate from the bold/italic
+ * "type" controls): a small fixed picker of CSS font-family stacks
+ * for annotation text, each with a real fallback so a font missing on
+ * a given OS still renders something in the right spirit rather than
+ * silently falling back to the browser default. */
+export const ANNOTATION_FONT_FAMILIES: { value: string; label: string }[] = [
+  { value: 'system-ui, sans-serif', label: 'Sans-serif' },
+  { value: 'Georgia, "Times New Roman", serif', label: 'Serif' },
+  { value: 'ui-monospace, "Courier New", monospace', label: 'Monospace' },
+  { value: '"Comic Sans MS", "Segoe Print", cursive', label: 'Handwritten' },
+  { value: '"Trebuchet MS", ui-rounded, sans-serif', label: 'Rounded' },
+];
+export const ANNOTATION_DEFAULT_FONT_FAMILY = ANNOTATION_FONT_FAMILIES[0]!.value;
+

@@ -41,6 +41,13 @@ export interface Annotation {
    * defaults to ANNOTATION_DEFAULT_FONT_SIZE (FluxCanvas.tsx), same
    * convention as every other optional field here. */
   fontSize?: number;
+  /** Falcon, 2026-09-09 asked for "font style" separately from
+   * "type (bold, itallic)" -- this is the font-STYLE half (typeface
+   * family); bold/italic below are the type/weight half. A plain CSS
+   * font-family value (see ANNOTATION_FONT_FAMILIES in
+   * annotationIcons.ts for the picker's actual choices) — optional,
+   * defaults to the original system-ui sans-serif when absent. */
+  fontFamily?: string;
   bold?: boolean;
   italic?: boolean;
   /** #rrggbb text color — optional, defaults to the standard dark
