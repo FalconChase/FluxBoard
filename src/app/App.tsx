@@ -241,7 +241,7 @@ export function App() {
   // Falcon's "projects will only show when home tab was clicked"
   // (generalized to "any tab that isn't INSERT", since the icon view
   // only makes sense while INSERT is active).
-  const [leftPanelView, setLeftPanelView] = useState<'projects' | 'icons'>('projects');
+  const [leftPanelView, setLeftPanelView] = useState<'projects' | 'icons' | 'nodes' | 'paths' | 'modify'>('projects');
   const [armedEdgeStyle, setArmedEdgeStyle] = useState<EdgeStyle | null>(null);
   // Planning sketches (Falcon, 2026-09-03): pure visual scratch lines,
   // no simulation meaning, not tied to any node — sketchArmed mirrors
@@ -1656,6 +1656,9 @@ export function App() {
         onImportCustomIcon={handleImportCustomIcon}
         onDeleteCustomIcon={handleDeleteCustomIcon}
         onShowMoreIcons={() => setLeftPanelView('icons')}
+        onShowMoreNodes={() => setLeftPanelView('nodes')}
+        onShowMorePaths={() => setLeftPanelView('paths')}
+        onShowMoreModify={() => setLeftPanelView('modify')}
       />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <LeftPanel
@@ -1667,6 +1670,35 @@ export function App() {
           onDeleteProject={handleDeleteProject}
           view={leftPanelView}
           onBackToProjects={() => setLeftPanelView('projects')}
+          armedKind={placementKind}
+          onArmKind={handleArmNodeKind}
+          armedEdgeStyle={armedEdgeStyle}
+          onArmEdgeStyle={handleArmEdgeStyle}
+          sketchArmed={sketchArmed}
+          onArmSketch={handleArmSketch}
+          sketchStyle={sketchStyle}
+          onSketchStyleChange={setSketchStyle}
+          canDelete={selection !== null}
+          onDeleteSelection={handleDeleteSelection}
+          multiSelectArmed={multiSelectArmed}
+          onArmMultiSelect={handleArmMultiSelect}
+          onQuickSelect={handleQuickSelect}
+          canDuplicate={selection?.type === 'node' || (selection?.type === 'multi' && selection.nodeIds.length > 0)}
+          onDuplicateSelection={handleDuplicateSelection}
+          moveArmed={moveArmed}
+          onArmMove={handleArmMove}
+          rotateArmed={rotateArmed}
+          onArmRotate={handleArmRotate}
+          canFlip={selection?.type === 'edge' || selection?.type === 'sketch'}
+          onFlipSelection={handleFlipSelection}
+          canGroup={
+            selection?.type === 'multi' &&
+            !selection.groupId &&
+            selection.nodeIds.length + selection.edgeIds.length + selection.sketchIds.length >= 2
+          }
+          onGroupSelection={handleGroupSelection}
+          canUngroup={selection?.type === 'multi' && !!selection.groupId}
+          onUngroupSelection={handleUngroupSelection}
         />
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
           <FluxCanvas

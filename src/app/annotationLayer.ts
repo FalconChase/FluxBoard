@@ -73,6 +73,23 @@ export interface Annotation {
    * "Text" placeholder, which always renders in its own muted gray
    * regardless of this setting. */
   color?: string;
+  /** Falcon, 2026-09-09 ("resize icon feature"): only meaningful for
+   * 'icon' and 'custom' kinds -- a WORLD-space icon/image size
+   * override, same convention as fontSize (multiplied by camera.zoom
+   * at render time, FluxCanvas.tsx). Optional, defaults to
+   * ANNOTATION_ICON_SIZE when absent. */
+  iconSize?: number;
+  /** Falcon, 2026-09-09 ("toggle icon badge (off by default)"): only
+   * meaningful for 'icon' and 'custom' kinds -- whether to draw a
+   * filled badge circle behind the glyph/image. Off by default (the
+   * badge was removed as the fixed default for every icon earlier
+   * this session); this brings it back as an explicit per-annotation
+   * opt-in instead. */
+  badge?: boolean;
+  /** Only meaningful when badge is true -- the badge circle's fill
+   * color. Optional, defaults to white when badge is on but this is
+   * unset (matches the badge's original always-on look). */
+  badgeColor?: string;
 }
 
 /**

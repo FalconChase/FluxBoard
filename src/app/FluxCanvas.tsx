@@ -549,10 +549,16 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // hit-test (rendering below still measures for real, for the
         // selection outline).
         const fontScale = (a.fontSize ?? ANNOTATION_DEFAULT_FONT_SIZE) / ANNOTATION_DEFAULT_FONT_SIZE;
+        // Falcon, 2026-09-09 ("resize icon feature"): an icon/custom
+        // annotation's clickable radius now tracks its own iconSize
+        // (not just the fixed default) so a resized-up icon is easier
+        // to click and a resized-down one doesn't claim more canvas
+        // than it visually occupies.
+        const iconScale = (a.iconSize ?? ANNOTATION_ICON_SIZE) / ANNOTATION_ICON_SIZE;
         const radiusPx =
           a.kind === 'text'
             ? Math.max(ANNOTATION_HIT_RADIUS_PX, (a.label ?? 'Text').length * 3.4 * fontScale)
-            : ANNOTATION_HIT_RADIUS_PX;
+            : ANNOTATION_HIT_RADIUS_PX * iconScale;
         const toleranceWorld = radiusPx / camera.zoom;
         if (Math.hypot(a.position.x - worldPoint.x, a.position.y - worldPoint.y) <= toleranceWorld) return a.id;
       }
@@ -675,6 +681,19 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     }
     resize();
     window.addEventListener('resize', resize);
+    // Falcon, 2026-09-09 ("compare the buttom part of the home tab vs
+    // the inserts buttom tab ... truncated"): switching ribbon tabs
+    // changes the ribbon's own height (a taller INSERT tab pushes this
+    // canvas's flex container shorter) without ever firing a `window`
+    // resize event, so the listener above alone never re-measures --
+    // the canvas keeps its stale (taller) buffer size and the browser
+    // just clips whatever no longer fits in the now-shorter container,
+    // cutting off content at the bottom. A ResizeObserver on the
+    // canvas's own parent catches every layout-driven size change,
+    // tab switches included, not just actual OS window resizes.
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && canvas!.parentElement ? new ResizeObserver(() => resize()) : undefined;
+    if (resizeObserver && canvas!.parentElement) resizeObserver.observe(canvas!.parentElement);
 
     function frame(nowMs: number): void {
       driver.update(nowMs);
@@ -988,7 +1007,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const screen = camera.worldToScreen(pos, viewport);
         const r = NODE_RADIUS * camera.zoom;
         const state = engine.getNodeState(node.id) ?? {};
-        drawNode(ctx!, node, state, screen, r, camera.zoom);
+        drawNode(ctx!, node, state, screen, r, camera.zoom, skinConfig.getNodeIcon(node.id));
         if (skinConfig.getNodeLocked(node.id)) {
           drawNodeLockBadge(ctx!, screen, r, camera.zoom);
         }
@@ -1039,8 +1058,21 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
         if (annotation.kind === 'custom') {
           const entry = annotation.customIconId ? customIconLibrary.get(annotation.customIconId) : undefined;
-          const r = ANNOTATION_ICON_SIZE * camera.zoom * 0.5;
+          const r = (annotation.iconSize ?? ANNOTATION_ICON_SIZE) * camera.zoom * 0.5;
           ctx!.save();
+          // Falcon, 2026-09-09 ("toggle icon badge (off by default)"):
+          // an opt-in filled circle behind the image, same idea as the
+          // icon-kind badge below -- off unless the annotation says so.
+          if (annotation.badge) {
+            const badgeColor = annotation.badgeColor ?? '#ffffff';
+            ctx!.beginPath();
+            ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+            ctx!.fillStyle = badgeColor;
+            ctx!.fill();
+            ctx!.strokeStyle = darkenHex(badgeColor, 0.25);
+            ctx!.lineWidth = 1.5;
+            ctx!.stroke();
+          }
           if (entry) {
             const img = getCustomIconImage(entry.id, entry.dataUrl);
             if (img.complete && img.naturalWidth > 0) {
@@ -1106,15 +1138,25 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         }
 
         const icon = annotation.icon ?? 'marker';
-        const r = ANNOTATION_ICON_SIZE * camera.zoom * 0.5;
+        const r = (annotation.iconSize ?? ANNOTATION_ICON_SIZE) * camera.zoom * 0.5;
         ctx!.save();
-        // Falcon, 2026-09-09: dropped the white-fill + colored-ring
-        // "badge" that used to sit behind every built-in glyph here --
-        // it read as a redundant extra circle around self-contained
-        // pictograms like the baked-in money icon. The glyph now
-        // draws directly on the canvas, same footprint (r * 1.6, same
-        // scale a custom/imported icon uses) so hit-testing and label
-        // placement below are unaffected.
+        // Falcon, 2026-09-09: the white-fill + colored-ring "badge"
+        // that used to sit behind every built-in glyph was dropped as
+        // a fixed default (it read as a redundant extra circle around
+        // self-contained pictograms like the baked-in money icon) --
+        // it's back now as an explicit per-annotation opt-in
+        // ("toggle icon badge (off by default)"), off unless the
+        // annotation says otherwise.
+        if (annotation.badge) {
+          const badgeColor = annotation.badgeColor ?? '#ffffff';
+          ctx!.beginPath();
+          ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+          ctx!.fillStyle = badgeColor;
+          ctx!.fill();
+          ctx!.strokeStyle = ANNOTATION_ICON_COLOR[icon];
+          ctx!.lineWidth = 1.5;
+          ctx!.stroke();
+        }
         ctx!.fillStyle = ANNOTATION_ICON_COLOR[icon];
         ctx!.strokeStyle = ANNOTATION_ICON_COLOR[icon];
         annotationIcons[icon](ctx!, screen.x, screen.y, r * 1.6);
@@ -2090,6 +2132,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       cancelAnimationFrame(raf);
       driverRef.current = null;
       window.removeEventListener('resize', resize);
+      resizeObserver?.disconnect();
       canvas.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);

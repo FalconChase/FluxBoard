@@ -1,6 +1,7 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef } from 'react';
 import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_ICON_ORDER, type AnnotationIconKind } from '../skin/annotationIcons';
 import { theme } from './theme';
+import { overflowRowStyle, overflowRowLabelStyle, overflowBackButtonStyle, overflowSectionLabelStyle } from './overflowRowStyle';
 
 interface IconLibraryPanelProps {
   onBack: () => void;
@@ -29,6 +30,15 @@ export function IconLibraryPanel({ onBack }: IconLibraryPanelProps) {
       style={{
         width: 200,
         flexShrink: 0,
+        // Falcon, 2026-09-09 ("i cant scroll the options panel"):
+        // flex: 1 makes this actually fill LeftPanel's available
+        // height instead of sizing to its own (tall) content, and
+        // minHeight: 0 overrides the flex-item default of "auto" (=
+        // content height) that would otherwise defeat both flex: 1
+        // and overflowY -- without both, the 19-row list just grows
+        // past the panel's real bottom edge with nothing to scroll.
+        flex: 1,
+        minHeight: 0,
         padding: '12px 10px',
         display: 'flex',
         flexDirection: 'column',
@@ -36,10 +46,10 @@ export function IconLibraryPanel({ onBack }: IconLibraryPanelProps) {
         overflowY: 'auto',
       }}
     >
-      <button type="button" onClick={onBack} style={backButtonStyle}>
+      <button type="button" onClick={onBack} style={overflowBackButtonStyle}>
         ← Back to Projects
       </button>
-      <div style={sectionLabelStyle}>All icons</div>
+      <div style={overflowSectionLabelStyle}>All icons</div>
       <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, margin: '0 0 2px', padding: '0 2px' }}>
         Drag any icon onto the canvas to drop a free-floating annotation there (no simulation meaning).
       </p>
@@ -80,44 +90,11 @@ function IconRow({ kind }: { kind: AnnotationIconKind }) {
         e.dataTransfer.effectAllowed = 'copy';
       }}
       title={`Drag "${ANNOTATION_ICON_LABEL[kind]}" onto the canvas`}
-      style={rowButtonStyle}
+      style={overflowRowStyle({ draggable: true })}
     >
       <canvas ref={canvasRef} style={{ flexShrink: 0 }} />
-      <span style={{ fontSize: 11, fontWeight: 600, color: theme.text1 }}>{ANNOTATION_ICON_LABEL[kind]}</span>
+      <span style={overflowRowLabelStyle}>{ANNOTATION_ICON_LABEL[kind]}</span>
     </button>
   );
 }
 
-const sectionLabelStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: theme.text3,
-  textTransform: 'uppercase',
-  letterSpacing: 0.4,
-  padding: '2px 4px 0',
-};
-
-const backButtonStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 600,
-  padding: '7px 8px',
-  borderRadius: 6,
-  border: `1px solid ${theme.border}`,
-  background: theme.bgPanel2,
-  color: theme.text2,
-  cursor: 'pointer',
-  textAlign: 'left',
-};
-
-const rowButtonStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '5px 6px',
-  borderRadius: 6,
-  border: `1px solid ${theme.borderSoft}`,
-  background: theme.bgPanel2,
-  cursor: 'grab',
-  textAlign: 'left',
-  flexShrink: 0,
-};

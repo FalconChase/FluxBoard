@@ -3,7 +3,10 @@ import type { RuntimeState } from '../core/NodeRuntimeState';
 import type { Point } from '../floor/bezier';
 import { octagonVertices, traceClosedPath, octagonPortAnchor, OCTAGON_PORT_COUNT } from './octagon';
 import { nodeIcons } from './nodeIcons';
-import { roundRectPath } from './canvasUtil';
+import { roundRectPath, darkenHex } from './canvasUtil';
+import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_DEFAULT_FONT_FAMILY } from './annotationIcons';
+import type { NodeIconSkin } from './SkinConfig';
+import { NODE_RADIUS } from '../floor/floorLayout';
 
 /**
  * Per-node-kind visual defaults (design doc §4.5, §2 property table:
@@ -158,6 +161,7 @@ export function drawNode(
   center: Point,
   radius: number,
   zoom: number,
+  iconOverride?: NodeIconSkin,
 ): void {
   const skin = nodeSkinDefaults[node.kind];
 
@@ -177,9 +181,52 @@ export function drawNode(
     ctx.fill();
   }
 
-  ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = '#ffffff';
-  skin.icon(ctx, center.x, center.y, radius * 0.92);
+  // Falcon, 2026-09-09 ("add icon on the node properties with the
+  // same configuration ... attach together the node and the icon"):
+  // an opt-in built-in-icon override, drawn ON TOP of the node's own
+  // octagon body in place of the kind's plain default glyph -- same
+  // Size/Badge/Badge-color shape the annotation Icon panel uses, so
+  // there's nothing new to learn. Falls through to the kind default
+  // whenever no override is set.
+  if (iconOverride) {
+    const iconSize = iconOverride.iconSize ?? NODE_RADIUS;
+    const r = iconSize * zoom * 0.5;
+    if (iconOverride.badge) {
+      const badgeColor = iconOverride.badgeColor ?? '#ffffff';
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = badgeColor;
+      ctx.fill();
+      ctx.strokeStyle = darkenHex(badgeColor, 0.25);
+      ctx.lineWidth = Math.max(1, 1.5 * zoom);
+      ctx.stroke();
+    }
+    ctx.fillStyle = ANNOTATION_ICON_COLOR[iconOverride.icon];
+    ctx.strokeStyle = ANNOTATION_ICON_COLOR[iconOverride.icon];
+    annotationIcons[iconOverride.icon](ctx, center.x, center.y, r * 1.6);
+    if (iconOverride.label) {
+      const fontSize = Math.max(4, (iconOverride.fontSize ?? 14) * zoom);
+      const weight = iconOverride.bold ? '700' : '600';
+      const style = iconOverride.italic ? 'italic ' : '';
+      const family = iconOverride.fontFamily ?? ANNOTATION_DEFAULT_FONT_FAMILY;
+      ctx.font = `${style}${weight} ${fontSize}px ${family}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const labelY = center.y + Math.max(r, radius) + 4;
+      const metrics = ctx.measureText(iconOverride.label);
+      const padX = 4;
+      const padY = 2;
+      const lineH = fontSize + padY * 2;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.fillRect(center.x - metrics.width / 2 - padX, labelY - 1, metrics.width + padX * 2, lineH);
+      ctx.fillStyle = iconOverride.color ?? '#1f2430';
+      ctx.fillText(iconOverride.label, center.x, labelY);
+    }
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#ffffff';
+    skin.icon(ctx, center.x, center.y, radius * 0.92);
+  }
 
   const count = getBadgeCount(node.kind, state);
   if (count !== undefined) {

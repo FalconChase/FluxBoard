@@ -10,7 +10,13 @@ import type { Selection } from './selection';
 import type { Sketch, SketchLayer } from './sketchLayer';
 import type { AnnotationLayer } from './annotationLayer';
 import type { CustomIconLibrary } from '../skin/customIconLibrary';
-import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_FONT_FAMILIES, ANNOTATION_DEFAULT_FONT_FAMILY } from '../skin/annotationIcons';
+import {
+  ANNOTATION_ICON_LABEL,
+  ANNOTATION_ICON_ORDER,
+  ANNOTATION_FONT_FAMILIES,
+  ANNOTATION_DEFAULT_FONT_FAMILY,
+  type AnnotationIconKind,
+} from '../skin/annotationIcons';
 import { theme } from './theme';
 
 interface PropertiesPanelProps {
@@ -296,6 +302,9 @@ function NodeProperties({
 
       <SingleOutputSidePicker nodeId={nodeId} kind={node.kind} graph={graph} floorLayout={floorLayout} />
 
+      <div style={sectionTitleStyle}>Icon</div>
+      <NodeIconFields nodeId={nodeId} skinConfig={skinConfig} />
+
       <div style={sectionTitleStyle}>Z-order</div>
       <ZOrderButtons nodeId={nodeId} graph={graph} skinConfig={skinConfig} />
 
@@ -315,6 +324,203 @@ function NodeProperties({
       >
         Delete node
       </button>
+    </div>
+  );
+}
+
+/** Falcon, 2026-09-09 ("add icon on the node properties with the
+ * same configuration [as annotations] ... never or conveniently
+ * attach together the node and the icon"): a node-level override for
+ * the same built-in glyph set annotations use, stored in SkinConfig
+ * (skin-owned, purely cosmetic) and drawn on top of the node's own
+ * octagon body by nodeSkin.ts's drawNode. "None" clears the override
+ * back to the node kind's plain default icon. */
+function NodeIconFields({ nodeId, skinConfig }: { nodeId: string; skinConfig: SkinConfig }) {
+  const current = skinConfig.getNodeIcon(nodeId);
+  const [icon, setIcon] = useState<AnnotationIconKind | ''>(current?.icon ?? '');
+  const [iconSize, setIconSize] = useState(current?.iconSize ?? 22);
+  const [badge, setBadge] = useState(current?.badge ?? false);
+  const [badgeColor, setBadgeColor] = useState(current?.badgeColor ?? '#ffffff');
+  const [label, setLabel] = useState(current?.label ?? '');
+  const [fontSize, setFontSize] = useState(current?.fontSize ?? 14);
+  const [fontFamily, setFontFamily] = useState(current?.fontFamily ?? ANNOTATION_DEFAULT_FONT_FAMILY);
+  const [color, setColor] = useState(current?.color ?? '#1f2430');
+  const [bold, setBold] = useState(current?.bold ?? false);
+  const [italic, setItalic] = useState(current?.italic ?? false);
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <label style={labelStyle}>Glyph</label>
+      <select
+        value={icon}
+        style={inputStyle}
+        onChange={(e) => {
+          const next = e.target.value as AnnotationIconKind | '';
+          setIcon(next);
+          if (next === '') skinConfig.removeNodeIcon(nodeId);
+          else skinConfig.setNodeIcon(nodeId, { icon: next, iconSize, badge, badgeColor });
+        }}
+      >
+        <option value="">None (kind default)</option>
+        {ANNOTATION_ICON_ORDER.map((kind) => (
+          <option key={kind} value={kind}>
+            {ANNOTATION_ICON_LABEL[kind]}
+          </option>
+        ))}
+      </select>
+
+      {icon !== '' && (
+        <>
+          <div style={{ marginTop: 8 }}>
+            <label style={labelStyle}>Size</label>
+            <input
+              type="number"
+              min={4}
+              max={200}
+              value={iconSize}
+              style={inputStyle}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setIconSize(n);
+                if (Number.isFinite(n) && n > 0) skinConfig.setNodeIcon(nodeId, { icon, iconSize: n });
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8, marginBottom: badge ? 8 : 0 }}>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !badge;
+                setBadge(next);
+                skinConfig.setNodeIcon(nodeId, { icon, badge: next });
+              }}
+              title="Show a colored badge circle behind the icon"
+              style={{
+                ...smallButtonStyle,
+                flex: 1,
+                fontWeight: 700,
+                color: badge ? theme.accentStrong : theme.text1,
+                borderColor: badge ? theme.accent : theme.borderStrong,
+              }}
+            >
+              Badge {badge ? 'on' : 'off'}
+            </button>
+          </div>
+          {badge && (
+            <div>
+              <label style={labelStyle}>Badge color</label>
+              <input
+                type="color"
+                value={badgeColor}
+                style={{ ...inputStyle, padding: 2, height: 30 }}
+                onChange={(e) => {
+                  setBadgeColor(e.target.value);
+                  skinConfig.setNodeIcon(nodeId, { icon, badgeColor: e.target.value });
+                }}
+              />
+            </div>
+          )}
+
+          <div style={{ marginTop: 10 }}>
+            <label style={labelStyle}>Label</label>
+            <input
+              type="text"
+              value={label}
+              placeholder="(no label)"
+              style={inputStyle}
+              onChange={(e) => {
+                setLabel(e.target.value);
+                skinConfig.setNodeIcon(nodeId, { icon, label: e.target.value });
+              }}
+            />
+          </div>
+
+          <div style={{ marginTop: 8 }}>
+            <label style={labelStyle}>Font style</label>
+            <select
+              value={fontFamily}
+              style={inputStyle}
+              onChange={(e) => {
+                setFontFamily(e.target.value);
+                skinConfig.setNodeIcon(nodeId, { icon, fontFamily: e.target.value });
+              }}
+            >
+              {ANNOTATION_FONT_FAMILIES.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Font size</label>
+              <input
+                type="number"
+                min={4}
+                max={200}
+                value={fontSize}
+                style={inputStyle}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setFontSize(n);
+                  if (Number.isFinite(n) && n > 0) skinConfig.setNodeIcon(nodeId, { icon, fontSize: n });
+                }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Font color</label>
+              <input
+                type="color"
+                value={color}
+                style={{ ...inputStyle, padding: 2, height: 30 }}
+                onChange={(e) => {
+                  setColor(e.target.value);
+                  skinConfig.setNodeIcon(nodeId, { icon, color: e.target.value });
+                }}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !bold;
+                setBold(next);
+                skinConfig.setNodeIcon(nodeId, { icon, bold: next });
+              }}
+              title="Bold"
+              style={{
+                ...smallButtonStyle,
+                flex: 1,
+                fontWeight: 700,
+                color: bold ? theme.accentStrong : theme.text1,
+                borderColor: bold ? theme.accent : theme.borderStrong,
+              }}
+            >
+              B
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !italic;
+                setItalic(next);
+                skinConfig.setNodeIcon(nodeId, { icon, italic: next });
+              }}
+              title="Italic"
+              style={{
+                ...smallButtonStyle,
+                flex: 1,
+                fontStyle: 'italic',
+                color: italic ? theme.accentStrong : theme.text1,
+                borderColor: italic ? theme.accent : theme.borderStrong,
+              }}
+            >
+              I
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1248,6 +1454,10 @@ function AnnotationProperties({
   const [color, setColor] = useState(annotation?.color ?? '#1f2430');
   const [bold, setBold] = useState(annotation?.bold ?? false);
   const [italic, setItalic] = useState(annotation?.italic ?? false);
+  // Falcon, 2026-09-09 ("resize icon feature" / "toggle icon badge"):
+  const [iconSize, setIconSize] = useState(annotation?.iconSize ?? 18);
+  const [badge, setBadge] = useState(annotation?.badge ?? false);
+  const [badgeColor, setBadgeColor] = useState(annotation?.badgeColor ?? '#ffffff');
 
   if (!annotation) return <p style={{ fontSize: 12, color: theme.danger }}>Annotation no longer exists.</p>;
 
@@ -1276,33 +1486,65 @@ function AnnotationProperties({
         </div>
       )}
 
-      {!isText && !isCustom && (
+      {!isText && (
         <>
+          {/* Falcon, 2026-09-09 ("remove the icon property remove the
+              other options or icons on the property"): the built-in
+              icon SWITCHER grid that used to live here is gone --
+              Size and Badge below are what replaced it. Applies to
+              both 'icon' and 'custom' kinds now, not just built-ins,
+              since resizing/badging an imported image is the same
+              idea. */}
           <div style={sectionTitleStyle}>Icon</div>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-            {(Object.keys(annotationIcons) as (keyof typeof annotationIcons)[]).map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                title={ANNOTATION_ICON_LABEL[kind]}
-                onClick={() => annotationLayer.update(annotationId, { icon: kind })}
-                style={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: 13,
-                  border: `2px solid ${kind === annotation.icon ? theme.accent : theme.borderStrong}`,
-                  background: '#ffffff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  padding: 0,
-                }}
-              >
-                <AnnotationIconGlyph kind={kind} />
-              </button>
-            ))}
+          <div style={{ marginBottom: 8 }}>
+            <label style={labelStyle}>Size</label>
+            <input
+              type="number"
+              min={4}
+              max={200}
+              value={iconSize}
+              style={inputStyle}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setIconSize(n);
+                if (Number.isFinite(n) && n > 0) annotationLayer.update(annotationId, { iconSize: n });
+              }}
+            />
           </div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: badge ? 8 : 10 }}>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !badge;
+                setBadge(next);
+                annotationLayer.update(annotationId, { badge: next });
+              }}
+              title="Show a colored badge circle behind the icon"
+              style={{
+                ...smallButtonStyle,
+                flex: 1,
+                fontWeight: 700,
+                color: badge ? theme.accentStrong : theme.text1,
+                borderColor: badge ? theme.accent : theme.borderStrong,
+              }}
+            >
+              Badge {badge ? 'on' : 'off'}
+            </button>
+          </div>
+          {badge && (
+            <div style={{ marginBottom: 10 }}>
+              <label style={labelStyle}>Badge color</label>
+              <input
+                type="color"
+                value={badgeColor}
+                style={{ ...inputStyle, padding: 2, height: 30 }}
+                onChange={(e) => {
+                  setBadgeColor(e.target.value);
+                  annotationLayer.update(annotationId, { badgeColor: e.target.value });
+                }}
+              />
+            </div>
+          )}
         </>
       )}
 
@@ -1419,32 +1661,6 @@ function AnnotationProperties({
   );
 }
 
-/** Tiny canvas-drawn preview of one annotation icon glyph, used by the
- * icon-picker swatches above -- same "draw at real size, small" idea
- * as Ribbon.tsx's NodeSwatchButton. */
-function AnnotationIconGlyph({ kind }: { kind: keyof typeof annotationIcons }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const size = 18;
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
-    canvas.style.width = `${size}px`;
-    canvas.style.height = `${size}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = ANNOTATION_ICON_COLOR[kind];
-    ctx.strokeStyle = ANNOTATION_ICON_COLOR[kind];
-    annotationIcons[kind](ctx, size / 2, size / 2, size * 0.42);
-  }, [kind]);
-
-  return <canvas ref={canvasRef} />;
-}
 
 function EdgeProperties({
   edgeId,

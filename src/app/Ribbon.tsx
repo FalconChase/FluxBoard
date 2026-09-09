@@ -9,6 +9,8 @@ import { hexWithAlpha } from '../skin/canvasUtil';
 import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_ICON_ORDER } from '../skin/annotationIcons';
 import type { AnnotationIconKind } from './annotationLayer';
 import type { CustomIconDef, CustomIconLibrary } from '../skin/customIconLibrary';
+import { InfoTooltip } from './InfoTooltip';
+import { overflowRowStyle, overflowRowLabelStyle, overflowPanelListStyle, overflowBackButtonStyle, overflowSectionLabelStyle } from './overflowRowStyle';
 import {
   theme,
   CANVAS_BACKGROUND_LABELS,
@@ -43,8 +45,13 @@ const SKETCH_STYLE_OPTIONS: { style: SketchStyle; label: string; hint: string }[
   { style: 'polypath', label: 'Polypath', hint: 'Click to place each point, double-click/Enter to finish' },
 ];
 
-const NODE_KINDS: NodeKind[] = ['source', 'distributor', 'merger', 'sorter', 'mixer', 'buffer', 'sink'];
-const EDGE_STYLES: { style: EdgeStyle; label: string; color: string }[] = [
+export const NODE_KINDS: NodeKind[] = ['source', 'distributor', 'merger', 'sorter', 'mixer', 'buffer', 'sink'];
+/** Falcon, 2026-09-09 ("only show 4 icons... more or all will be
+ * shown on the side panel", extended to Nodes/Paths/Modify "for
+ * uniformity"): the 4 most-used node kinds shown in the ribbon row
+ * itself -- NodesOverflowPanel below still lists all 7. */
+const KEPT_NODE_KINDS: NodeKind[] = ['source', 'distributor', 'buffer', 'sink'];
+export const EDGE_STYLES: { style: EdgeStyle; label: string; color: string }[] = [
   { style: 'transparent', label: 'Transparent', color: theme.text3 },
   { style: 'trace', label: 'Trace', color: '#9aa1ad' },
   { style: 'conveyor', label: 'Conveyor', color: '#3d7fff' },
@@ -156,6 +163,12 @@ interface RibbonProps {
    * the Icons group below) -- this opens LeftPanel's full icon
    * library view (App.tsx owns that state) for the rest. */
   onShowMoreIcons: () => void;
+  /** Falcon, 2026-09-09 ("the same from nodes sections, paths and
+   * modify... for uniformity"): same idea, one overflow view per
+   * group -- each opens LeftPanel's full list for that group. */
+  onShowMoreNodes: () => void;
+  onShowMorePaths: () => void;
+  onShowMoreModify: () => void;
 }
 
 /**
@@ -224,6 +237,9 @@ export function Ribbon({
   onImportCustomIcon,
   onDeleteCustomIcon,
   onShowMoreIcons,
+  onShowMoreNodes,
+  onShowMorePaths,
+  onShowMoreModify,
 }: RibbonProps) {
   // Multi-select's hover flyout (2026-09-05) — open while the mouse is
   // over the button OR the flyout itself. Rendered via a portal into
@@ -233,27 +249,6 @@ export function Ribbon({
   // `visible` while the other doesn't), which was clipping this flyout
   // and forcing a scroll of the whole row to see it in full. Any future
   // ribbon dropdown should follow the same anchor-ref + portal pattern.
-  const quickSelectAnchorRef = useRef<HTMLDivElement>(null);
-  const [quickSelectOpen, setQuickSelectOpen] = useState(false);
-  const [quickSelectPos, setQuickSelectPos] = useState<{ top: number; left: number } | null>(null);
-  const openQuickSelect = () => {
-    const rect = quickSelectAnchorRef.current?.getBoundingClientRect();
-    if (rect) setQuickSelectPos({ top: rect.bottom + 2, left: rect.left });
-    setQuickSelectOpen(true);
-  };
-
-  // Sketch style's own hover flyout -- identical shape to Multi-
-  // select's above, just a second anchor/open/pos triple for the
-  // Sketch tool button instead.
-  const sketchStyleAnchorRef = useRef<HTMLDivElement>(null);
-  const [sketchStyleOpen, setSketchStyleOpen] = useState(false);
-  const [sketchStylePos, setSketchStylePos] = useState<{ top: number; left: number } | null>(null);
-  const openSketchStyle = () => {
-    const rect = sketchStyleAnchorRef.current?.getBoundingClientRect();
-    if (rect) setSketchStylePos({ top: rect.bottom + 2, left: rect.left });
-    setSketchStyleOpen(true);
-  };
-
   return (
     <div style={{ flexShrink: 0, background: theme.bgPanel, borderBottom: `1px solid ${theme.border}` }}>
       <div
@@ -296,9 +291,12 @@ export function Ribbon({
       <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 84, padding: '6px 10px', overflowX: 'auto', overflowY: 'visible' }}>
         {activeTab === 'home' && (
           <>
-            <RibbonGroup title="Nodes">
+            <RibbonGroup
+              title="Nodes"
+              info='Only the 4 most-used node kinds show here — click "More" for all 7.'
+            >
               <div style={{ display: 'flex', gap: 4 }}>
-                {NODE_KINDS.map((kind) => (
+                {KEPT_NODE_KINDS.map((kind) => (
                   <NodeSwatchButton
                     key={kind}
                     kind={kind}
@@ -306,9 +304,13 @@ export function Ribbon({
                     onClick={() => onArmKind(armedKind === kind ? null : kind)}
                   />
                 ))}
+                <MoreTileButton label="More" title="Show every node kind in the left panel" onClick={onShowMoreNodes} />
               </div>
             </RibbonGroup>
-            <RibbonGroup title="Paths">
+            <RibbonGroup
+              title="Paths"
+              info='The plain path styles show here — click "More" for Sketch and the full set.'
+            >
               <div style={{ display: 'flex', gap: 4 }}>
                 {EDGE_STYLES.map(({ style, label, color }) => (
                   <PathSwatchButton
@@ -320,50 +322,7 @@ export function Ribbon({
                     onClick={() => onArmEdgeStyle(armedEdgeStyle === style ? null : style)}
                   />
                 ))}
-                <div
-                  ref={sketchStyleAnchorRef}
-                  onMouseEnter={openSketchStyle}
-                  onMouseLeave={() => setSketchStyleOpen(false)}
-                >
-                  <RibbonIconButton
-                    label="Sketch"
-                    title={`Sketch a planning path — drag anywhere on the canvas, no simulation meaning (style: ${
-                      SKETCH_STYLE_OPTIONS.find((o) => o.style === sketchStyle)?.label ?? 'Single path'
-                    }; hover for more)`}
-                    active={sketchArmed}
-                    activeColor={theme.sketch}
-                    onClick={() => onArmSketch(!sketchArmed)}
-                    icon={<SketchIcon />}
-                  />
-                  {sketchStyleOpen &&
-                    sketchStylePos &&
-                    createPortal(
-                      <div
-                        style={{ ...quickSelectMenuStyle, top: sketchStylePos.top, left: sketchStylePos.left, minWidth: 210 }}
-                        onMouseEnter={openSketchStyle}
-                        onMouseLeave={() => setSketchStyleOpen(false)}
-                      >
-                        {SKETCH_STYLE_OPTIONS.map(({ style, label, hint }) => (
-                          <button
-                            key={style}
-                            type="button"
-                            onClick={() => {
-                              onSketchStyleChange(style);
-                              setSketchStyleOpen(false);
-                            }}
-                            style={{
-                              ...quickSelectItemStyle,
-                              background: sketchStyle === style ? theme.bgPanel2 : 'transparent',
-                            }}
-                          >
-                            <div>{label}</div>
-                            <div style={{ fontSize: 10, fontWeight: 400, color: theme.text3, marginTop: 1 }}>{hint}</div>
-                          </button>
-                        ))}
-                      </div>,
-                      document.body,
-                    )}
-                </div>
+                <MoreTileButton label="More" title="Show every path style (including Sketch) in the left panel" onClick={onShowMorePaths} />
               </div>
             </RibbonGroup>
             <RibbonGroup title="Objects">
@@ -376,7 +335,10 @@ export function Ribbon({
                 />
               </div>
             </RibbonGroup>
-            <RibbonGroup title="Modify">
+            <RibbonGroup
+              title="Modify"
+              info='Only 4 actions show here — click "More" for Rotate, Flip H/V, Group and Ungroup.'
+            >
               <div style={{ display: 'flex', gap: 4 }}>
                 <RibbonIconButton
                   label="Delete"
@@ -386,43 +348,11 @@ export function Ribbon({
                   icon={<DeleteIcon />}
                   dangerous
                 />
-                <div
-                  ref={quickSelectAnchorRef}
-                  onMouseEnter={openQuickSelect}
-                  onMouseLeave={() => setQuickSelectOpen(false)}
-                >
-                  <RibbonIconButton
-                    label="Multi-select"
-                    title="Click nodes to toggle them in, drag over empty canvas to box-select, or hover for quick-select"
-                    active={multiSelectArmed}
-                    onClick={() => onArmMultiSelect(!multiSelectArmed)}
-                    icon={<MultiSelectIcon />}
-                  />
-                  {quickSelectOpen &&
-                    quickSelectPos &&
-                    createPortal(
-                      <div
-                        style={{ ...quickSelectMenuStyle, top: quickSelectPos.top, left: quickSelectPos.left }}
-                        onMouseEnter={openQuickSelect}
-                        onMouseLeave={() => setQuickSelectOpen(false)}
-                      >
-                        {QUICK_SELECT_OPTIONS.map(({ kind, label }) => (
-                          <button
-                            key={kind}
-                            type="button"
-                            onClick={() => {
-                              onQuickSelect(kind);
-                              setQuickSelectOpen(false);
-                            }}
-                            style={quickSelectItemStyle}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>,
-                      document.body,
-                    )}
-                </div>
+                <MultiSelectToolButton
+                  multiSelectArmed={multiSelectArmed}
+                  onArmMultiSelect={onArmMultiSelect}
+                  onQuickSelect={onQuickSelect}
+                />
                 <RibbonIconButton
                   label="Duplicate"
                   title={canDuplicate ? 'Clone the selected node(s), offset a few grid cells over' : 'Select a node first'}
@@ -437,41 +367,7 @@ export function Ribbon({
                   onClick={() => onArmMove(!moveArmed)}
                   icon={<MoveIcon />}
                 />
-                <RibbonIconButton
-                  label="Rotate"
-                  title="Drag to spin the selected path/sketch's curve around its own center — snaps near 15° steps"
-                  active={rotateArmed}
-                  onClick={() => onArmRotate(!rotateArmed)}
-                  icon={<RotateIcon />}
-                />
-                <RibbonIconButton
-                  label="Flip H"
-                  title={canFlip ? "Mirror the selected path/sketch's curve left-right" : 'Select a path or sketch first'}
-                  disabled={!canFlip}
-                  onClick={() => onFlipSelection('horizontal')}
-                  icon={<FlipHIcon />}
-                />
-                <RibbonIconButton
-                  label="Flip V"
-                  title={canFlip ? "Mirror the selected path/sketch's curve top-bottom" : 'Select a path or sketch first'}
-                  disabled={!canFlip}
-                  onClick={() => onFlipSelection('vertical')}
-                  icon={<FlipVIcon />}
-                />
-                <RibbonIconButton
-                  label="Group"
-                  title={canGroup ? 'Fold the current selection into one persisted group' : 'Select 2+ ungrouped items first'}
-                  disabled={!canGroup}
-                  onClick={onGroupSelection}
-                  icon={<GroupIcon />}
-                />
-                <RibbonIconButton
-                  label="Ungroup"
-                  title={canUngroup ? 'Dissolve this group back into its individual items' : 'Select a group first'}
-                  disabled={!canUngroup}
-                  onClick={onUngroupSelection}
-                  icon={<UngroupIcon />}
-                />
+                <MoreTileButton label="More" title="Show every Modify action in the left panel" onClick={onShowMoreModify} />
               </div>
             </RibbonGroup>
           </>
@@ -517,40 +413,29 @@ export function Ribbon({
 
         {activeTab === 'insert' && (
           <>
-            <RibbonGroup title="Icons">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {ANNOTATION_ICON_ORDER.slice(0, 4).map((kind) => (
-                    <AnnotationSwatchButton key={kind} kind={kind} />
-                  ))}
-                  <MoreIconsButton onClick={onShowMoreIcons} />
-                </div>
-                <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, maxWidth: 420, margin: '4px 0 0' }}>
-                  Drag an icon onto the canvas to drop a free-floating annotation there (no simulation meaning) —
-                  select it on the canvas afterward to type a label or move it. Click "More" for the full set.
-                </p>
+            <RibbonGroup
+              title="Icons"
+              info='Drag an icon onto the canvas to drop a free-floating annotation there (no simulation meaning) — select it afterward to type a label or move it. Click "More" for the full set.'
+            >
+              <div style={{ display: 'flex', gap: 4 }}>
+                {ANNOTATION_ICON_ORDER.slice(0, 4).map((kind) => (
+                  <AnnotationSwatchButton key={kind} kind={kind} />
+                ))}
+                <MoreTileButton label="More" title="Show every built-in icon in the left panel" onClick={onShowMoreIcons} />
               </div>
             </RibbonGroup>
-            <RibbonGroup title="Text">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <TextBoxSwatchButton />
-                <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, maxWidth: 260, margin: '4px 0 0' }}>
-                  Drag onto the canvas to drop a plain text box — no icon, no simulation meaning.
-                </p>
-              </div>
+            <RibbonGroup title="Text" info="Drag onto the canvas to drop a plain text box — no icon, no simulation meaning.">
+              <TextBoxSwatchButton />
             </RibbonGroup>
-            <RibbonGroup title="Custom (shared)">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 320 }}>
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                  {customIconLibrary.getAll().map((icon) => (
-                    <CustomIconSwatchButton key={icon.id} icon={icon} onDelete={() => onDeleteCustomIcon(icon.id)} />
-                  ))}
-                  <ImportCustomIconButton onImport={onImportCustomIcon} />
-                </div>
-                <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, margin: '4px 0 0' }}>
-                  Import your own SVG or image (e.g. from Iconbuddy) — available in every project from then on, not
-                  just this one. Drag onto the canvas the same way as a built-in icon.
-                </p>
+            <RibbonGroup
+              title="Custom (shared)"
+              info="Import your own SVG or image (e.g. from Iconbuddy) — available in every project from then on, not just this one. Drag onto the canvas the same way as a built-in icon."
+            >
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'flex-start', maxWidth: 320 }}>
+                {customIconLibrary.getAll().map((icon) => (
+                  <CustomIconSwatchButton key={icon.id} icon={icon} onDelete={() => onDeleteCustomIcon(icon.id)} />
+                ))}
+                <ImportCustomIconButton onImport={onImportCustomIcon} />
               </div>
             </RibbonGroup>
           </>
@@ -571,16 +456,427 @@ function PlaceholderTabContent({ tab }: { tab: RibbonTab }) {
     tools: 'Tools — measurement and guide tools. Not built yet.',
   };
   return (
-    <RibbonGroup title={TABS.find((t) => t.tab === tab)?.label ?? ''}>
-      <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, maxWidth: 420, margin: 0 }}>{copy[tab]}</p>
+    <RibbonGroup title={TABS.find((t) => t.tab === tab)?.label ?? ''} info={copy[tab]}>
+      <span style={{ fontSize: 10, color: theme.text3 }}>Not built yet</span>
     </RibbonGroup>
   );
 }
 
-function RibbonGroup({ title, children }: { title: string; children: ReactNode }) {
+/** `info` (Falcon, 2026-09-09, "notes hidden on info icons ... for
+ * cleaner view"): an optional collapsed-by-default explanation for
+ * groups that used to carry a permanently-visible paragraph -- shown
+ * via a small "i" badge in the group's corner (InfoTooltip) instead.
+ * This is also why every ribbon tab is now the same height as HOME's
+ * ("ribbons and all pannels be uniformly sized as the home tab"): a
+ * group's box no longer has to grow to fit explanatory text. */
+/** Falcon, 2026-09-09: factored out of the main Ribbon() body so the
+ * Modify overflow panel (ModifyOverflowPanel below) can render the
+ * exact same button + hover-flyout, not a re-implementation of it --
+ * each instance owns its own anchor/open/pos state, so having one in
+ * the ribbon row and another in the side panel at the same time (a
+ * possible state, not just in-flight during a swap) never conflicts. */
+function MultiSelectToolButton({
+  multiSelectArmed,
+  onArmMultiSelect,
+  onQuickSelect,
+}: {
+  multiSelectArmed: boolean;
+  onArmMultiSelect: (armed: boolean) => void;
+  onQuickSelect: (kind: QuickSelectKind) => void;
+}) {
+  const quickSelectAnchorRef = useRef<HTMLDivElement>(null);
+  const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+  const [quickSelectPos, setQuickSelectPos] = useState<{ top: number; left: number } | null>(null);
+  const openQuickSelect = () => {
+    const rect = quickSelectAnchorRef.current?.getBoundingClientRect();
+    if (rect) setQuickSelectPos({ top: rect.bottom + 2, left: rect.left });
+    setQuickSelectOpen(true);
+  };
+
+  return (
+    <div ref={quickSelectAnchorRef} onMouseEnter={openQuickSelect} onMouseLeave={() => setQuickSelectOpen(false)}>
+      <RibbonIconButton
+        label="Multi-select"
+        title="Click nodes to toggle them in, drag over empty canvas to box-select, or hover for quick-select"
+        active={multiSelectArmed}
+        onClick={() => onArmMultiSelect(!multiSelectArmed)}
+        icon={<MultiSelectIcon />}
+      />
+      {quickSelectOpen &&
+        quickSelectPos &&
+        createPortal(
+          <div
+            style={{ ...quickSelectMenuStyle, top: quickSelectPos.top, left: quickSelectPos.left }}
+            onMouseEnter={openQuickSelect}
+            onMouseLeave={() => setQuickSelectOpen(false)}
+          >
+            {QUICK_SELECT_OPTIONS.map(({ kind, label }) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => {
+                  onQuickSelect(kind);
+                  setQuickSelectOpen(false);
+                }}
+                style={quickSelectItemStyle}
+              >
+                {label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+export function OverflowRowButton({
+  preview,
+  label,
+  title,
+  active,
+  disabled,
+  dangerous,
+  onClick,
+}: {
+  preview: ReactNode;
+  label: string;
+  title: string;
+  active?: boolean;
+  disabled?: boolean;
+  dangerous?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={overflowRowStyle({ active: !!active, disabled: !!disabled, dangerous: !!dangerous })}
+    >
+      <div style={{ width: 24, height: 24, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {preview}
+      </div>
+      <span style={overflowRowLabelStyle}>{label}</span>
+    </button>
+  );
+}
+
+/** Row version of SketchToolButton's flyout -- same anchor/open/pos
+ * state, just anchored to a full-width row instead of a compact tile
+ * so it matches every other row in the overflow panel. */
+function SketchOverflowRow({
+  sketchArmed,
+  onArmSketch,
+  sketchStyle,
+  onSketchStyleChange,
+}: {
+  sketchArmed: boolean;
+  onArmSketch: (armed: boolean) => void;
+  sketchStyle: SketchStyle;
+  onSketchStyleChange: (style: SketchStyle) => void;
+}) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const openFlyout = () => {
+    const rect = anchorRef.current?.getBoundingClientRect();
+    if (rect) setPos({ top: rect.bottom + 2, left: rect.left });
+    setOpen(true);
+  };
+
+  return (
+    <div ref={anchorRef} onMouseEnter={openFlyout} onMouseLeave={() => setOpen(false)} style={{ width: '100%' }}>
+      <OverflowRowButton
+        preview={<SketchIcon />}
+        label="Sketch"
+        title={`Sketch a planning path — drag anywhere on the canvas, no simulation meaning (style: ${
+          SKETCH_STYLE_OPTIONS.find((o) => o.style === sketchStyle)?.label ?? 'Single path'
+        }; hover for more)`}
+        active={sketchArmed}
+        onClick={() => onArmSketch(!sketchArmed)}
+      />
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            style={{ ...quickSelectMenuStyle, top: pos.top, left: pos.left, minWidth: 210 }}
+            onMouseEnter={openFlyout}
+            onMouseLeave={() => setOpen(false)}
+          >
+            {SKETCH_STYLE_OPTIONS.map(({ style, label, hint }) => (
+              <button
+                key={style}
+                type="button"
+                onClick={() => {
+                  onSketchStyleChange(style);
+                  setOpen(false);
+                }}
+                style={{ ...quickSelectItemStyle, background: sketchStyle === style ? theme.bgPanel2 : 'transparent' }}
+              >
+                <div>{label}</div>
+                <div style={{ fontSize: 10, fontWeight: 400, color: theme.text3, marginTop: 1 }}>{hint}</div>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+/** Row version of MultiSelectToolButton's flyout -- see
+ * SketchOverflowRow above. */
+function MultiSelectOverflowRow({
+  multiSelectArmed,
+  onArmMultiSelect,
+  onQuickSelect,
+}: {
+  multiSelectArmed: boolean;
+  onArmMultiSelect: (armed: boolean) => void;
+  onQuickSelect: (kind: QuickSelectKind) => void;
+}) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const openFlyout = () => {
+    const rect = anchorRef.current?.getBoundingClientRect();
+    if (rect) setPos({ top: rect.bottom + 2, left: rect.left });
+    setOpen(true);
+  };
+
+  return (
+    <div ref={anchorRef} onMouseEnter={openFlyout} onMouseLeave={() => setOpen(false)} style={{ width: '100%' }}>
+      <OverflowRowButton
+        preview={<MultiSelectIcon />}
+        label="Multi-select"
+        title="Click nodes to toggle them in, drag over empty canvas to box-select, or hover for quick-select"
+        active={multiSelectArmed}
+        onClick={() => onArmMultiSelect(!multiSelectArmed)}
+      />
+      {open &&
+        pos &&
+        createPortal(
+          <div style={{ ...quickSelectMenuStyle, top: pos.top, left: pos.left }} onMouseEnter={openFlyout} onMouseLeave={() => setOpen(false)}>
+            {QUICK_SELECT_OPTIONS.map(({ kind, label }) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => {
+                  onQuickSelect(kind);
+                  setOpen(false);
+                }}
+                style={quickSelectItemStyle}
+              >
+                {label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+/** Falcon, 2026-09-09 ("the same from nodes sections... for
+ * uniformity"): LeftPanel's full-list view for the HOME tab's Nodes
+ * group, opened by that group's "More" tile -- all 7 kinds as
+ * consistent bordered rows (Falcon, same day, circling the panel:
+ * "i want all that of in the options panel to have or placed this
+ * way" -- one shared row style across every overflow panel). */
+export function NodesOverflowPanel({
+  armedKind,
+  onArmKind,
+  onBack,
+}: {
+  armedKind: NodeKind | null;
+  onArmKind: (kind: NodeKind | null) => void;
+  onBack: () => void;
+}) {
+  return (
+    <div style={overflowPanelListStyle}>
+      <button type="button" onClick={onBack} style={overflowBackButtonStyle}>
+        ← Back to Projects
+      </button>
+      <div style={overflowSectionLabelStyle}>All nodes</div>
+      {NODE_KINDS.map((kind) => (
+        <OverflowRowButton
+          key={kind}
+          preview={<NodeIconPreview kind={kind} size={24} />}
+          label={kind}
+          title={`Place a ${kind}`}
+          active={armedKind === kind}
+          onClick={() => onArmKind(armedKind === kind ? null : kind)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Same idea for the Paths group -- all 4 plain edge styles plus the
+ * Sketch tool (with its own style flyout), as consistent rows. */
+export function PathsOverflowPanel({
+  armedEdgeStyle,
+  onArmEdgeStyle,
+  sketchArmed,
+  onArmSketch,
+  sketchStyle,
+  onSketchStyleChange,
+  onBack,
+}: {
+  armedEdgeStyle: EdgeStyle | null;
+  onArmEdgeStyle: (style: EdgeStyle | null) => void;
+  sketchArmed: boolean;
+  onArmSketch: (armed: boolean) => void;
+  sketchStyle: SketchStyle;
+  onSketchStyleChange: (style: SketchStyle) => void;
+  onBack: () => void;
+}) {
+  return (
+    <div style={overflowPanelListStyle}>
+      <button type="button" onClick={onBack} style={overflowBackButtonStyle}>
+        ← Back to Projects
+      </button>
+      <div style={overflowSectionLabelStyle}>All paths</div>
+      {EDGE_STYLES.map(({ style, label, color }) => (
+        <OverflowRowButton
+          key={style}
+          preview={<PathIconPreview edgeStyle={style} color={color} size={24} />}
+          label={label}
+          title={`Apply the ${label} style`}
+          active={armedEdgeStyle === style}
+          onClick={() => onArmEdgeStyle(armedEdgeStyle === style ? null : style)}
+        />
+      ))}
+      <SketchOverflowRow
+        sketchArmed={sketchArmed}
+        onArmSketch={onArmSketch}
+        sketchStyle={sketchStyle}
+        onSketchStyleChange={onSketchStyleChange}
+      />
+    </div>
+  );
+}
+
+/** Same idea for Modify -- all 9 actions, same click-to-act behavior
+ * (and the same disabled/active states) the ribbon row uses, as
+ * consistent rows. Unlike Nodes/Paths these aren't drag/arm-then-
+ * place tools, they act on the CURRENT selection immediately when
+ * clicked -- identical behavior whether clicked from the ribbon or
+ * from here. */
+export function ModifyOverflowPanel({
+  canDelete,
+  onDeleteSelection,
+  multiSelectArmed,
+  onArmMultiSelect,
+  onQuickSelect,
+  canDuplicate,
+  onDuplicateSelection,
+  moveArmed,
+  onArmMove,
+  rotateArmed,
+  onArmRotate,
+  canFlip,
+  onFlipSelection,
+  canGroup,
+  onGroupSelection,
+  canUngroup,
+  onUngroupSelection,
+  onBack,
+}: {
+  canDelete: boolean;
+  onDeleteSelection: () => void;
+  multiSelectArmed: boolean;
+  onArmMultiSelect: (armed: boolean) => void;
+  onQuickSelect: (kind: QuickSelectKind) => void;
+  canDuplicate: boolean;
+  onDuplicateSelection: () => void;
+  moveArmed: boolean;
+  onArmMove: (armed: boolean) => void;
+  rotateArmed: boolean;
+  onArmRotate: (armed: boolean) => void;
+  canFlip: boolean;
+  onFlipSelection: (axis: 'horizontal' | 'vertical') => void;
+  canGroup: boolean;
+  onGroupSelection: () => void;
+  canUngroup: boolean;
+  onUngroupSelection: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <div style={overflowPanelListStyle}>
+      <button type="button" onClick={onBack} style={overflowBackButtonStyle}>
+        ← Back to Projects
+      </button>
+      <div style={overflowSectionLabelStyle}>All modify actions</div>
+      <OverflowRowButton
+        preview={<DeleteIcon />}
+        label="Delete"
+        title={canDelete ? 'Delete the selected node or path (Delete/Backspace)' : 'Select something first'}
+        disabled={!canDelete}
+        dangerous
+        onClick={onDeleteSelection}
+      />
+      <MultiSelectOverflowRow multiSelectArmed={multiSelectArmed} onArmMultiSelect={onArmMultiSelect} onQuickSelect={onQuickSelect} />
+      <OverflowRowButton
+        preview={<DuplicateIcon />}
+        label="Duplicate"
+        title={canDuplicate ? 'Clone the selected node(s), offset a few grid cells over' : 'Select a node first'}
+        disabled={!canDuplicate}
+        onClick={onDuplicateSelection}
+      />
+      <OverflowRowButton
+        preview={<MoveIcon />}
+        label="Move"
+        title="Drag to reshape the selected path/sketch's curve — its two ends stay pinned"
+        active={moveArmed}
+        onClick={() => onArmMove(!moveArmed)}
+      />
+      <OverflowRowButton
+        preview={<RotateIcon />}
+        label="Rotate"
+        title="Drag to spin the selected path/sketch's curve around its own center — snaps near 15° steps"
+        active={rotateArmed}
+        onClick={() => onArmRotate(!rotateArmed)}
+      />
+      <OverflowRowButton
+        preview={<FlipHIcon />}
+        label="Flip H"
+        title={canFlip ? "Mirror the selected path/sketch's curve left-right" : 'Select a path or sketch first'}
+        disabled={!canFlip}
+        onClick={() => onFlipSelection('horizontal')}
+      />
+      <OverflowRowButton
+        preview={<FlipVIcon />}
+        label="Flip V"
+        title={canFlip ? "Mirror the selected path/sketch's curve top-bottom" : 'Select a path or sketch first'}
+        disabled={!canFlip}
+        onClick={() => onFlipSelection('vertical')}
+      />
+      <OverflowRowButton
+        preview={<GroupIcon />}
+        label="Group"
+        title={canGroup ? 'Fold the current selection into one persisted group' : 'Select 2+ ungrouped items first'}
+        disabled={!canGroup}
+        onClick={onGroupSelection}
+      />
+      <OverflowRowButton
+        preview={<UngroupIcon />}
+        label="Ungroup"
+        title={canUngroup ? 'Dissolve this group back into its individual items' : 'Select a group first'}
+        disabled={!canUngroup}
+        onClick={onUngroupSelection}
+      />
+    </div>
+  );
+}
+
+function RibbonGroup({ title, info, children }: { title: string; info?: string; children: ReactNode }) {
   return (
     <div
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
@@ -590,6 +886,11 @@ function RibbonGroup({ title, children }: { title: string; children: ReactNode }
         flexShrink: 0,
       }}
     >
+      {info && (
+        <div style={{ position: 'absolute', top: 2, right: 4 }}>
+          <InfoTooltip text={info} />
+        </div>
+      )}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>{children}</div>
       <div
         style={{
@@ -622,11 +923,12 @@ function tabButtonStyle(active: boolean): CSSProperties {
   };
 }
 
-/** Node kind swatch — reuses the exact same skin the canvas draws
- * full-size nodes with (nodeSkinDefaults/octagonVertices), same
- * technique NodePalette used, just smaller and laid out horizontally
- * for the ribbon. */
-function NodeSwatchButton({ kind, armed, onClick }: { kind: NodeKind; armed: boolean; onClick: () => void }) {
+/** Falcon, 2026-09-09 ("i want all that of in the options panel to
+ * have or placed this way"): the node-kind canvas drawing, factored
+ * out of NodeSwatchButton below so the overflow panel's rows can
+ * reuse the exact same preview at a different size instead of each
+ * panel inventing its own icon rendering. */
+export function NodeIconPreview({ kind, size = 28 }: { kind: NodeKind; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -635,7 +937,6 @@ function NodeSwatchButton({ kind, armed, onClick }: { kind: NodeKind; armed: boo
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    const size = 28;
     canvas.width = size * dpr;
     canvas.height = size * dpr;
     canvas.style.width = `${size}px`;
@@ -655,11 +956,19 @@ function NodeSwatchButton({ kind, armed, onClick }: { kind: NodeKind; armed: boo
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#ffffff';
     skin.icon(ctx, center.x, center.y, radius * 0.92);
-  }, [kind]);
+  }, [kind, size]);
 
+  return <canvas ref={canvasRef} style={{ flexShrink: 0 }} />;
+}
+
+/** Node kind swatch — reuses the exact same skin the canvas draws
+ * full-size nodes with (nodeSkinDefaults/octagonVertices), same
+ * technique NodePalette used, just smaller and laid out horizontally
+ * for the ribbon. */
+export function NodeSwatchButton({ kind, armed, onClick }: { kind: NodeKind; armed: boolean; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} title={`Place a ${kind}`} style={swatchButtonStyle(armed)}>
-      <canvas ref={canvasRef} />
+      <NodeIconPreview kind={kind} />
       <span style={swatchLabelStyle}>{kind}</span>
     </button>
   );
@@ -715,18 +1024,20 @@ function AnnotationSwatchButton({ kind }: { kind: AnnotationIconKind }) {
 
 /** Falcon, 2026-09-09 ("i want the icons to be in the left side
  * pannel never to collapse the ribbon in order to not scroll
- * sideward"): a non-draggable tile -- unlike every icon swatch here,
- * this doesn't drop anything itself, it just opens LeftPanel's full
- * icon library view via onShowMoreIcons (App.tsx). Same visual size/
- * shape as AnnotationSwatchButton so it reads as part of the same
- * row rather than a stray control. */
-function MoreIconsButton({ onClick }: { onClick: () => void }) {
+ * sideward" / 2026-09-09 again, extending the same idea to "nodes
+ * sections, paths and modify... for uniformity"): a non-draggable
+ * tile -- unlike every swatch here, this doesn't drop or arm anything
+ * itself, it just opens LeftPanel's full list view for whichever
+ * group it belongs to (App.tsx owns which view is showing). Same
+ * visual size/shape as the swatches next to it so it reads as part
+ * of the same row rather than a stray control. */
+function MoreTileButton({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} title="Show every built-in icon in the left panel" style={swatchButtonStyle(false)}>
+    <button type="button" onClick={onClick} title={title} style={swatchButtonStyle(false)}>
       <div style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: theme.text2 }}>
         ⋯
       </div>
-      <span style={swatchLabelStyle}>More</span>
+      <span style={swatchLabelStyle}>{label}</span>
     </button>
   );
 }
@@ -891,19 +1202,10 @@ function ImportCustomIconButton({ onImport }: { onImport: (name: string, dataUrl
  * stand-in drawing (hexWithAlpha against pathSkin.ts's real values)
  * so the ribbon swatch still reads as "conveyor" vs "glass tube" vs
  * "nothing" at a glance. */
-function PathSwatchButton({
-  edgeStyle,
-  label,
-  color,
-  armed,
-  onClick,
-}: {
-  edgeStyle: EdgeStyle;
-  label: string;
-  color: string;
-  armed: boolean;
-  onClick: () => void;
-}) {
+/** Falcon, 2026-09-09 ("i want all that of in the options panel to
+ * have or placed this way"): same factoring as NodeIconPreview -- the
+ * path-style canvas drawing on its own, reusable at any size. */
+export function PathIconPreview({ edgeStyle, color, size = 28 }: { edgeStyle: EdgeStyle; color: string; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -912,8 +1214,8 @@ function PathSwatchButton({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = 28;
-    const h = 28;
+    const w = size;
+    const h = size;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
     canvas.style.width = `${w}px`;
@@ -981,11 +1283,27 @@ function PathSwatchButton({
       ctx.stroke();
       ctx.setLineDash([]);
     }
-  }, [edgeStyle, color]);
+  }, [edgeStyle, color, size]);
 
+  return <canvas ref={canvasRef} style={{ flexShrink: 0 }} />;
+}
+
+export function PathSwatchButton({
+  edgeStyle,
+  label,
+  color,
+  armed,
+  onClick,
+}: {
+  edgeStyle: EdgeStyle;
+  label: string;
+  color: string;
+  armed: boolean;
+  onClick: () => void;
+}) {
   return (
     <button type="button" onClick={onClick} title={`Apply the ${label} style`} style={swatchButtonStyle(armed)}>
-      <canvas ref={canvasRef} />
+      <PathIconPreview edgeStyle={edgeStyle} color={color} />
       <span style={swatchLabelStyle}>{label}</span>
     </button>
   );
@@ -1115,7 +1433,7 @@ function RibbonToggleButton({
   );
 }
 
-function RibbonIconButton({
+export function RibbonIconButton({
   label,
   title,
   icon,
@@ -1211,7 +1529,7 @@ function iconProps(size = 16) {
   return { width: size, height: size, viewBox: '0 0 16 16', fill: 'none' as const, stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
 }
 
-function DeleteIcon() {
+export function DeleteIcon() {
   return (
     <svg {...iconProps()}>
       <path d="M2.5 4.5h11" />
@@ -1220,14 +1538,14 @@ function DeleteIcon() {
     </svg>
   );
 }
-function MultiSelectIcon() {
+export function MultiSelectIcon() {
   return (
     <svg {...iconProps()}>
       <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeDasharray="2.2 2.2" />
     </svg>
   );
 }
-function DuplicateIcon() {
+export function DuplicateIcon() {
   return (
     <svg {...iconProps()}>
       <rect x="2.5" y="4.5" width="8" height="9" rx="1.2" />
@@ -1235,7 +1553,7 @@ function DuplicateIcon() {
     </svg>
   );
 }
-function MoveIcon() {
+export function MoveIcon() {
   return (
     <svg {...iconProps()}>
       <path d="M8 2.5v11M2.5 8h11" />
@@ -1243,7 +1561,7 @@ function MoveIcon() {
     </svg>
   );
 }
-function RotateIcon() {
+export function RotateIcon() {
   return (
     <svg {...iconProps()}>
       <path d="M12.5 8A4.5 4.5 0 1 1 10.7 4.4" />
@@ -1251,7 +1569,7 @@ function RotateIcon() {
     </svg>
   );
 }
-function FlipHIcon() {
+export function FlipHIcon() {
   return (
     <svg {...iconProps()}>
       <path d="M8 2v12" strokeDasharray="1.6 1.6" />
@@ -1260,7 +1578,7 @@ function FlipHIcon() {
     </svg>
   );
 }
-function FlipVIcon() {
+export function FlipVIcon() {
   return (
     <svg {...iconProps()}>
       <path d="M2 8h12" strokeDasharray="1.6 1.6" />
@@ -1269,7 +1587,7 @@ function FlipVIcon() {
     </svg>
   );
 }
-function GroupIcon() {
+export function GroupIcon() {
   return (
     <svg {...iconProps()}>
       <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
@@ -1277,7 +1595,7 @@ function GroupIcon() {
     </svg>
   );
 }
-function UngroupIcon() {
+export function UngroupIcon() {
   return (
     <svg {...iconProps()}>
       <rect x="2" y="2.5" width="5.2" height="5.2" rx="1" />
@@ -1285,7 +1603,7 @@ function UngroupIcon() {
     </svg>
   );
 }
-function SketchIcon() {
+export function SketchIcon() {
   return (
     <svg {...iconProps()}>
       <path d="M11.5 2.5a1.4 1.4 0 0 1 2 2L5 13l-3 1 1-3 8.5-8.5Z" />

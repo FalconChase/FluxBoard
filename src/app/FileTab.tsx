@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from 'react';
 import type { ProjectMeta } from './persistence';
 import { theme } from './theme';
+import { InfoTooltip } from './InfoTooltip';
 
 interface FileTabProps {
   projects: ProjectMeta[];
@@ -37,6 +38,13 @@ export function FileTab({ projects, activeProjectId, onSwitch, onCreate, onRenam
       style={{
         width: 200,
         flexShrink: 0,
+        // Falcon, 2026-09-09: same nested-flex-scroll fix applied to
+        // IconLibraryPanel (LeftPanel.tsx's other view) -- a long
+        // enough project list would hit the identical "can't scroll,
+        // bottom rows hidden" bug without these, it just hadn't shown
+        // up here yet because project lists have stayed short so far.
+        flex: 1,
+        minHeight: 0,
         padding: '12px 10px',
         display: 'flex',
         flexDirection: 'column',
@@ -44,7 +52,13 @@ export function FileTab({ projects, activeProjectId, onSwitch, onCreate, onRenam
         overflowY: 'auto',
       }}
     >
-      <div style={sectionLabelStyle}>Projects</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={sectionLabelStyle}>Projects</div>
+        <InfoTooltip
+          align="left"
+          text="Each project autosaves on its own — switching flushes the current one first. Persists only inside the real desktop app (npm run tauri:dev), not a plain browser dev tab."
+        />
+      </div>
       <button
         type="button"
         onClick={() => {
@@ -104,10 +118,6 @@ export function FileTab({ projects, activeProjectId, onSwitch, onCreate, onRenam
         );
       })}
 
-      <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, marginTop: 8, padding: '0 2px' }}>
-        Each project autosaves on its own — switching flushes the current one first. Persists only inside the real
-        desktop app (npm run tauri:dev), not a plain browser dev tab.
-      </p>
     </div>
   );
 }

@@ -1,5 +1,29 @@
 import type { NodeId, EdgeId } from '../core/types';
 import { type EdgeSkin, defaultEdgeSkin } from './pathSkin';
+import type { AnnotationIconKind } from './annotationIcons';
+
+/** Falcon, 2026-09-09 ("add icon on the node properties with the
+ * same configuration [as the annotation icon]"): an opt-in
+ * built-in-icon override drawn on top of a node's own octagon body
+ * (nodeSkin.ts's drawNode), same Size/Badge/Badge-color shape the
+ * annotation Icon panel already uses. Skin-owned like everything
+ * else in this file -- purely cosmetic, no Logic meaning. */
+export interface NodeIconSkin {
+  icon: AnnotationIconKind;
+  iconSize?: number;
+  badge?: boolean;
+  badgeColor?: string;
+  /** Falcon, 2026-09-09 ("add the label feature properties as how
+   * the icon also have its properties adopted on the node's icon
+   * section"): same Label + Font shape the annotation Icon panel
+   * has, drawn under the node's icon glyph the same way. */
+  label?: string;
+  fontSize?: number;
+  fontFamily?: string;
+  color?: string;
+  bold?: boolean;
+  italic?: boolean;
+}
 
 /**
  * SkinConfig — the skin layer's own data, keyed by the same ids the
@@ -17,6 +41,7 @@ export class SkinConfig {
   private nodeZIndex = new Map<NodeId, number>();
   private nodeLocked = new Map<NodeId, boolean>();
   private edgeSkins = new Map<EdgeId, EdgeSkin>();
+  private nodeIcons = new Map<NodeId, NodeIconSkin>();
 
   setNodeZIndex(nodeId: NodeId, zIndex: number): void {
     this.nodeZIndex.set(nodeId, zIndex);
@@ -39,6 +64,27 @@ export class SkinConfig {
     return this.nodeLocked.get(nodeId) ?? false;
   }
 
+  /** Partial update, same merge convention as setEdgeSkin -- only
+   * the given fields change. Passing `undefined` (via removeNodeIcon)
+   * is how the override is cleared entirely, since an empty/default
+   * NodeIconSkin is still "has an icon", just an unconfigured one. */
+  setNodeIcon(nodeId: NodeId, patch: Partial<NodeIconSkin> & { icon?: AnnotationIconKind }): void {
+    const current = this.nodeIcons.get(nodeId);
+    const icon = patch.icon ?? current?.icon;
+    if (!icon) return;
+    this.nodeIcons.set(nodeId, { ...current, ...patch, icon });
+  }
+
+  getNodeIcon(nodeId: NodeId): NodeIconSkin | undefined {
+    return this.nodeIcons.get(nodeId);
+  }
+
+  /** Clears the override entirely, back to the node kind's plain
+   * default icon. */
+  removeNodeIcon(nodeId: NodeId): void {
+    this.nodeIcons.delete(nodeId);
+  }
+
   /** Partial update — only the given fields change, everything else
    * (or the shared default) is preserved. */
   setEdgeSkin(edgeId: EdgeId, skin: Partial<EdgeSkin>): void {
@@ -57,6 +103,7 @@ export class SkinConfig {
   removeNode(nodeId: NodeId): void {
     this.nodeZIndex.delete(nodeId);
     this.nodeLocked.delete(nodeId);
+    this.nodeIcons.delete(nodeId);
   }
 
   removeEdge(edgeId: EdgeId): void {
