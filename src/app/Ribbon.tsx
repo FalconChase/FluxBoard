@@ -150,6 +150,12 @@ interface RibbonProps {
   customIconLibrary: CustomIconLibrary;
   onImportCustomIcon: (name: string, dataUrl: string) => void;
   onDeleteCustomIcon: (id: string) => void;
+  /** Falcon, 2026-09-09 ("i want the icons to be in the left side
+   * pannel never to collapse the ribbon in order to not scroll
+   * sideward"): only a handful of built-in icons show here now (see
+   * the Icons group below) -- this opens LeftPanel's full icon
+   * library view (App.tsx owns that state) for the rest. */
+  onShowMoreIcons: () => void;
 }
 
 /**
@@ -217,6 +223,7 @@ export function Ribbon({
   customIconLibrary,
   onImportCustomIcon,
   onDeleteCustomIcon,
+  onShowMoreIcons,
 }: RibbonProps) {
   // Multi-select's hover flyout (2026-09-05) — open while the mouse is
   // over the button OR the flyout itself. Rendered via a portal into
@@ -513,13 +520,14 @@ export function Ribbon({
             <RibbonGroup title="Icons">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <div style={{ display: 'flex', gap: 4 }}>
-                  {ANNOTATION_ICON_ORDER.map((kind) => (
+                  {ANNOTATION_ICON_ORDER.slice(0, 4).map((kind) => (
                     <AnnotationSwatchButton key={kind} kind={kind} />
                   ))}
+                  <MoreIconsButton onClick={onShowMoreIcons} />
                 </div>
                 <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, maxWidth: 420, margin: '4px 0 0' }}>
                   Drag an icon onto the canvas to drop a free-floating annotation there (no simulation meaning) —
-                  select it on the canvas afterward to type a label or move it.
+                  select it on the canvas afterward to type a label or move it. Click "More" for the full set.
                 </p>
               </div>
             </RibbonGroup>
@@ -701,6 +709,24 @@ function AnnotationSwatchButton({ kind }: { kind: AnnotationIconKind }) {
     >
       <canvas ref={canvasRef} />
       <span style={swatchLabelStyle}>{ANNOTATION_ICON_LABEL[kind]}</span>
+    </button>
+  );
+}
+
+/** Falcon, 2026-09-09 ("i want the icons to be in the left side
+ * pannel never to collapse the ribbon in order to not scroll
+ * sideward"): a non-draggable tile -- unlike every icon swatch here,
+ * this doesn't drop anything itself, it just opens LeftPanel's full
+ * icon library view via onShowMoreIcons (App.tsx). Same visual size/
+ * shape as AnnotationSwatchButton so it reads as part of the same
+ * row rather than a stray control. */
+function MoreIconsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} title="Show every built-in icon in the left panel" style={swatchButtonStyle(false)}>
+      <div style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: theme.text2 }}>
+        ⋯
+      </div>
+      <span style={swatchLabelStyle}>More</span>
     </button>
   );
 }

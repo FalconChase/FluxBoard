@@ -1,5 +1,6 @@
 import type { ProjectMeta } from './persistence';
 import { FileTab } from './FileTab';
+import { IconLibraryPanel } from './IconLibraryPanel';
 import { theme } from './theme';
 
 interface LeftPanelProps {
@@ -16,13 +17,24 @@ interface LeftPanelProps {
   onCreateProject: (name: string) => void;
   onRenameProject: (id: string, name: string) => void;
   onDeleteProject: (id: string) => void;
+  /** Falcon, 2026-09-09 ("i want the icons to be in the left side
+   * pannel never to collapse the ribbon in order to not scroll
+   * sideward"): this rail now swaps between the Projects list and the
+   * full built-in icon library (IconLibraryPanel) -- 'icons' only
+   * when the INSERT tab's "More" tile was clicked (App.tsx owns
+   * `leftPanelView` and resets it back to 'projects' on tab change). */
+  view: 'projects' | 'icons';
+  onBackToProjects: () => void;
 }
 
 /**
  * Left-docked rail. Used to be a 4-way NODES/PATHS/OBJECTS/FILE tab
  * switcher (SES026); the ribbon port (Falcon, 2026-09-04) absorbed
- * NODES/PATHS/OBJECTS into the Ribbon's HOME tab, so this is now just
- * the Projects list, always visible, no tabs to click through.
+ * NODES/PATHS/OBJECTS into the Ribbon's HOME tab, leaving just the
+ * Projects list -- until 2026-09-09, when Falcon asked for the full
+ * built-in icon set to live here too (rather than the ribbon's INSERT
+ * tab needing horizontal scroll), reachable via a "More" tile there.
+ * `view` picks which of the two shows; App.tsx owns that state.
  */
 export function LeftPanel({
   projects,
@@ -31,6 +43,8 @@ export function LeftPanel({
   onCreateProject,
   onRenameProject,
   onDeleteProject,
+  view,
+  onBackToProjects,
 }: LeftPanelProps) {
   return (
     <div
@@ -43,14 +57,18 @@ export function LeftPanel({
         borderRight: `1px solid ${theme.border}`,
       }}
     >
-      <FileTab
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSwitch={onSwitchProject}
-        onCreate={onCreateProject}
-        onRename={onRenameProject}
-        onDelete={onDeleteProject}
-      />
+      {view === 'icons' ? (
+        <IconLibraryPanel onBack={onBackToProjects} />
+      ) : (
+        <FileTab
+          projects={projects}
+          activeProjectId={activeProjectId}
+          onSwitch={onSwitchProject}
+          onCreate={onCreateProject}
+          onRename={onRenameProject}
+          onDelete={onDeleteProject}
+        />
+      )}
     </div>
   );
 }

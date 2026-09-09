@@ -232,6 +232,16 @@ export function App() {
   // actual toggle is called through fluxCanvasRef since the sim
   // driver only exists inside FluxCanvas's own effect.
   const [activeRibbonTab, setActiveRibbonTab] = useState<RibbonTab>('home');
+  // Falcon, 2026-09-09 ("i want the icons to be in the left side
+  // pannel never to collapse the ribbon in order to not scroll
+  // sideward"): LeftPanel now swaps between the Projects list and the
+  // full built-in icon library depending on this. Only INSERT's
+  // "More" tile (Ribbon.tsx) sets it to 'icons' -- switching to any
+  // OTHER ribbon tab resets it back to 'projects' below, matching
+  // Falcon's "projects will only show when home tab was clicked"
+  // (generalized to "any tab that isn't INSERT", since the icon view
+  // only makes sense while INSERT is active).
+  const [leftPanelView, setLeftPanelView] = useState<'projects' | 'icons'>('projects');
   const [armedEdgeStyle, setArmedEdgeStyle] = useState<EdgeStyle | null>(null);
   // Planning sketches (Falcon, 2026-09-03): pure visual scratch lines,
   // no simulation meaning, not tied to any node — sketchArmed mirrors
@@ -1597,7 +1607,13 @@ export function App() {
         canRedo={canRedo}
         onRedo={handleRedo}
         activeTab={activeRibbonTab}
-        onTabChange={setActiveRibbonTab}
+        onTabChange={(tab) => {
+          setActiveRibbonTab(tab);
+          // Leaving INSERT means the icon library view no longer
+          // applies -- back to Projects (Falcon: "projects will only
+          // show when home tab was clicked").
+          if (tab !== 'insert') setLeftPanelView('projects');
+        }}
         armedKind={placementKind}
         onArmKind={handleArmNodeKind}
         armedEdgeStyle={armedEdgeStyle}
@@ -1639,6 +1655,7 @@ export function App() {
         customIconLibrary={customIconLibrary}
         onImportCustomIcon={handleImportCustomIcon}
         onDeleteCustomIcon={handleDeleteCustomIcon}
+        onShowMoreIcons={() => setLeftPanelView('icons')}
       />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <LeftPanel
@@ -1648,6 +1665,8 @@ export function App() {
           onCreateProject={handleCreateProject}
           onRenameProject={handleRenameProject}
           onDeleteProject={handleDeleteProject}
+          view={leftPanelView}
+          onBackToProjects={() => setLeftPanelView('projects')}
         />
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
           <FluxCanvas
