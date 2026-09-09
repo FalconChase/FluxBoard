@@ -22,7 +22,7 @@ import {
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
 import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type SketchAttachment, type SketchSegment } from './sketchLayer';
-import { AnnotationLayer, type AnnotationIconKind } from './annotationLayer';
+import { AnnotationLayer, type Annotation, type AnnotationIconKind } from './annotationLayer';
 import { annotationIcons, ANNOTATION_ICON_COLOR } from '../skin/annotationIcons';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
@@ -225,6 +225,28 @@ const ANNOTATION_HIT_RADIUS_PX = 16;
 /** World-space size an annotation's icon glyph renders at, before
  * camera.zoom scaling -- roughly matches a node's own icon size. */
 const ANNOTATION_ICON_SIZE = 18;
+/** Falcon, 2026-09-09 ("adding font size (to lock the sizing)"):
+ * default WORLD-space point size for an annotation's text (its own
+ * label, or a text box's whole content) when it hasn't set its own
+ * fontSize -- multiplied by camera.zoom at render time, exactly like
+ * NODE_RADIUS/ANNOTATION_ICON_SIZE, so text zooms consistently with
+ * every other on-canvas size instead of staying a fixed screen pixel
+ * size while the rest of the graph scales around it. */
+const ANNOTATION_DEFAULT_FONT_SIZE = 14;
+const ANNOTATION_DEFAULT_COLOR = '#1f2430';
+
+/** Builds a canvas `font` string from an annotation's own formatting
+ * (Falcon, 2026-09-09: "adding font size... font style, type
+ * (bold,itallic)") at the given world-to-screen zoom -- the ONE place
+ * that turns those fields into something ctx.font understands, so the
+ * text-kind and icon-label render paths (and hit-testing, for the
+ * matching size) can never drift out of sync with each other. */
+function annotationFont(annotation: Annotation, zoom: number): string {
+  const px = Math.max(4, (annotation.fontSize ?? ANNOTATION_DEFAULT_FONT_SIZE) * zoom);
+  const weight = annotation.bold ? '700' : '600';
+  const style = annotation.italic ? 'italic ' : '';
+  return `${style}${weight} ${px}px system-ui, sans-serif`;
+}
 /** Falcon, 2026-09-05 ("Click to place each point... double-click...
  * to finish the chain"): two clicks land inside this window (ms) AND
  * within CLICK_MOVE_THRESHOLD_PX*2 of each other to count as a
@@ -498,8 +520,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // without needing a real text-measurement pass just to
         // hit-test (rendering below still measures for real, for the
         // selection outline).
+        const fontScale = (a.fontSize ?? ANNOTATION_DEFAULT_FONT_SIZE) / ANNOTATION_DEFAULT_FONT_SIZE;
         const radiusPx =
-          a.kind === 'text' ? Math.max(ANNOTATION_HIT_RADIUS_PX, (a.label ?? 'Text').length * 3.4) : ANNOTATION_HIT_RADIUS_PX;
+          a.kind === 'text'
+            ? Math.max(ANNOTATION_HIT_RADIUS_PX, (a.label ?? 'Text').length * 3.4 * fontScale)
+            : ANNOTATION_HIT_RADIUS_PX;
         const toleranceWorld = radiusPx / camera.zoom;
         if (Math.hypot(a.position.x - worldPoint.x, a.position.y - worldPoint.y) <= toleranceWorld) return a.id;
       }
@@ -965,10 +990,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           const hasLabel = !!annotation.label;
           const text = hasLabel ? annotation.label! : 'Text';
           ctx!.save();
-          ctx!.font = '600 13px system-ui, sans-serif';
+          ctx!.font = annotationFont(annotation, camera.zoom);
           ctx!.textAlign = 'center';
           ctx!.textBaseline = 'middle';
-          ctx!.fillStyle = hasLabel ? '#1f2430' : 'rgba(31, 36, 48, 0.4)';
+          ctx!.fillStyle = hasLabel ? (annotation.color ?? ANNOTATION_DEFAULT_COLOR) : 'rgba(31, 36, 48, 0.4)';
           ctx!.fillText(text, screen.x, screen.y);
           if (isSelected) {
             const metrics = ctx!.measureText(text);
@@ -1004,15 +1029,17 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           ctx!.stroke();
         }
         if (annotation.label) {
-          ctx!.font = '600 11px system-ui, sans-serif';
+          ctx!.font = annotationFont(annotation, camera.zoom);
           ctx!.textAlign = 'center';
           ctx!.textBaseline = 'top';
           const labelY = screen.y + r + 4;
           const metrics = ctx!.measureText(annotation.label);
           const padX = 4;
+          const padY = 2;
+          const lineH = (annotation.fontSize ?? ANNOTATION_DEFAULT_FONT_SIZE) * camera.zoom + padY * 2;
           ctx!.fillStyle = 'rgba(255, 255, 255, 0.9)';
-          ctx!.fillRect(screen.x - metrics.width / 2 - padX, labelY - 1, metrics.width + padX * 2, 14);
-          ctx!.fillStyle = '#1f2430';
+          ctx!.fillRect(screen.x - metrics.width / 2 - padX, labelY - 1, metrics.width + padX * 2, lineH);
+          ctx!.fillStyle = annotation.color ?? ANNOTATION_DEFAULT_COLOR;
           ctx!.fillText(annotation.label, screen.x, labelY);
         }
         ctx!.restore();

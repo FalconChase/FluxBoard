@@ -1204,6 +1204,10 @@ function AnnotationProperties({
 }) {
   const annotation = annotationLayer.get(annotationId);
   const [label, setLabel] = useState(annotation?.label ?? '');
+  const [fontSize, setFontSize] = useState(annotation?.fontSize ?? 14);
+  const [color, setColor] = useState(annotation?.color ?? '#1f2430');
+  const [bold, setBold] = useState(annotation?.bold ?? false);
+  const [italic, setItalic] = useState(annotation?.italic ?? false);
 
   if (!annotation) return <p style={{ fontSize: 12, color: theme.danger }}>Annotation no longer exists.</p>;
 
@@ -1261,6 +1265,75 @@ function AnnotationProperties({
             onUpdateLabel(annotationId, e.target.value);
           }}
         />
+      </div>
+
+      <div style={sectionTitleStyle}>Font</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <div style={{ flex: 1 }}>
+          <label style={labelStyle}>Size</label>
+          <input
+            type="number"
+            min={4}
+            max={200}
+            value={fontSize}
+            style={inputStyle}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              setFontSize(n);
+              if (Number.isFinite(n) && n > 0) annotationLayer.update(annotationId, { fontSize: n });
+            }}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={labelStyle}>Color</label>
+          <input
+            type="color"
+            value={color}
+            style={{ ...inputStyle, padding: 2, height: 30 }}
+            onChange={(e) => {
+              setColor(e.target.value);
+              annotationLayer.update(annotationId, { color: e.target.value });
+            }}
+          />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+        <button
+          type="button"
+          onClick={() => {
+            const next = !bold;
+            setBold(next);
+            annotationLayer.update(annotationId, { bold: next });
+          }}
+          title="Bold"
+          style={{
+            ...smallButtonStyle,
+            flex: 1,
+            fontWeight: 700,
+            color: bold ? theme.accentStrong : theme.text1,
+            borderColor: bold ? theme.accent : theme.borderStrong,
+          }}
+        >
+          B
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const next = !italic;
+            setItalic(next);
+            annotationLayer.update(annotationId, { italic: next });
+          }}
+          title="Italic"
+          style={{
+            ...smallButtonStyle,
+            flex: 1,
+            fontStyle: 'italic',
+            color: italic ? theme.accentStrong : theme.text1,
+            borderColor: italic ? theme.accent : theme.borderStrong,
+          }}
+        >
+          I
+        </button>
       </div>
 
       <div style={sectionTitleStyle}>Danger zone</div>

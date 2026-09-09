@@ -31,6 +31,23 @@ export interface Annotation {
    * annotation (text kind) — optional for an icon annotation (an icon
    * alone is valid), effectively the whole point for a text one. */
   label?: string;
+  /** Falcon, 2026-09-09 ("i notice that the text resizes when i
+   * zoomed in and out like it has no fixed size ... adding font size
+   * (to lock the sizing)"): a WORLD-space point size, same convention
+   * as NODE_RADIUS -- multiplied by camera.zoom at render time, same
+   * as every other on-canvas size, so text zooms consistently with
+   * everything else instead of staying pinned to a fixed on-screen
+   * pixel size while nodes/icons around it scale. Optional -- absent
+   * defaults to ANNOTATION_DEFAULT_FONT_SIZE (FluxCanvas.tsx), same
+   * convention as every other optional field here. */
+  fontSize?: number;
+  bold?: boolean;
+  italic?: boolean;
+  /** #rrggbb text color — optional, defaults to the standard dark
+   * label color when absent. Ignored for an empty text box's faint
+   * "Text" placeholder, which always renders in its own muted gray
+   * regardless of this setting. */
+  color?: string;
 }
 
 /**
