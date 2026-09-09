@@ -12,7 +12,7 @@ import type { Point } from '../floor/bezier';
  * as sketchLayer.ts's planning sketches: an annotation carries zero
  * simulation meaning, isn't tied to any GraphModel node/edge id, and
  * nothing about it ever affects the sim. */
-export type AnnotationIconKind = 'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money';
+export type AnnotationIconKind = 'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money' | 'moneyAlt';
 
 export interface Annotation {
   id: string;

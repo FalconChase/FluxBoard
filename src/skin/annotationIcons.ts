@@ -139,7 +139,26 @@ const money: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
   ctx.restore();
 };
 
-export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money', AnnotationIconDrawFn> = {
+/** Money (alt) — a second pasted-in money glyph (Falcon, 2026-09-09),
+ * a flat single-path "currentColor" icon (viewBox 0 0 24 24) rather
+ * than the first one's duotone style. Same baked-in-verbatim approach
+ * as `money` above: the exact SVG path as a Path2D, filled with
+ * whatever color the caller has set (no opacity trick needed since
+ * this glyph has no separate background layer). */
+const MONEY_ALT_PATH = new Path2D(
+  'm4.93 14.228l-.001.002l8.839 5.886l5.303-3.532l-.003-.002l1.414-.942l1.417.944L13.768 22L2.1 14.23l1.416-.945zm0-3.408l-.001.002l8.839 5.887l5.303-3.532l-.003-.002l1.414-.943l1.417.945l-8.131 5.416L2.1 10.823l1.416-.945zM21.9 9.77l-8.132 5.417L2.1 7.415l8.131-5.416zM10.938 4.355c-.367.244-.945.26-1.337.046l-.077-.046l-3.89 2.59c.391.26.391.682 0 .942l7.425 4.945c.39-.26 1.024-.26 1.415 0l3.89-2.59c-.391-.26-.391-.681 0-.941V9.3zm3.359 6.005c.39-.26 1.024-.26 1.415 0c.39.26.39.682 0 .942s-1.025.26-1.415 0s-.39-.682 0-.942m-4.242-3.061c1.074-.715 2.814-.715 3.888 0s1.074 1.874 0 2.59s-2.814.715-3.888 0c-1.074-.716-1.074-1.875 0-2.59m2.828.706c-.488-.325-1.28-.325-1.768 0s-.488.853 0 1.178s1.28.325 1.768 0s.488-.853 0-1.178M7.934 6.12c.391-.26 1.024-.26 1.415 0c.39.26.39.682 0 .942s-1.024.26-1.414 0s-.39-.682 0-.942',
+);
+const moneyAlt: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 24;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-12, -12);
+  ctx.fill(MONEY_ALT_PATH);
+  ctx.restore();
+};
+
+export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money' | 'moneyAlt', AnnotationIconDrawFn> = {
   marker,
   warning,
   info,
@@ -147,6 +166,7 @@ export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | '
   star,
   flag,
   money,
+  moneyAlt,
 };
 
 /** A sensible default display color per icon kind — an annotation is
@@ -161,6 +181,7 @@ export const ANNOTATION_ICON_COLOR: Record<keyof typeof annotationIcons, string>
   star: '#eab308',
   flag: '#17b3a3',
   money: '#16a34a',
+  moneyAlt: '#0d9488',
 };
 
 export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string> = {
@@ -171,9 +192,10 @@ export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string>
   star: 'Star',
   flag: 'Flag',
   money: 'Money',
+  moneyAlt: 'Money (alt)',
 };
 
-export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money'];
+export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money', 'moneyAlt'];
 
 /** Falcon, 2026-09-09 ("font style" — separate from the bold/italic
  * "type" controls): a small fixed picker of CSS font-family stacks
