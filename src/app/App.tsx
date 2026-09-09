@@ -15,18 +15,21 @@ import { ObjectRegistryManager } from './ObjectRegistryManager';
 import { collapseSelection, type Selection } from './selection';
 import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type Sketch, type SketchAttachment, type SketchSegment } from './sketchLayer';
 import { AnnotationLayer, type AnnotationIconKind } from './annotationLayer';
+import { CustomIconLibrary, type CustomIconDef } from '../skin/customIconLibrary';
 import { ObjectRegistry } from '../skin/ObjectRegistry';
 import { GroupRegistry } from '../skin/GroupRegistry';
 import { theme, type CanvasBackground } from './theme';
 import {
   clearAllStores,
   deleteProjectFile,
+  loadCustomIconLibraryFile,
   loadLegacySave,
   loadManifest,
   loadProjectFile,
   makeBlankProjectData,
   newProjectId,
   populateState,
+  saveCustomIconLibraryFile,
   saveManifest,
   saveProjectFile,
   serializeState,
@@ -192,6 +195,13 @@ export function App() {
   // singleton, mutated directly, single source of truth" convention
   // as every other store here.
   const annotationLayer = useMemo(() => new AnnotationLayer(), []);
+  // Falcon, 2026-09-09 ("can i make my own custom icon library...
+  // became preloded on the app?"): a SHARED, app-wide store -- unlike
+  // every other store here, deliberately not threaded through
+  // serializeState/clearAllStores/populateState (see
+  // customIconLibrary.ts), loaded once below regardless of which
+  // project is active.
+  const customIconLibrary = useMemo(() => new CustomIconLibrary(), []);
   // OBJECTS registry (FBP011, 2026-09-05) — same "stable singleton,
   // mutated directly, single source of truth" convention as the four
   // stores above (design doc §4.6).
@@ -469,6 +479,24 @@ export function App() {
     // singletons (never reassigned) and nextIdRef/activeProjectIdRef
     // are refs — safe to omit, same reasoning the keydown effect
     // above documents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Falcon, 2026-09-09: the custom icon library loads independently of
+  // the project-load effect above -- it's shared across every project,
+  // not part of any one project's own file, so it only ever needs
+  // loading once, regardless of which project ends up active.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const icons = await loadCustomIconLibraryFile();
+      if (cancelled) return;
+      customIconLibrary.replaceAll(icons);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // customIconLibrary is a stable useMemo singleton — safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1232,16 +1260,50 @@ export function App() {
    * explanatory. Selects the new annotation so its label can be typed
    * right away. */
   function handleDropAnnotation(
-    payload: { kind: 'icon'; icon: AnnotationIconKind } | { kind: 'text' },
+    payload:
+      | { kind: 'icon'; icon: AnnotationIconKind }
+      | { kind: 'text' }
+      | { kind: 'custom'; customIconId: string },
     position: Point,
   ): void {
     const id = `annotation-${nextIdRef.current++}`;
     if (payload.kind === 'text') {
       annotationLayer.add({ id, position, kind: 'text' });
+    } else if (payload.kind === 'custom') {
+      annotationLayer.add({ id, position, kind: 'custom', customIconId: payload.customIconId });
     } else {
       annotationLayer.add({ id, position, kind: 'icon', icon: payload.icon });
     }
     setSelection({ type: 'annotation', id });
+  }
+
+  /** Falcon, 2026-09-09 ("import svgs or images for user custom" —
+   * resolved as a shared, app-wide library): Ribbon.tsx reads the
+   * dropped/picked file itself (FileReader.readAsDataURL handles an
+   * .svg the same way it handles a .png/.jpg — the browser infers the
+   * right data: MIME type from the file either way, so nothing here
+   * needs to branch on file type) and hands back just the name +
+   * finished data URL. Saves the WHOLE library file immediately —
+   * it's small and only changes on an explicit user action, not a
+   * per-tick autosave. */
+  function handleImportCustomIcon(name: string, dataUrl: string): void {
+    const id = `custom-icon-${nextIdRef.current++}`;
+    customIconLibrary.add({ id, name, dataUrl });
+    void saveCustomIconLibraryFile(customIconLibrary.getAll());
+  }
+
+  /** Deletion is NOT blocked by "is this still referenced" here —
+   * unlike ObjectRegistry's delete guard, this library is shared
+   * across every project, and only the CURRENTLY OPEN project's
+   * annotations are ever loaded at once, so there is no reliable way
+   * to check every project at once. An annotation left pointing at a
+   * since-deleted id just renders a neutral placeholder instead
+   * (FluxCanvas.tsx) — the same "never silently vanish, never crash"
+   * spirit as ObjectRegistry.resolve()'s fallback, just without the
+   * up-front guard that isn't possible here. */
+  function handleDeleteCustomIcon(id: string): void {
+    customIconLibrary.remove(id);
+    void saveCustomIconLibraryFile(customIconLibrary.getAll());
   }
 
   function handleUpdateAnnotationLabel(id: string, label: string): void {
@@ -1574,6 +1636,9 @@ export function App() {
         onTickIntervalMsChange={setTickIntervalMs}
         canvasBackground={canvasBackground}
         onCanvasBackgroundChange={setCanvasBackground}
+        customIconLibrary={customIconLibrary}
+        onImportCustomIcon={handleImportCustomIcon}
+        onDeleteCustomIcon={handleDeleteCustomIcon}
       />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <LeftPanel
@@ -1609,6 +1674,7 @@ export function App() {
             onCreateSketch={handleCreateSketch}
             annotationLayer={annotationLayer}
             onDropAnnotation={handleDropAnnotation}
+            customIconLibrary={customIconLibrary}
             multiSelectArmed={multiSelectArmed}
             quickSelectFilter={quickSelectFilter}
             moveArmed={moveArmed}
@@ -1624,6 +1690,7 @@ export function App() {
           floorLayout={floorLayout}
           sketchLayer={sketchLayer}
           annotationLayer={annotationLayer}
+          customIconLibrary={customIconLibrary}
           objectRegistry={objectRegistry}
           onDelete={handleDeleteSelection}
           onUpdateAnnotationLabel={handleUpdateAnnotationLabel}

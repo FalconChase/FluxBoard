@@ -8,6 +8,7 @@ import type { SketchStyle } from './FluxCanvas';
 import { hexWithAlpha } from '../skin/canvasUtil';
 import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_ICON_ORDER } from '../skin/annotationIcons';
 import type { AnnotationIconKind } from './annotationLayer';
+import type { CustomIconDef, CustomIconLibrary } from '../skin/customIconLibrary';
 import {
   theme,
   CANVAS_BACKGROUND_LABELS,
@@ -143,6 +144,12 @@ interface RibbonProps {
   onTickIntervalMsChange: (ms: number) => void;
   canvasBackground: CanvasBackground;
   onCanvasBackgroundChange: (bg: CanvasBackground) => void;
+  /** Falcon, 2026-09-09 ("import svgs or images for user custom"):
+   * the shared, app-wide custom icon library — listed as draggable
+   * swatches alongside the built-in icons on the INSERT tab. */
+  customIconLibrary: CustomIconLibrary;
+  onImportCustomIcon: (name: string, dataUrl: string) => void;
+  onDeleteCustomIcon: (id: string) => void;
 }
 
 /**
@@ -207,6 +214,9 @@ export function Ribbon({
   onTickIntervalMsChange,
   canvasBackground,
   onCanvasBackgroundChange,
+  customIconLibrary,
+  onImportCustomIcon,
+  onDeleteCustomIcon,
 }: RibbonProps) {
   // Multi-select's hover flyout (2026-09-05) — open while the mouse is
   // over the button OR the flyout itself. Rendered via a portal into
@@ -521,6 +531,20 @@ export function Ribbon({
                 </p>
               </div>
             </RibbonGroup>
+            <RibbonGroup title="Custom (shared)">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 320 }}>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  {customIconLibrary.getAll().map((icon) => (
+                    <CustomIconSwatchButton key={icon.id} icon={icon} onDelete={() => onDeleteCustomIcon(icon.id)} />
+                  ))}
+                  <ImportCustomIconButton onImport={onImportCustomIcon} />
+                </div>
+                <p style={{ fontSize: 10, color: theme.text3, lineHeight: 1.4, margin: '4px 0 0' }}>
+                  Import your own SVG or image (e.g. from Iconbuddy) — available in every project from then on, not
+                  just this one. Drag onto the canvas the same way as a built-in icon.
+                </p>
+              </div>
+            </RibbonGroup>
           </>
         )}
 
@@ -727,6 +751,116 @@ function TextBoxSwatchButton() {
       <canvas ref={canvasRef} />
       <span style={swatchLabelStyle}>Text</span>
     </button>
+  );
+}
+
+/** One imported custom icon/image (Falcon, 2026-09-09). Unlike the
+ * built-in swatches, the preview is just the stored data URL rendered
+ * as a plain <img> — no canvas-drawing step needed since the data is
+ * already a ready-to-display image (works identically for an SVG or a
+ * raster import). A small "×" appears on hover to delete it from the
+ * shared library — no confirmation dialog (matches this app's other
+ * single-click destructive actions, e.g. Delete node/edge/sketch). */
+function CustomIconSwatchButton({ icon, onDelete }: { icon: CustomIconDef; onDelete: () => void }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      style={{ position: 'relative' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('application/x-fluxboard-annotation-custom', icon.id);
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
+        title={`Drag onto the canvas to place "${icon.name}"`}
+        style={swatchButtonStyle(false)}
+      >
+        <img src={icon.dataUrl} alt={icon.name} style={{ width: 28, height: 28, objectFit: 'contain' }} />
+        <span style={{ ...swatchLabelStyle, maxWidth: 44, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {icon.name}
+        </span>
+      </button>
+      {hovered && (
+        <button
+          type="button"
+          title={`Remove "${icon.name}" from the shared library`}
+          onClick={onDelete}
+          style={{
+            position: 'absolute',
+            top: -6,
+            right: -6,
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            border: 'none',
+            background: theme.danger,
+            color: '#ffffff',
+            fontSize: 10,
+            lineHeight: '16px',
+            padding: 0,
+            cursor: 'pointer',
+          }}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Falcon, 2026-09-09 ("import svgs or images for user custom"): a
+ * plain hidden file input, accepting both vector (.svg) and raster
+ * image files in one picker — FileReader.readAsDataURL handles either
+ * uniformly (the browser infers the right data: MIME type from the
+ * file itself), so there's no need to branch on file type here or
+ * anywhere downstream that draws it. Multi-file select imports each
+ * one as its own library entry, named from its filename. */
+function ImportCustomIconButton({ onImport }: { onImport: (name: string, dataUrl: string) => void }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  function handleFiles(files: FileList | null): void {
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          const name = file.name.replace(/\.[^./\\]+$/, '') || file.name;
+          onImport(name, reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        title="Import an SVG or image file into the shared custom icon library"
+        style={{ ...swatchButtonStyle(false), color: theme.accentStrong, borderColor: theme.accent }}
+      >
+        <div style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>
+          +
+        </div>
+        <span style={swatchLabelStyle}>Import</span>
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".svg,image/*"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          handleFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
+    </>
   );
 }
 

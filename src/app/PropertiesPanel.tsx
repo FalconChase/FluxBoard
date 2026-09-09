@@ -9,6 +9,7 @@ import type { ObjectRegistry } from '../skin/ObjectRegistry';
 import type { Selection } from './selection';
 import type { Sketch, SketchLayer } from './sketchLayer';
 import type { AnnotationLayer } from './annotationLayer';
+import type { CustomIconLibrary } from '../skin/customIconLibrary';
 import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_FONT_FAMILIES, ANNOTATION_DEFAULT_FONT_FAMILY } from '../skin/annotationIcons';
 import { theme } from './theme';
 
@@ -28,6 +29,10 @@ interface PropertiesPanelProps {
   annotationLayer: AnnotationLayer;
   /** Edits an annotation's free-text label in place. */
   onUpdateAnnotationLabel: (id: string, label: string) => void;
+  /** Custom icon library (2026-09-09) — only read here to show a
+   * 'custom'-kind annotation's icon name/preview; importing/deleting
+   * lives in the Ribbon's INSERT tab, not this panel. */
+  customIconLibrary: CustomIconLibrary;
   /** OBJECTS registry (FBP011, 2026-09-05) — lets SourceFields/
    * SorterFields/MixerFields offer a dropdown of actually-registered
    * item types instead of a free-text field that can silently
@@ -105,6 +110,7 @@ export function PropertiesPanel({
   sketchLayer,
   annotationLayer,
   onUpdateAnnotationLabel,
+  customIconLibrary,
   objectRegistry,
   onDelete,
   onDuplicate,
@@ -204,6 +210,7 @@ export function PropertiesPanel({
           <AnnotationProperties
             annotationId={selection.id}
             annotationLayer={annotationLayer}
+            customIconLibrary={customIconLibrary}
             onUpdateLabel={onUpdateAnnotationLabel}
             onDelete={onDelete}
           />
@@ -1194,11 +1201,13 @@ function SketchSegmentProperties({
 function AnnotationProperties({
   annotationId,
   annotationLayer,
+  customIconLibrary,
   onUpdateLabel,
   onDelete,
 }: {
   annotationId: string;
   annotationLayer: AnnotationLayer;
+  customIconLibrary: CustomIconLibrary;
   onUpdateLabel: (id: string, label: string) => void;
   onDelete: () => void;
 }) {
@@ -1213,17 +1222,31 @@ function AnnotationProperties({
   if (!annotation) return <p style={{ fontSize: 12, color: theme.danger }}>Annotation no longer exists.</p>;
 
   const isText = annotation.kind === 'text';
+  const isCustom = annotation.kind === 'custom';
+  const customEntry = isCustom && annotation.customIconId ? customIconLibrary.get(annotation.customIconId) : undefined;
 
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{isText ? 'Text box' : 'Annotation'}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
+        {isText ? 'Text box' : isCustom ? 'Custom icon' : 'Annotation'}
+      </div>
       <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
         {isText
           ? 'A free-floating text box — purely explanatory, no simulation meaning.'
-          : `A free-floating ${ANNOTATION_ICON_LABEL[annotation.icon ?? 'marker']} marker — purely explanatory, no simulation meaning.`}
+          : isCustom
+            ? customEntry
+              ? `A free-floating "${customEntry.name}" custom icon — purely explanatory, no simulation meaning.`
+              : 'This custom icon was removed from the shared library — showing a placeholder. Pick a different icon from the INSERT tab, or delete this annotation.'
+            : `A free-floating ${ANNOTATION_ICON_LABEL[annotation.icon ?? 'marker']} marker — purely explanatory, no simulation meaning.`}
       </p>
 
-      {!isText && (
+      {isCustom && customEntry && (
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+          <img src={customEntry.dataUrl} alt={customEntry.name} style={{ width: 48, height: 48, objectFit: 'contain' }} />
+        </div>
+      )}
+
+      {!isText && !isCustom && (
         <>
           <div style={sectionTitleStyle}>Icon</div>
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>

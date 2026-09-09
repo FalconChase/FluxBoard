@@ -6,6 +6,7 @@ import { ObjectRegistry, type ObjectTypeDef } from '../skin/ObjectRegistry';
 import { GroupRegistry, type GroupDef } from '../skin/GroupRegistry';
 import { SketchLayer, type Sketch } from './sketchLayer';
 import { AnnotationLayer, type Annotation } from './annotationLayer';
+import type { CustomIconDef } from '../skin/customIconLibrary';
 import type { CanvasBackground } from './theme';
 import type { EdgeId, NodeDef, EdgeDef, NodeId } from '../core/types';
 import type { Point } from '../floor/bezier';
@@ -41,6 +42,7 @@ import type { Point } from '../floor/bezier';
  */
 
 const LEGACY_SAVE_FILE_NAME = 'fluxboard-save.json';
+const CUSTOM_ICONS_FILE_NAME = 'fluxboard-custom-icons.json';
 const PROJECTS_DIR_NAME = 'projects';
 const MANIFEST_FILE_NAME = 'fluxboard-projects.json';
 const SAVE_VERSION = 1;
@@ -404,6 +406,43 @@ export async function saveManifest(manifest: ProjectsManifest): Promise<void> {
     await fs.writeTextFile(MANIFEST_FILE_NAME, JSON.stringify(manifest), { baseDir: fs.BaseDirectory.AppData });
   } catch (err) {
     console.error('FluxBoard: saving the project list failed', err);
+  }
+}
+
+/** Falcon, 2026-09-09 ("can i make my own custom icon library...
+ * became preloded on the app?"): a single shared file, NOT one of
+ * the per-project ones below — every project reads/writes the SAME
+ * list, so importing an icon in one project makes it available in
+ * every other one immediately (App.tsx loads this once at app
+ * startup, independent of which project is active). Same "treat any
+ * failure as none, never crash the app over it" convention as every
+ * other read here. */
+export async function loadCustomIconLibraryFile(): Promise<CustomIconDef[]> {
+  if (!isTauri()) return [];
+  try {
+    const fs = await readyFs();
+    const exists = await fs.exists(CUSTOM_ICONS_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
+    if (!exists) return [];
+    const text = await fs.readTextFile(CUSTOM_ICONS_FILE_NAME, { baseDir: fs.BaseDirectory.AppData });
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? (parsed as CustomIconDef[]) : [];
+  } catch (err) {
+    console.error('FluxBoard: loading the custom icon library failed', err);
+    return [];
+  }
+}
+
+/** Called by App.tsx right after every import/delete — the library is
+ * small and mutated rarely (a user action, not a per-tick autosave),
+ * so there's no need for the debounced-tick convention the per-
+ * project autosave uses. */
+export async function saveCustomIconLibraryFile(icons: CustomIconDef[]): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const fs = await readyFs();
+    await fs.writeTextFile(CUSTOM_ICONS_FILE_NAME, JSON.stringify(icons), { baseDir: fs.BaseDirectory.AppData });
+  } catch (err) {
+    console.error('FluxBoard: saving the custom icon library failed', err);
   }
 }
 

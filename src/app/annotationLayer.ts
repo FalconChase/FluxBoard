@@ -23,10 +23,21 @@ export interface Annotation {
    * so every annotation created before this existed — all icon-kind —
    * parses unchanged; App.tsx/FluxCanvas treat a missing `kind` as
    * 'icon'. */
-  kind?: 'icon' | 'text';
+  /** Falcon, 2026-09-09 ("insert svgs or images for user custom"):
+   * 'custom' draws a user-imported icon/image (skin/
+   * customIconLibrary.ts) instead of a built-in glyph — looked up by
+   * `customIconId` at render time so deleting/renaming a library
+   * entry never requires touching every annotation that uses it. */
+  kind?: 'icon' | 'text' | 'custom';
   /** Only meaningful when kind is 'icon' (or absent) — ignored for a
-   * plain text box. */
+   * plain text box or a custom icon. */
   icon?: AnnotationIconKind;
+  /** Only meaningful when kind is 'custom' — the CustomIconLibrary
+   * entry to draw. If that entry has since been deleted, the
+   * annotation renders a neutral "missing" placeholder rather than
+   * silently vanishing or crashing (same "never render as nothing"
+   * spirit as ObjectRegistry.resolve()'s fallback). */
+  customIconId?: string;
   /** Free text shown next to the icon (icon kind) or AS the whole
    * annotation (text kind) — optional for an icon annotation (an icon
    * alone is valid), effectively the whole point for a text one. */

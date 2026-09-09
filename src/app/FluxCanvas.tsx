@@ -23,6 +23,7 @@ import { octagonVertices, isPointInOctagon } from '../skin/octagon';
 import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
 import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type SketchAttachment, type SketchSegment } from './sketchLayer';
 import { AnnotationLayer, type Annotation, type AnnotationIconKind } from './annotationLayer';
+import type { CustomIconLibrary } from '../skin/customIconLibrary';
 import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_DEFAULT_FONT_FAMILY } from '../skin/annotationIcons';
 import { CANVAS_THEMES, type CanvasBackground } from './theme';
 
@@ -147,9 +148,17 @@ interface FluxCanvasProps {
    * generate an id for) round-trips through a prop. */
   annotationLayer: AnnotationLayer;
   onDropAnnotation: (
-    payload: { kind: 'icon'; icon: AnnotationIconKind } | { kind: 'text' },
+    payload:
+      | { kind: 'icon'; icon: AnnotationIconKind }
+      | { kind: 'text' }
+      | { kind: 'custom'; customIconId: string },
     worldPoint: Point,
   ) => void;
+  /** Falcon, 2026-09-09 ("import svgs or images for user custom"):
+   * shared, app-wide library a 'custom'-kind annotation's
+   * `customIconId` looks up into — mutated directly like every other
+   * store here, read fresh every render loop. */
+  customIconLibrary: CustomIconLibrary;
 
   /** FBP014 (2026-09-05): while armed, an empty-canvas drag draws a
    * marquee (rubber-band select) instead of panning, and clicking a
@@ -308,6 +317,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     onCreateSketch,
     annotationLayer,
     onDropAnnotation,
+    customIconLibrary,
     multiSelectArmed,
     quickSelectFilter,
     moveArmed,
@@ -408,6 +418,23 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
 
     let raf = 0;
     let lastFrameMs: number | null = null;
+    // Falcon, 2026-09-09 ("import svgs or images for user custom"):
+    // a custom icon's dataUrl needs an async Image load before it can
+    // ever be drawImage'd -- cached by library entry id so a given
+    // icon only ever loads once no matter how many annotations (or
+    // render frames) reference it. Keyed by id, not by the annotation
+    // itself, so renaming/re-importing under a new id naturally gets
+    // its own fresh load.
+    const customIconImageCache = new Map<string, HTMLImageElement>();
+    function getCustomIconImage(id: string, dataUrl: string): HTMLImageElement {
+      let img = customIconImageCache.get(id);
+      if (!img) {
+        img = new Image();
+        img.src = dataUrl;
+        customIconImageCache.set(id, img);
+      }
+      return img;
+    }
     // Animation-only clock (belt scroll phase, circling item spin) —
     // deliberately separate from the sim driver's own clock and from
     // raw wall time: it only advances while the driver is actually
@@ -1004,6 +1031,74 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
             ctx!.strokeStyle = 'rgba(37, 99, 235, 0.85)';
             ctx!.lineWidth = 1.5;
             ctx!.strokeRect(screen.x - w / 2, screen.y - h / 2, w, h);
+          }
+          ctx!.restore();
+          continue;
+        }
+
+        if (annotation.kind === 'custom') {
+          const entry = annotation.customIconId ? customIconLibrary.get(annotation.customIconId) : undefined;
+          const r = ANNOTATION_ICON_SIZE * camera.zoom * 0.5;
+          ctx!.save();
+          if (entry) {
+            const img = getCustomIconImage(entry.id, entry.dataUrl);
+            if (img.complete && img.naturalWidth > 0) {
+              // Fit the image inside the same circular footprint an
+              // icon annotation uses, preserving aspect ratio rather
+              // than stretching a non-square import to a square.
+              const aspect = img.naturalWidth / img.naturalHeight;
+              const boxSize = r * 1.6;
+              const w = aspect >= 1 ? boxSize : boxSize * aspect;
+              const h = aspect >= 1 ? boxSize / aspect : boxSize;
+              ctx!.drawImage(img, screen.x - w / 2, screen.y - h / 2, w, h);
+            } else {
+              // Still loading -- a faint placeholder ring so the drop
+              // isn't invisible for the one/two frames before the
+              // Image finishes decoding.
+              ctx!.beginPath();
+              ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+              ctx!.strokeStyle = 'rgba(31, 36, 48, 0.25)';
+              ctx!.lineWidth = 1.5;
+              ctx!.stroke();
+            }
+          } else {
+            // Falcon, 2026-09-09: the referenced library entry is
+            // gone (deleted from the shared library, possibly by a
+            // different project) -- never silently vanish, same
+            // spirit as ObjectRegistry.resolve()'s fallback.
+            ctx!.beginPath();
+            ctx!.arc(screen.x, screen.y, r, 0, Math.PI * 2);
+            ctx!.setLineDash([3, 3]);
+            ctx!.strokeStyle = 'rgba(200, 60, 60, 0.7)';
+            ctx!.lineWidth = 1.5;
+            ctx!.stroke();
+            ctx!.setLineDash([]);
+            ctx!.font = `700 ${Math.max(9, r)}px system-ui, sans-serif`;
+            ctx!.textAlign = 'center';
+            ctx!.textBaseline = 'middle';
+            ctx!.fillStyle = 'rgba(200, 60, 60, 0.85)';
+            ctx!.fillText('?', screen.x, screen.y);
+          }
+          if (isSelected) {
+            ctx!.beginPath();
+            ctx!.arc(screen.x, screen.y, r + 4, 0, Math.PI * 2);
+            ctx!.strokeStyle = 'rgba(37, 99, 235, 0.85)';
+            ctx!.lineWidth = 2;
+            ctx!.stroke();
+          }
+          if (annotation.label) {
+            ctx!.font = annotationFont(annotation, camera.zoom);
+            ctx!.textAlign = 'center';
+            ctx!.textBaseline = 'top';
+            const labelY = screen.y + r + 4;
+            const metrics = ctx!.measureText(annotation.label);
+            const padX = 4;
+            const padY = 2;
+            const lineH = (annotation.fontSize ?? ANNOTATION_DEFAULT_FONT_SIZE) * camera.zoom + padY * 2;
+            ctx!.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx!.fillRect(screen.x - metrics.width / 2 - padX, labelY - 1, metrics.width + padX * 2, lineH);
+            ctx!.fillStyle = annotation.color ?? ANNOTATION_DEFAULT_COLOR;
+            ctx!.fillText(annotation.label, screen.x, labelY);
           }
           ctx!.restore();
           continue;
@@ -1976,6 +2071,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       const isText = e.dataTransfer?.getData('application/x-fluxboard-annotation-text');
       if (isText) {
         onDropAnnotationRef.current({ kind: 'text' }, worldPoint);
+        return;
+      }
+      const customIconId = e.dataTransfer?.getData('application/x-fluxboard-annotation-custom');
+      if (customIconId) {
+        onDropAnnotationRef.current({ kind: 'custom', customIconId }, worldPoint);
         return;
       }
       const icon = e.dataTransfer?.getData('application/x-fluxboard-annotation-icon');
