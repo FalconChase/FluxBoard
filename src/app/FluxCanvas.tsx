@@ -889,6 +889,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           objectType.color,
           darkenHex(objectType.color, 0.32),
           objectType.shape,
+          objectType.icon,
         );
       }
 

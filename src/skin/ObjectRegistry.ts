@@ -1,4 +1,5 @@
 import type { ItemType } from '../core/types';
+import type { AnnotationIconKind } from './annotationIcons';
 
 /**
  * OBJECTS registry (design doc's item-typing gap, backlog FBP011 —
@@ -16,7 +17,13 @@ import type { ItemType } from '../core/types';
  * by this) — this is purely what a given `type` string LOOKS like,
  * never a second place item data lives.
  */
-export type ObjectShape = 'circle' | 'square' | 'triangle';
+/** Falcon, 2026-09-09 ("also want to have it or those icons to
+ * access and become objects (icons along the path) also"): 'icon'
+ * renders one of the built-in annotation glyphs (annotationIcons.ts)
+ * instead of a plain geometric body -- same icon SET the INSERT tab's
+ * canvas annotations use, not the shared custom-icon import library
+ * (Falcon scoped it to built-ins only). */
+export type ObjectShape = 'circle' | 'square' | 'triangle' | 'icon';
 
 export interface ObjectTypeDef {
   /** Matches the `ItemType` string a source node's `itemType` config,
@@ -24,6 +31,14 @@ export interface ObjectTypeDef {
   id: ItemType;
   name: string;
   shape: ObjectShape;
+  /** Only meaningful when `shape` is 'icon' -- which built-in glyph to
+   * draw. Falcon chose "recolor the icon" (2026-09-09): `color` below
+   * still drives the glyph's fill, same as it already tints
+   * circle/square/triangle, rather than the icon keeping the fixed
+   * color it shows in INSERT-tab annotations. Optional so every
+   * existing circle/square/triangle type parses unchanged; ignored
+   * for those shapes. */
+  icon?: AnnotationIconKind;
   /** World-space size — same meaning as the old hardcoded ITEM_RADIUS
    * every item token used to share (FluxCanvas.tsx, pre-registry). */
   size: number;

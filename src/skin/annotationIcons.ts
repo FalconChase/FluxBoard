@@ -169,6 +169,14 @@ export const annotationIcons: Record<'marker' | 'warning' | 'info' | 'arrow' | '
   moneyAlt,
 };
 
+/** Falcon, 2026-09-09 ("also want to have it or those icons to
+ * access and become objects (icons along the path) also"): derived
+ * straight from the icon map's own keys rather than hand-listed, so
+ * adding a new built-in icon here (like `money`/`moneyAlt` were)
+ * automatically flows through to ObjectRegistry's icon-shaped object
+ * types too, with no second list to remember to update. */
+export type AnnotationIconKind = keyof typeof annotationIcons;
+
 /** A sensible default display color per icon kind — an annotation is
  * pure UI scratch with no logic-layer color config of its own (unlike
  * ObjectRegistry's per-type color), so this just keeps each kind

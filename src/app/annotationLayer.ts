@@ -1,4 +1,5 @@
 import type { Point } from '../floor/bezier';
+import type { AnnotationIconKind } from '../skin/annotationIcons';
 
 /** Falcon, 2026-09-09: the INSERT tab's long-deferred "icon/label
  * overlays for explaining a flow" concept, scoped down to its first,
@@ -12,7 +13,13 @@ import type { Point } from '../floor/bezier';
  * as sketchLayer.ts's planning sketches: an annotation carries zero
  * simulation meaning, isn't tied to any GraphModel node/edge id, and
  * nothing about it ever affects the sim. */
-export type AnnotationIconKind = 'marker' | 'warning' | 'info' | 'arrow' | 'star' | 'flag' | 'money' | 'moneyAlt';
+/** Re-exported from skin/annotationIcons.ts, which now derives this
+ * union straight from the icon map's own keys (Falcon, 2026-09-09) --
+ * kept as a re-export here rather than moving every import site over,
+ * since App.tsx/FluxCanvas.tsx/Ribbon.tsx already import it from this
+ * module. Imported (not just re-exported) so it's also usable below
+ * in this file's own Annotation interface. */
+export type { AnnotationIconKind };
 
 export interface Annotation {
   id: string;

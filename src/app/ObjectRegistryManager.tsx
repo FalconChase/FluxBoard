@@ -1,6 +1,7 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ObjectRegistry, type ObjectShape, type ObjectTypeDef, DEFAULT_OBJECT_TYPE_ID } from '../skin/ObjectRegistry';
 import { darkenHex } from '../skin/canvasUtil';
+import { annotationIcons, ANNOTATION_ICON_ORDER, ANNOTATION_ICON_LABEL, type AnnotationIconKind } from '../skin/annotationIcons';
 import { theme } from './theme';
 
 interface ObjectRegistryManagerProps {
@@ -14,7 +15,7 @@ interface ObjectRegistryManagerProps {
   onClose: () => void;
 }
 
-const SHAPES: ObjectShape[] = ['circle', 'square', 'triangle'];
+const SHAPES: ObjectShape[] = ['circle', 'square', 'triangle', 'icon'];
 const SWATCH_COLORS = ['#2ecc71', '#3d7fff', '#f2a93c', '#ff5d5d', '#8a5cf6', '#17b3a3', '#c026d3', '#6b7280'];
 
 /**
@@ -152,7 +153,11 @@ function ObjectTypeRow({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px' }}>
-        <ShapePreview shape={def.shape} color={def.color} size={def.size} />
+        {def.shape === 'icon' ? (
+          <ObjectIconPreview icon={def.icon ?? 'marker'} color={def.color} />
+        ) : (
+          <ShapePreview shape={def.shape} color={def.color} size={def.size} />
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: theme.text1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {def.name}
@@ -194,7 +199,7 @@ function ObjectTypeRow({
                 <button
                   key={s}
                   type="button"
-                  onClick={() => onChange({ shape: s })}
+                  onClick={() => onChange(s === 'icon' ? { shape: s, icon: def.icon ?? 'marker' } : { shape: s })}
                   title={s}
                   style={{
                     ...smallButtonStyle,
@@ -209,6 +214,36 @@ function ObjectTypeRow({
               ))}
             </div>
           </label>
+
+          {def.shape === 'icon' && (
+            <label style={fieldLabelStyle}>
+              Icon
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {ANNOTATION_ICON_ORDER.map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    title={ANNOTATION_ICON_LABEL[kind]}
+                    onClick={() => onChange({ icon: kind })}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 6,
+                      border: (def.icon ?? 'marker') === kind ? `2px solid ${theme.accent}` : `1px solid ${theme.borderStrong}`,
+                      background: theme.bgPanel2,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                    }}
+                  >
+                    <ObjectIconPreview icon={kind} color={def.color} tiny />
+                  </button>
+                ))}
+              </div>
+            </label>
+          )}
 
           <label style={fieldLabelStyle}>
             Size
@@ -257,6 +292,36 @@ function ObjectTypeRow({
       )}
     </div>
   );
+}
+
+/** Falcon, 2026-09-09 ("icons along the path also"): a canvas-based
+ * preview for icon-shaped object types -- the built-in glyphs are
+ * drawn with Canvas2D Path2D calls (annotationIcons.ts), not SVG
+ * markup, so unlike ShapePreview below this can't just emit React SVG
+ * elements. `tiny` shrinks it to fit the icon-picker's small swatch
+ * buttons; the default size matches ShapePreview's 28px row preview. */
+function ObjectIconPreview({ icon, color, tiny }: { icon: AnnotationIconKind; color: string; tiny?: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const box = tiny ? 22 : 28;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = box * dpr;
+    canvas.height = box * dpr;
+    canvas.style.width = `${box}px`;
+    canvas.style.height = `${box}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, box, box);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    annotationIcons[icon](ctx, box / 2, box / 2, box * 0.4);
+  }, [icon, color, box]);
+
+  return <canvas ref={canvasRef} style={{ flexShrink: 0 }} />;
 }
 
 function ShapePreview({ shape, color, size }: { shape: ObjectShape; color: string; size: number }) {

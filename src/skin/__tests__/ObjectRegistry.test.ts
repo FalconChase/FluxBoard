@@ -73,4 +73,18 @@ describe('ObjectRegistry', () => {
     expect(reg.get(DEFAULT_OBJECT_TYPE_ID)).toBeDefined();
     expect(reg.get('only-custom')).toMatchObject({ shape: 'triangle' });
   });
+
+  it('supports an icon-shaped type ("icons along the path", 2026-09-09), round-tripping the icon field', () => {
+    const reg = new ObjectRegistry();
+    const coin = reg.create({ name: 'Coin', shape: 'icon', icon: 'money', size: 8, color: '#16a34a' }, 'coin');
+    expect(coin).toMatchObject({ shape: 'icon', icon: 'money' });
+    expect(reg.resolve('coin')).toMatchObject({ shape: 'icon', icon: 'money' });
+
+    reg.update('coin', { icon: 'moneyAlt' });
+    expect(reg.get('coin')?.icon).toBe('moneyAlt');
+
+    // A non-icon type never carries the field at all -- it's purely
+    // optional/ignored, not defaulted to something for every type.
+    expect(reg.get(DEFAULT_OBJECT_TYPE_ID)?.icon).toBeUndefined();
+  });
 });

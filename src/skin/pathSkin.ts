@@ -3,6 +3,7 @@ import type { Point } from '../floor/bezier';
 import type { Camera, Viewport } from '../floor/camera';
 import { hexWithAlpha } from './canvasUtil';
 import type { ObjectShape } from './ObjectRegistry';
+import { annotationIcons, type AnnotationIconKind } from './annotationIcons';
 
 /** Skin-owned edge style (design doc §5.2, §5.4). "Transparent" is not
  * a distinct style in its own right — it's the base state with no
@@ -263,10 +264,27 @@ export function drawItemToken(
   fillColor: string,
   strokeColor: string,
   shape: ObjectShape = 'circle',
+  icon?: AnnotationIconKind,
 ): void {
   ctx.save();
   ctx.translate(screen.x, screen.y);
   ctx.rotate(rotation);
+
+  // Falcon, 2026-09-09 ("icons along the path also"): an icon-shaped
+  // object draws one of the built-in annotation glyphs instead of a
+  // plain geometric body -- no fill/stroke body and no directional
+  // "nose" (the glyph itself is the visual identity; a nose arrow
+  // fighting a money icon would just look cluttered), just the icon
+  // recolored with the object type's own fill color, same "recolor
+  // the icon" choice Falcon made for this feature. Rotation still
+  // applies via the ctx.rotate above, same as every other shape.
+  if (shape === 'icon') {
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = fillColor;
+    annotationIcons[icon ?? 'marker'](ctx, 0, 0, radius * 1.8);
+    ctx.restore();
+    return;
+  }
 
   ctx.beginPath();
   if (shape === 'square') {
