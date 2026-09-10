@@ -27,6 +27,10 @@ export const nodeSkinDefaults: Record<NodeKind, NodeSkinDefaults> = {
   sorter: { fill: '#8a5cf6', stroke: '#6a3fd1', icon: nodeIcons.sorter },
   mixer: { fill: '#17b3a3', stroke: '#128f83', icon: nodeIcons.mixer },
   buffer: { fill: '#6b7280', stroke: '#4b5158', icon: nodeIcons.buffer },
+  // Trigger system (design doc §4.8, 2026-09-09): a valve-amber Gate
+  // and a signal-blue Sensor, both distinct from every color above.
+  gate: { fill: '#eab308', stroke: '#a16207', icon: nodeIcons.gate },
+  sensor: { fill: '#0ea5e9', stroke: '#0369a1', icon: nodeIcons.sensor },
 };
 
 /**
@@ -162,8 +166,28 @@ export function drawNode(
   radius: number,
   zoom: number,
   iconOverride?: NodeIconSkin,
+  /** Falcon, 2026-09-09 ("to easily identify a deactivated node it
+   * will have a dim color"; 2026-09-10, correcting the first attempt —
+   * "it seems that the deactivated node was kind of transparent
+   * instead of darken only"): a Source sitting at `active === false`
+   * (manually off, or auto-paused because its path filled up) draws
+   * DARKER, not see-through. The first version used `globalAlpha`,
+   * which fades toward whatever's BEHIND the node (the grid showed
+   * through) — wrong effect for "dim color". `ctx.filter =
+   * 'brightness(...)'` scales each drawn pixel's own RGB down while
+   * leaving its alpha alone, so a fully-opaque fill stays fully
+   * opaque, just darker — exactly "dim color", not "fade out". Same
+   * one-line-wrap shape as before: every per-kind skin (fill/stroke/
+   * icon) still renders exactly as-is underneath, just darkened, no
+   * second color table to keep in sync with nodeSkinDefaults.
+   * FluxCanvas decides WHEN this is true; drawNode only knows how to
+   * render it. */
+  dimmed?: boolean,
 ): void {
   const skin = nodeSkinDefaults[node.kind];
+
+  ctx.save();
+  if (dimmed) ctx.filter = 'brightness(0.55)';
 
   const verts = octagonVertices(center, radius);
   traceClosedPath(ctx, verts);
@@ -232,4 +256,6 @@ export function drawNode(
   if (count !== undefined) {
     drawBadge(ctx, center, radius, count, zoom, skin.stroke);
   }
+
+  ctx.restore();
 }

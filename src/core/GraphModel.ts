@@ -106,6 +106,43 @@ export class GraphModel {
     if (lockedSpeed !== undefined) edge.lockedSpeed = lockedSpeed;
   }
 
+  /** Falcon, 2026-09-09 ("respects the size of the object along a
+   * path"; "by default to respect item sizes"): the no-overlap
+   * toggle — on by default per edge (see EdgeDef.respectItemSize's own
+   * doc comment for why this one field inverts the usual undefined-
+   * means-off convention); this setter is how a specific edge opts
+   * OUT by passing `false`. Doesn't itself touch `pathLength` —
+   * App.tsx's own poll is what keeps that field synced against this
+   * edge's CURRENT length, same "poll instead of instrumenting every
+   * mutation site" reasoning setEdgeSpeedLock's own doc comment
+   * already explains. */
+  setEdgeItemSpacing(edgeId: EdgeId, respectItemSize: boolean): void {
+    const edge = this.edges.get(edgeId);
+    if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);
+    edge.respectItemSize = respectItemSize;
+  }
+
+  /** Bridged Floor-layer measurement (see EdgeDef.pathLength's own doc
+   * comment) — small setter mirroring setEdgeFlowRate so App.tsx's
+   * poll has something to call. Only meaningful while
+   * respectItemSize is true; harmless to set otherwise. */
+  setEdgePathLength(edgeId: EdgeId, pathLength: number): void {
+    const edge = this.edges.get(edgeId);
+    if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);
+    edge.pathLength = pathLength;
+  }
+
+  /** Design doc §5.5/§5.6 (2026-09-09): switches an edge between
+   * carrying physical items (the default, undefined/'item'), carrying
+   * a Sensor's signal pulse ('signal'), or being a docked connection
+   * ('dock') — see EdgeDef.edgeKind's own doc comment in types.ts for
+   * what each actually changes at runtime. */
+  setEdgeKind(edgeId: EdgeId, edgeKind: NonNullable<EdgeDef['edgeKind']>): void {
+    const edge = this.edges.get(edgeId);
+    if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);
+    edge.edgeKind = edgeKind;
+  }
+
   /** Edge port numbers — the integers each node kind's own handler
    * matches against (sorter rules, mixer recipe ports, distributor
    * round-robin order, ...). Renamed here to make clear this is NOT

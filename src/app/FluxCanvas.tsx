@@ -4,7 +4,7 @@ import { NODE_RADIUS, type AnchorHit, type FloorLayout } from '../floor/floorLay
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
-import type { EdgeDef, EdgeId, NodeDef, NodeId, NodeKind } from '../core/types';
+import type { EdgeDef, EdgeId, ItemType, NodeDef, NodeId, NodeKind } from '../core/types';
 import { curveBetween, BezierPath, shapeCenter, translatePoints, rotatePoints, type Point } from '../floor/bezier';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { ObjectRegistry } from '../skin/ObjectRegistry';
@@ -17,9 +17,11 @@ import {
   drawItemToken,
   getItemRotation,
   drawCurveSelectionHighlight,
+  drawDockSeam,
   type EdgeStyle,
 } from '../skin/pathSkin';
 import { octagonVertices, isPointInOctagon } from '../skin/octagon';
+import { isDockCompatible } from '../core/nodes/portCapacity';
 import { normalizeMultiParts, collapseSelection, type Selection } from './selection';
 import { SketchLayer, getSketchReshapePoints, applySketchReshapePoints, type SketchAttachment, type SketchSegment } from './sketchLayer';
 import { AnnotationLayer, type Annotation, type AnnotationIconKind } from './annotationLayer';
@@ -92,6 +94,21 @@ interface FluxCanvasProps {
    * covers every other rejection reason itself, since it owns the
    * anchor/capacity checks). */
   onConnectionRejected?: (message: string) => void;
+  /** Docking (design doc §5.6, 2026-09-09 — "attaching the node
+   * without needing to add a path in between"): fires when a plain
+   * single-node drag is released within snapping distance of a
+   * compatible node's free facing anchor pair (isDockCompatible,
+   * checked here just to decide whether to search for a slot at all —
+   * App.tsx's handleDockNodes re-derives and validates everything
+   * before actually creating anything, same "FluxCanvas proposes,
+   * App.tsx owns the real GraphModel mutation + rejection checks"
+   * split every other gesture here already follows). `dir` is the
+   * compass direction (skin/octagon.ts's convention) FROM
+   * targetNodeId TOWARD movingNodeId — App.tsx derives the exact
+   * snapped position from it via floorLayout.dockedPosition, the same
+   * function this component used to find the slot in the first
+   * place, so the two never disagree on where "docked" means. */
+  onDockNodes?: (movingNodeId: NodeId, targetNodeId: NodeId, dir: number) => void;
   /** Move/delete/snap feature set: when true, a dragged node's
    * position is rounded to the nearest grid line as it moves (App.tsx
    * owns the toggle — header button + F8 shortcut). */
@@ -227,6 +244,13 @@ const PORT_SNAP_RADIUS_PX = 14;
  * for it being noticeably easier to actually land a snap while
  * sketching. */
 const SKETCH_PORT_SNAP_RADIUS_PX = 22;
+/** Docking (design doc §5.6, 2026-09-09): screen-space radius within
+ * which releasing a plain single-node drag near a compatible node's
+ * dockedPosition snaps into it, same "screen space so it feels the
+ * same at any zoom" reasoning as the port-snap radii above. Bigger
+ * than a port dot's own snap radius since the target here is a whole
+ * node-sized slot, not a small dot. */
+const DOCK_SNAP_RADIUS_PX = 30;
 /** Falcon, 2026-09-09 (INSERT tab): screen-space click/drag radius
  * around an annotation's icon -- kept in screen space, like
  * PORT_SNAP_RADIUS_PX, so it feels the same size at any zoom level. */
@@ -306,6 +330,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     onPlaceNode,
     onCreateEdge,
     onConnectionRejected,
+    onDockNodes,
     snapToGrid,
     gridSpacing,
     armedEdgeStyle,
@@ -346,6 +371,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   onCreateEdgeRef.current = onCreateEdge;
   const onConnectionRejectedRef = useRef(onConnectionRejected);
   onConnectionRejectedRef.current = onConnectionRejected;
+  const onDockNodesRef = useRef(onDockNodes);
+  onDockNodesRef.current = onDockNodes;
   const snapToGridRef = useRef(snapToGrid);
   snapToGridRef.current = snapToGrid;
   const gridSpacingRef = useRef(gridSpacing);
@@ -404,6 +431,14 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     const engine = new SimEngine(graph);
     const driver = new InterpolatedSimDriver(engine, tickIntervalMs);
     driverRef.current = driver;
+
+    // No-overlap spacing (Falcon, 2026-09-09): the one place SimEngine's
+    // per-tick `itemSizeOf` resolver gets wired to real data — a plain
+    // closure over the Skin-layer ObjectRegistry this component already
+    // holds (used a few lines down for drawing tokens), never imported
+    // by SimEngine itself. Recreated only when the effect itself
+    // reruns (objectRegistry is one of its deps below).
+    const itemSizeOf = (type: ItemType): number => objectRegistry.resolve(type).size;
     onRunningChangeRef.current?.(driver.isRunning());
 
     const camera = new Camera();
@@ -475,6 +510,32 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       return graph.getAllEdges().filter((e) => e.source === nodeId || e.target === nodeId);
     }
 
+    /** Docking (design doc §5.7, 2026-09-09 follow-up — "once attach
+     * it will be auto group even dragging unless detached"): every
+     * node transitively reachable from `startId` over `docked: true`
+     * edges (either direction), startId included — a chain of 3+
+     * docked nodes (e.g. Silo-Gate-Sensor all docked together) all
+     * move as one unit, not just the immediate pair. Keys off `docked`
+     * specifically, not `edgeKind === 'dock'`, since a Silo↔Sensor
+     * dock is `edgeKind: 'signal'` (types.ts's `docked` doc comment
+     * explains why the two are orthogonal). */
+    function dockChainNodeIds(startId: NodeId): NodeId[] {
+      const visited = new Set<NodeId>([startId]);
+      const queue: NodeId[] = [startId];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        for (const edge of graph.getAllEdges()) {
+          if (!edge.docked) continue;
+          const other = edge.source === current ? edge.target : edge.target === current ? edge.source : undefined;
+          if (other !== undefined && !visited.has(other)) {
+            visited.add(other);
+            queue.push(other);
+          }
+        }
+      }
+      return [...visited];
+    }
+
     /** Topmost (highest z-order) node whose octagon body contains
      * `worldPoint`, or undefined. World-space hit-test — NODE_RADIUS
      * is the same un-scaled radius used to compute the screen radius
@@ -495,6 +556,12 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     function hitTestEdge(worldPoint: Point): string | undefined {
       const toleranceWorld = EDGE_HIT_TOLERANCE_PX / camera.zoom;
       for (const edge of graph.getAllEdges()) {
+        // Docking (design doc §5.6): a dock's tiny seam isn't a path
+        // the user drew and has no EdgeProperties UI that would make
+        // sense for it (flowRate/style/speed-lock are all meaningless
+        // for a joint) — Detach lives on the node's own properties
+        // panel instead (PropertiesPanel.tsx's DockSection).
+        if (edge.edgeKind === 'dock') continue;
         const curve = floorLayout.getEdgeCurve(edge.id);
         if (!curve || curve.totalLength === 0) continue;
         let minDist = Infinity;
@@ -696,7 +763,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     if (resizeObserver && canvas!.parentElement) resizeObserver.observe(canvas!.parentElement);
 
     function frame(nowMs: number): void {
-      driver.update(nowMs);
+      driver.update(nowMs, itemSizeOf);
 
       if (lastFrameMs !== null) {
         const frameDeltaMs = Math.max(0, nowMs - lastFrameMs);
@@ -879,14 +946,48 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       for (const edge of edges) {
         const curve = floorLayout.getEdgeCurve(edge.id);
         if (!curve) continue;
+        // Docking (design doc §5.6, 2026-09-09): a dock edge is a real
+        // item-carrying edge to SimEngine, but it isn't a path the
+        // user drew -- it renders as a small connector seam between
+        // the two touching nodes instead of the normal conveyor/tube
+        // stack (no belt phase, no copper check, none of that applies
+        // to a joint that's meant to read as "one unit").
+        if (edge.edgeKind === 'dock') {
+          drawDockSeam(ctx!, curve, camera, viewport);
+          continue;
+        }
         const skin = skinConfig.getEdgeSkin(edge.id);
         const beltPhase = (elapsedMs / 1000) * edge.flowRate * curve.totalLength;
-        drawPathUnder(ctx!, curve, camera, viewport, skin, beltPhase);
+        // Copper glow (design doc §5.5, 2026-09-09): reads whichever
+        // end of THIS edge is a Sensor (direction-agnostic, per
+        // Falcon) and uses that Sensor's own last-evaluated condition
+        // — the same `lastConditionMet` sensor.ts's evaluateSignals
+        // already tracks, no new runtime state of its own.
+        let copperTriggered = false;
+        if (skin.style === 'copper') {
+          const sourceKind = graph.getNode(edge.source)?.kind;
+          const sensorNodeId =
+            sourceKind === 'sensor' ? edge.source : graph.getNode(edge.target)?.kind === 'sensor' ? edge.target : undefined;
+          if (sensorNodeId) copperTriggered = engine.getNodeState(sensorNodeId)?.lastConditionMet === true;
+        }
+        drawPathUnder(ctx!, curve, camera, viewport, skin, beltPhase, copperTriggered);
       }
 
       for (const renderItem of driver.getRenderItems()) {
         const curve = floorLayout.getEdgeCurve(renderItem.edgeId);
         if (!curve) continue;
+        // A dock edge's in-flight item (there for at most one tick,
+        // given App.tsx's DOCK_FLOW_RATE) never gets its own token —
+        // it would just flash as a stray dot in the tiny seam gap.
+        if (graph.getEdge(renderItem.edgeId)?.edgeKind === 'dock') continue;
+        // No-overlap spacing (Falcon, 2026-09-09): an item SimEngine
+        // has held back into negative progress (see SimEngine.
+        // advanceItems's own doc comment) hasn't actually entered this
+        // path yet — it's waiting its turn in a virtual queue behind
+        // the start. Nothing to draw for it until progress climbs back
+        // past 0; getPointAtProgress isn't meant to extrapolate beyond
+        // the curve's own start/end.
+        if (renderItem.progress < 0) continue;
         const worldPoint = curve.getPointAtProgress(renderItem.progress);
         if (
           worldPoint.x < bounds.minX ||
@@ -913,6 +1014,12 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       }
 
       for (const edge of edges) {
+        // A dock's seam was already drawn (and is all it ever draws)
+        // in the under-pass above — no over-pass overlay, no
+        // direction arrow (its two nodes' own positions already say
+        // which is which), and it's never independently selectable
+        // (hitTestEdge excludes it — see that function's own comment).
+        if (edge.edgeKind === 'dock') continue;
         const curve = floorLayout.getEdgeCurve(edge.id);
         if (!curve) continue;
         const skin = skinConfig.getEdgeSkin(edge.id);
@@ -1007,7 +1114,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const screen = camera.worldToScreen(pos, viewport);
         const r = NODE_RADIUS * camera.zoom;
         const state = engine.getNodeState(node.id) ?? {};
-        drawNode(ctx!, node, state, screen, r, camera.zoom, skinConfig.getNodeIcon(node.id));
+        const isDimmedSource = node.kind === 'source' && node.config.active === false;
+        drawNode(ctx!, node, state, screen, r, camera.zoom, skinConfig.getNodeIcon(node.id), isDimmedSource);
         if (skinConfig.getNodeLocked(node.id)) {
           drawNodeLockBadge(ctx!, screen, r, camera.zoom);
         }
@@ -1559,10 +1667,22 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           // group's relative layout never drifts as deltas accumulate
           // frame to frame.
           const sel = selectionRef.current;
+          const dockChain = pendingNodeHitId ? dockChainNodeIds(pendingNodeHitId) : [];
           if (sel?.type === 'multi' && pendingNodeHitId && sel.nodeIds.includes(pendingNodeHitId)) {
             groupMoveActive = true;
             groupOriginalPositions = new Map();
             for (const id of sel.nodeIds) {
+              const p = floorLayout.getNodePosition(id);
+              if (p) groupOriginalPositions.set(id, p);
+            }
+          } else if (pendingNodeHitId && dockChain.length > 1) {
+            // Docking (design doc §5.7): dragging any one member of a
+            // docked chain moves the whole chain -- same group-move
+            // machinery as multi-select above, just seeded from the
+            // dock chain instead of a selection.
+            groupMoveActive = true;
+            groupOriginalPositions = new Map();
+            for (const id of dockChain) {
               const p = floorLayout.getNodePosition(id);
               if (p) groupOriginalPositions.set(id, p);
             }
@@ -1882,7 +2002,47 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // collapsing it down to just the node that happened to be
         // grabbed. A single-node move still selects that node, same
         // as always.
-        if (!groupMoveActive) onSelectRef.current({ type: 'node', id: pendingNodeHitId });
+        //
+        // Docking (design doc §5.6, 2026-09-09): checked here, on
+        // release, only for a plain solo drag -- a group move has no
+        // single well-defined "the dragged node" to dock, so that
+        // case is left for later. The node's raw dropped position is
+        // already valid (wouldOverlap already passed for it during
+        // the drag above); this only asks "is it ALSO close enough to
+        // a compatible node's free slot to snap into a dock?" across
+        // every one of that node's 8 compass directions and every
+        // other placed node, picking the single nearest match.
+        // App.tsx's handleDockNodes re-derives and validates
+        // everything (port capacity, an overlap guard) before
+        // actually moving/wiring anything, and owns selecting the
+        // node afterward — this never calls onSelectRef itself when a
+        // dock is proposed, successful or not.
+        let dockProposed = false;
+        if (!groupMoveActive && onDockNodesRef.current) {
+          const movingNode = graph.getNode(pendingNodeHitId);
+          const currentPos = floorLayout.getNodePosition(pendingNodeHitId);
+          if (movingNode && currentPos) {
+            let best: { targetNodeId: NodeId; dir: number; dist: number } | undefined;
+            for (const other of graph.getAllNodes()) {
+              if (other.id === pendingNodeHitId) continue;
+              if (!isDockCompatible(movingNode.kind, other.kind)) continue;
+              const slot = floorLayout.nearestDockSlot(
+                other.id,
+                pendingNodeHitId,
+                currentPos,
+                DOCK_SNAP_RADIUS_PX / camera.zoom,
+              );
+              if (!slot) continue;
+              const dist = Math.hypot(slot.position.x - currentPos.x, slot.position.y - currentPos.y);
+              if (!best || dist < best.dist) best = { targetNodeId: other.id, dir: slot.dir, dist };
+            }
+            if (best) {
+              onDockNodesRef.current(pendingNodeHitId, best.targetNodeId, best.dir);
+              dockProposed = true;
+            }
+          }
+        }
+        if (!dockProposed && !groupMoveActive) onSelectRef.current({ type: 'node', id: pendingNodeHitId });
       } else if (pointerMode === 'node-down' && isClick && pendingNodeHitId) {
         // FBP014 (2026-09-05): with the multi-select tool armed, a
         // plain click toggles that node into/out of the current

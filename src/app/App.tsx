@@ -5,7 +5,7 @@ import { GraphModel } from '../core/GraphModel';
 import type { EdgeId, NodeId, NodeKind } from '../core/types';
 import { shapeCenter, flipPoints, type Point } from '../floor/bezier';
 import { SkinConfig } from '../skin/SkinConfig';
-import { getPortCapacity } from '../core/nodes/portCapacity';
+import { getPortCapacity, isDockCompatible } from '../core/nodes/portCapacity';
 import type { EdgeStyle } from '../skin/pathSkin';
 import { LeftPanel } from './LeftPanel';
 import { Ribbon, type RibbonTab } from './Ribbon';
@@ -153,7 +153,15 @@ function buildDemoSkinConfig(): SkinConfig {
 function defaultConfigFor(kind: NodeKind): Record<string, unknown> {
   switch (kind) {
     case 'source':
-      return { cooldown: 2, itemType: 'widget' };
+      // Falcon, 2026-09-09 ("on source node's properties i want it off
+      // by default meaning its not spawning any item unless toggled on
+      // ... only new source nodes going forward"): only a FRESHLY
+      // placed source gets `active: false` written explicitly here —
+      // an old source already sitting in a saved project has no
+      // `active` field at all, and SimEngine treats that as "active"
+      // (see sourceActivationGate's own doc comment), so nothing about
+      // an existing project changes from this.
+      return { cooldown: 2, itemType: 'widget', active: false };
     case 'distributor':
       return { mode: 'roundRobin' };
     case 'merger':
@@ -166,10 +174,61 @@ function defaultConfigFor(kind: NodeKind): Record<string, unknown> {
       return { capacity: 3, overflowPolicy: 'block' };
     case 'sink':
       return {};
+    // Trigger system (design doc §4.8, 2026-09-09): Gate has nothing
+    // to pre-fill -- it opens purely from a connected Sensor's signal,
+    // never its own config. Sensor's defaults intentionally evaluate
+    // to an always-true condition (0 >= 0) so a freshly-placed Sensor
+    // immediately drives whatever it's wired to, rather than silently
+    // doing nothing until someone finds the right fields to fill in.
+    case 'gate':
+      return {};
+    case 'sensor':
+      return { comparator: 'gte', threshold: 0 };
     default:
       return {};
   }
 }
+
+/** Copper-path wiring rule (design doc §5.5, 2026-09-09 follow-up):
+ * "the ports of sensor node only [are] compatible with copper wire
+ * path ... the gate node is [also] compatible [to] receive or connect
+ * copper path to its node." Direction never mattered originally
+ * (Falcon: "it wont matter if it out ward or in ward") for the plain
+ * compatibility check below -- both endpoints just need to be one of
+ * these kinds. Extended §5.7 (2026-09-09 follow-up, "copper wire
+ * SHOULD now [be] compatible with silo node") to include buffer/Silo,
+ * so a Sensor can watch a Silo's queue length over a real copper wire,
+ * not just the "Watch node" dropdown -- see sensor.ts's
+ * watchedNodeIds/evaluateSignals for what that connection now DOES.
+ * Direction now carries meaning for a Sensor edge specifically (design
+ * doc §5.7: "ingoing means the node source to watch ... outgoing ...
+ * will be for command") but that's read from the edge's source/target
+ * at eval time, not enforced as a wiring restriction here -- this
+ * function only ever answers "are these two kinds allowed to touch at
+ * all." Every other kind is explicitly left for a later discussion, so
+ * this stays a closed, easy-to-extend list rather than an inferred
+ * rule. */
+function isCopperCompatible(kind: NodeKind): boolean {
+  return kind === 'sensor' || kind === 'gate' || kind === 'buffer';
+}
+
+/** Docking (design doc §5.6, 2026-09-09 — "attaching the node without
+ * needing to add a path in between ... it will act and behave like a
+ * single unit"): the flowRate a dock edge is created with. Falcon's
+ * chosen mechanism (over a deeper "merged single node" alternative)
+ * was "auto hidden instant edge ... reuses all existing machinery" —
+ * SimEngine's `advanceItems` advances `progress` by `flowRate * dt`
+ * with NO dependence on the edge's actual curve length, so an
+ * intentionally huge flowRate is the entire implementation: an item
+ * crosses the remaining 0→1 progress in a single advancement step no
+ * matter how short `dt` gets. SimEngine's own tick ordering
+ * (advanceItems runs BEFORE deliverArrivals) means "instant" concretely
+ * means "delivered on the very next tick," not the same tick it was
+ * forwarded on — an unavoidable one-tick floor shared by every edge,
+ * dock or not — but a huge flowRate guarantees it never needs a
+ * SECOND tick beyond that one to actually finish crossing, unlike an
+ * ordinary low-flowRate edge. Zero changes to SimEngine itself. */
+const DOCK_FLOW_RATE = 1000;
 
 /** After a load, later placements must not collide with an id
  * already used in the save file — nextIdRef is one shared counter
@@ -670,16 +729,41 @@ export function App() {
    * layer length changes happen through several different mutation
    * sites: node moves, curvature edits, anchor reassignment — no
    * single handler to instrument instead). Edges with no lock are
-   * untouched, so this changes nothing for the common case. */
+   * untouched, so this changes nothing for the common case.
+   *
+   * Falcon, 2026-09-09 ("respects the size of the object along a
+   * path"): the same poll also keeps `pathLength` in sync for every
+   * edge with the no-overlap toggle on — the identical bridged-
+   * geometry problem speed-lock already solves (SimEngine needs a
+   * real-world length to turn item sizes into a progress gap, but
+   * must never read floorLayout itself), so it reuses this loop and
+   * cadence rather than standing up a second interval that would just
+   * duplicate the same reasoning. */
   useEffect(() => {
     function tick(): void {
       for (const edge of graph.getAllEdges()) {
-        if (!edge.speedLocked || edge.lockedSpeed === undefined) continue;
-        const length = floorLayout.getEdgeCurve(edge.id)?.totalLength ?? 0;
-        if (length <= 0) continue;
-        const targetFlowRate = edge.lockedSpeed / length;
-        if (Math.abs(edge.flowRate - targetFlowRate) > 1e-9) {
-          graph.setEdgeFlowRate(edge.id, targetFlowRate);
+        if (edge.speedLocked && edge.lockedSpeed !== undefined) {
+          const length = floorLayout.getEdgeCurve(edge.id)?.totalLength ?? 0;
+          if (length > 0) {
+            const targetFlowRate = edge.lockedSpeed / length;
+            if (Math.abs(edge.flowRate - targetFlowRate) > 1e-9) {
+              graph.setEdgeFlowRate(edge.id, targetFlowRate);
+            }
+          }
+        }
+        // Falcon, 2026-09-09 ("by default to respect item sizes"):
+        // respectItemSize is now on unless a path explicitly opts out
+        // (edge.respectItemSize === false) — see EdgeDef's own doc
+        // comment — so this keeps pathLength synced for virtually
+        // every ordinary path, not just ones someone happened to
+        // check a box on. Dock edges are excluded on purpose (see
+        // SimEngine.spacingEnabled's reasoning) even though their
+        // respectItemSize is never explicitly false.
+        if (edge.edgeKind !== 'dock' && edge.respectItemSize !== false) {
+          const length = floorLayout.getEdgeCurve(edge.id)?.totalLength ?? 0;
+          if (length > 0 && edge.pathLength !== length) {
+            graph.setEdgePathLength(edge.id, length);
+          }
         }
       }
     }
@@ -1139,6 +1223,17 @@ export function App() {
     const sourceNode = graph.getNode(sourceNodeId);
     const targetNode = graph.getNode(targetNodeId);
     if (!sourceNode || !targetNode) return;
+
+    // Copper-path wiring rule (design doc §5.5, 2026-09-09 follow-up):
+    // checked BEFORE the generic port-capacity caps below, since it's
+    // a more fundamental "these two kinds can't connect at all" rule,
+    // not a counting one. Symmetric — direction never matters.
+    const touchesSensor = sourceNode.kind === 'sensor' || targetNode.kind === 'sensor';
+    if (touchesSensor && (!isCopperCompatible(sourceNode.kind) || !isCopperCompatible(targetNode.kind))) {
+      flashMessage('A Sensor only connects via a copper path, to another Sensor or a Gate.');
+      return;
+    }
+
     const sourceCap = getPortCapacity(sourceNode.kind);
     const targetCap = getPortCapacity(targetNode.kind);
     if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
@@ -1163,19 +1258,198 @@ export function App() {
     // Falcon, 2026-09-05: every new path now starts linear (bow=0),
     // not the old gentle-curve default.
     floorLayout.setEdgeCurve(id, sourceNodeId, targetNodeId, 0, explicitAnchors);
-    // Falcon, 2026-09-05: "I want to draw the selected path directly
-    // ... no need to draw or sketch first" -- FluxCanvas's armed-style
-    // drag-to-create gesture passes the armed style straight through
-    // here, tagged onto the same new edge in one call, then disarms
-    // -- the same one-shot arm-then-act convention placement/sketch/
-    // apply-style-to-an-existing-edge all already follow. A plain
-    // Shift+drag with nothing armed never passes a style, so this is
-    // a no-op for that path.
-    if (style) {
+    if (touchesSensor) {
+      // Copper-path wiring rule (design doc §5.5): not a style choice
+      // — every Sensor connection IS a signal edge, styled copper,
+      // overriding whatever style tool happened to be armed.
+      graph.setEdgeKind(id, 'signal');
+      skinConfig.setEdgeSkin(id, { style: 'copper' });
+      if (style) setArmedEdgeStyle(null);
+    } else if (style) {
+      // Falcon, 2026-09-05: "I want to draw the selected path directly
+      // ... no need to draw or sketch first" -- FluxCanvas's armed-style
+      // drag-to-create gesture passes the armed style straight through
+      // here, tagged onto the same new edge in one call, then disarms
+      // -- the same one-shot arm-then-act convention placement/sketch/
+      // apply-style-to-an-existing-edge all already follow. A plain
+      // Shift+drag with nothing armed never passes a style, so this is
+      // a no-op for that path.
       skinConfig.setEdgeSkin(id, { style });
       setArmedEdgeStyle(null);
     }
     setSelection({ type: 'edge', id });
+  }
+
+  /** Docking (design doc §5.6, 2026-09-09 — "attaching the node
+   * without needing to add a path in between ... it will act and
+   * behave like a single unit"): finalizes the drag-to-snap dock
+   * FluxCanvas proposed on release (it already found the nearest
+   * compatible free slot; this re-validates before touching anything,
+   * same "FluxCanvas proposes, App.tsx owns the real mutation +
+   * rejection checks" split every other gesture here follows).
+   *
+   * Direction (fixed 2026-09-09 after Falcon hit this live — see the
+   * commit note): a "stationary = source" default was tried first and
+   * turned out actively wrong the very first time it mattered. A Gate
+   * ALREADY wired to a Sink (its one real physical output) got docked
+   * to a Buffer with the dock ALSO landing as one of the Gate's
+   * outputs — gate.ts's onItemArrival has no per-port routing at all
+   * (`outputEdges.find(e => e.active && e.edgeKind !== 'signal')`, no
+   * sourcePort check, unlike buffer/mixer/merger), so a Gate with TWO
+   * real outputs is genuinely ambiguous, not just untidy: whichever
+   * edge the array happens to return first is where every item goes,
+   * and the Gate's physical INPUT side was left with nothing feeding
+   * it at all — "nothing goes through," exactly as reported, not a
+   * cosmetic glitch.
+   *
+   * So when one side is a Gate, direction is now derived from
+   * whichever of the Gate's two physical sides is still actually
+   * open, not from which node happened to be dragged:
+   *  - Gate already has a real (non-signal) OUTPUT elsewhere → it's
+   *    clearly acting as an out-gate already; the dock must feed
+   *    INTO it (Buffer becomes source).
+   *  - Gate already has a real INPUT elsewhere → it's an in-gate
+   *    already; the dock must be its output (Gate becomes source).
+   *  - Neither yet (a freshly placed Gate) → falls back to the
+   *    original "stationary = source" guess, since there's genuinely
+   *    no signal to read yet — still correctable via DockSection's
+   *    "Flip direction" if it guesses wrong.
+   *
+   * Extended §5.7 (2026-09-09 follow-up) for the two new dockable
+   * pairs: a Silo↔Silo dock has no equivalent physical-side ambiguity
+   * to read (a Buffer can legitimately have several real outputs at
+   * once, disambiguated by sourcePort — see buffer.ts's tryDrain — so
+   * it never hits the single-real-output problem Gate has), so it
+   * just keeps the plain stationary/dragged default. A Silo↔Sensor
+   * dock is NOT an item edge at all and has its own fixed rule instead
+   * of a heuristic: the Silo is ALWAYS the edge's source and the
+   * Sensor ALWAYS its target, regardless of which node was physically
+   * dragged, because "ingoing to the Sensor names the watched node"
+   * (sensor.ts's watchedNodeIds) — docking a Sensor onto a Silo should
+   * always mean "watch this Silo," never "command this Silo" (a
+   * Buffer has no `open` state for a signal to drive anyway). */
+  function handleDockNodes(movingNodeId: NodeId, targetNodeId: NodeId, dir: number): void {
+    const movingNode = graph.getNode(movingNodeId);
+    const targetNode = graph.getNode(targetNodeId);
+    if (!movingNode || !targetNode) return;
+    if (!isDockCompatible(movingNode.kind, targetNode.kind)) return; // defensive -- FluxCanvas already filtered this
+
+    const gateId = movingNode.kind === 'gate' ? movingNodeId : targetNode.kind === 'gate' ? targetNodeId : undefined;
+    const bufferId = gateId === movingNodeId ? targetNodeId : gateId === targetNodeId ? movingNodeId : undefined;
+    const sensorId = movingNode.kind === 'sensor' ? movingNodeId : targetNode.kind === 'sensor' ? targetNodeId : undefined;
+    const siloId = sensorId === movingNodeId ? targetNodeId : sensorId === targetNodeId ? movingNodeId : undefined;
+    const isSiloSensorDock = sensorId !== undefined && siloId !== undefined;
+
+    let edgeSourceId = targetNodeId;
+    let edgeTargetId = movingNodeId;
+    if (gateId !== undefined && bufferId !== undefined) {
+      const gateHasRealOutput = graph.outputEdges(gateId).some((e) => e.edgeKind !== 'signal');
+      const gateHasRealInput = graph.inputEdges(gateId).some((e) => e.edgeKind !== 'signal');
+      if (gateHasRealOutput && !gateHasRealInput) {
+        edgeSourceId = bufferId;
+        edgeTargetId = gateId;
+      } else if (gateHasRealInput && !gateHasRealOutput) {
+        edgeSourceId = gateId;
+        edgeTargetId = bufferId;
+      }
+      // else: both sides already wired, or neither is — fall back to
+      // the stationary/dragged default set above.
+    } else if (isSiloSensorDock) {
+      edgeSourceId = siloId!;
+      edgeTargetId = sensorId!;
+    }
+    // else (Silo↔Silo, or any future pair with nothing more specific
+    // to say): the plain stationary/dragged default above stands.
+    const edgeSourceNode = graph.getNode(edgeSourceId)!;
+    const edgeTargetNode = graph.getNode(edgeTargetId)!;
+
+    const sourceCap = getPortCapacity(edgeSourceNode.kind);
+    const targetCap = getPortCapacity(edgeTargetNode.kind);
+    if (sourceCap.maxOutputs !== undefined && graph.outputEdges(edgeSourceId).length >= sourceCap.maxOutputs) {
+      flashMessage(
+        `Can't dock — a ${edgeSourceNode.kind} can only have ${sourceCap.maxOutputs} output${sourceCap.maxOutputs === 1 ? '' : 's'}.`,
+      );
+      return;
+    }
+    if (targetCap.maxInputs !== undefined && graph.inputEdges(edgeTargetId).length >= targetCap.maxInputs) {
+      flashMessage(
+        `Can't dock — a ${edgeTargetNode.kind} can only accept ${targetCap.maxInputs} input${targetCap.maxInputs === 1 ? '' : 's'}.`,
+      );
+      return;
+    }
+
+    // Same 2×NODE_RADIUS boundary wouldOverlap already treats as "not
+    // overlapping" (FloorLayout.dockedPosition's own doc comment) —
+    // this defensive re-check only ever matters in the rare case of
+    // three nodes clustered tightly enough that the tiny compass-snap
+    // adjustment (from wherever the drag actually released to the
+    // exact docked slot) crosses into a THIRD node.
+    const position = floorLayout.dockedPosition(targetNodeId, dir);
+    if (!position || floorLayout.wouldOverlap(position, movingNodeId)) {
+      flashMessage("Can't dock — not enough room there.");
+      return;
+    }
+
+    floorLayout.setNodePosition(movingNodeId, position);
+    for (const edge of graph.getAllEdges()) {
+      if (edge.source === movingNodeId || edge.target === movingNodeId) {
+        floorLayout.recomputeEdgeCurve(edge.id, edge.source, edge.target);
+      }
+    }
+
+    const oppositeDir = (dir + 4) % 8; // octagon's 8 compass anchors, the far side facing back
+    // `dir` is always the compass direction ON targetNodeId (the
+    // stationary node FluxCanvas measured the slot from), regardless
+    // of which of the two ends the gate-aware logic above chose as
+    // the EDGE's source — so the anchor assigned to each node must be
+    // looked up by which physical node it is, never assumed to line
+    // up with source/target.
+    const targetNodeAnchor = dir;
+    const movingNodeAnchor = oppositeDir;
+    const edgeSourceAnchor = edgeSourceId === targetNodeId ? targetNodeAnchor : movingNodeAnchor;
+    const edgeTargetAnchor = edgeTargetId === targetNodeId ? targetNodeAnchor : movingNodeAnchor;
+
+    // Avoid colliding with an existing real output the chosen source
+    // node already routes by sourcePort (buffer/mixer/merger all
+    // match `sourcePort === config.outputPort`, default 0) — mirrors
+    // buffer's own "overflow port defaults to 1" convention rather
+    // than silently sharing port 0 with something else already there.
+    const sourceHasRealOutputAtPort0 = graph
+      .outputEdges(edgeSourceId)
+      .some((e) => e.sourcePort === 0 && e.edgeKind !== 'signal');
+    const dockSourcePort = sourceHasRealOutputAtPort0 ? 1 : 0;
+
+    const id = `user-edge-${nextIdRef.current++}`;
+    graph.addEdge({
+      id,
+      source: edgeSourceId,
+      target: edgeTargetId,
+      sourcePort: dockSourcePort,
+      targetPort: 0,
+      flowRate: DOCK_FLOW_RATE,
+      active: true,
+      // Silo↔Sensor is a copper/signal connection, never a real item
+      // edge (a Sensor has no onItemArrival — see portCapacity.ts) —
+      // every other dockable pair keeps the original huge-flowRate
+      // item-edge treatment. `docked: true` marks BOTH as a rigid
+      // attachment for FluxCanvas's group-move and PropertiesPanel's
+      // DockSection regardless of which edgeKind it ends up with (see
+      // that field's own doc comment in types.ts).
+      edgeKind: isSiloSensorDock ? 'signal' : 'dock',
+      docked: true,
+    });
+    floorLayout.setEdgeCurve(id, edgeSourceId, edgeTargetId, 0, {
+      sourceAnchor: edgeSourceAnchor,
+      targetAnchor: edgeTargetAnchor,
+    });
+    if (isSiloSensorDock) {
+      // Same copper-path skin every hand-drawn Sensor connection gets
+      // (handleCreateEdge) — a docked Silo↔Sensor pair should look
+      // exactly like a short copper wire, not a physical conveyor.
+      skinConfig.setEdgeSkin(id, { style: 'copper' });
+    }
+    setSelection({ type: 'node', id: movingNodeId });
+    flashMessage(`Docked ${edgeTargetNode.kind} to ${edgeSourceNode.kind}.`);
   }
 
   // NODES, PATHS, Sketch, Multi-select and Pan arming are all
@@ -1411,6 +1685,16 @@ export function App() {
     const sourceNode = graph.getNode(sourceNodeId);
     const targetNode = graph.getNode(targetNodeId);
     if (!sourceNode || !targetNode) return;
+
+    // Copper-path wiring rule (design doc \u00a75.5) \u2014 same check as
+    // handleCreateEdge, applied here too so a sketch can't route
+    // around it.
+    const touchesSensor = sourceNode.kind === 'sensor' || targetNode.kind === 'sensor';
+    if (touchesSensor && (!isCopperCompatible(sourceNode.kind) || !isCopperCompatible(targetNode.kind))) {
+      flashMessage("Can't convert \u2014 a Sensor only connects via a copper path, to another Sensor or a Gate.");
+      return;
+    }
+
     const sourceCap = getPortCapacity(sourceNode.kind);
     const targetCap = getPortCapacity(targetNode.kind);
     if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
@@ -1455,7 +1739,14 @@ export function App() {
         sketch.segments.map((seg) => seg.bow),
       );
     }
-    skinConfig.setEdgeSkin(id, { style });
+    if (touchesSensor) {
+      // Copper-path wiring rule (design doc §5.5) — overrides whatever
+      // style the sketch was converting with, same as handleCreateEdge.
+      graph.setEdgeKind(id, 'signal');
+      skinConfig.setEdgeSkin(id, { style: 'copper' });
+    } else {
+      skinConfig.setEdgeSkin(id, { style });
+    }
     sketchLayer.remove(sketchId);
     setSelection({ type: 'edge', id });
   }
@@ -1472,6 +1763,7 @@ export function App() {
     let converted = 0;
     let skippedNotPinned = 0;
     let skippedPortFull = 0;
+    let skippedIncompatible = 0;
 
     for (const sketchId of sketchIds) {
       const sketch = sketchLayer.get(sketchId);
@@ -1489,6 +1781,13 @@ export function App() {
       const targetNode = graph.getNode(targetNodeId);
       if (!sourceNode || !targetNode) {
         skippedNotPinned++;
+        continue;
+      }
+      // Copper-path wiring rule (design doc §5.5) — same check as the
+      // single-sketch conversion above.
+      const touchesSensor = sourceNode.kind === 'sensor' || targetNode.kind === 'sensor';
+      if (touchesSensor && (!isCopperCompatible(sourceNode.kind) || !isCopperCompatible(targetNode.kind))) {
+        skippedIncompatible++;
         continue;
       }
       const sourceCap = getPortCapacity(sourceNode.kind);
@@ -1523,18 +1822,24 @@ export function App() {
           sketch.segments.map((seg) => seg.bow),
         );
       }
-      skinConfig.setEdgeSkin(id, { style });
+      if (touchesSensor) {
+        graph.setEdgeKind(id, 'signal');
+        skinConfig.setEdgeSkin(id, { style: 'copper' });
+      } else {
+        skinConfig.setEdgeSkin(id, { style });
+      }
       sketchLayer.remove(sketchId);
       converted++;
     }
 
-    const skipped = skippedNotPinned + skippedPortFull;
+    const skipped = skippedNotPinned + skippedPortFull + skippedIncompatible;
     if (skipped === 0) {
       flashMessage(`Converted ${converted} sketch${converted === 1 ? '' : 'es'} to path${converted === 1 ? '' : 's'}.`);
     } else {
       const reasons: string[] = [];
       if (skippedNotPinned > 0) reasons.push(`${skippedNotPinned} not fully pinned`);
       if (skippedPortFull > 0) reasons.push(`${skippedPortFull} port full`);
+      if (skippedIncompatible > 0) reasons.push(`${skippedIncompatible} incompatible with sensor`);
       flashMessage(`${converted} converted, ${skipped} skipped \u2014 ${reasons.join(', ')}.`);
     }
     setSelection(null);
@@ -1714,6 +2019,7 @@ export function App() {
             onPlaceNode={handlePlaceNode}
             onCreateEdge={handleCreateEdge}
             onConnectionRejected={flashMessage}
+            onDockNodes={handleDockNodes}
             snapToGrid={snapToGrid}
             gridSpacing={gridSpacing}
             armedEdgeStyle={armedEdgeStyle}

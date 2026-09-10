@@ -286,4 +286,77 @@ describe('FloorLayout', () => {
       expect(layout.wouldOverlap({ x: 200, y: 0 }, ['a', 'b'])).toBe(true);
     });
   });
+
+  // Docking (design doc §5.6, 2026-09-09 — "attaching the node
+  // without needing to add a path in between"): dockedPosition/
+  // nearestDockSlot are the pure-geometry half of the feature (which
+  // node kinds may actually dock is a Logic-layer concern,
+  // core/nodes/portCapacity.ts's isDockCompatible, checked by the
+  // caller before ever reaching these).
+  describe('docking', () => {
+    it('dockedPosition sits exactly 2×NODE_RADIUS from the target, along the given compass direction (skin/octagon.ts convention: 0=E, 2=S, 4=W, 6=N)', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('target', { x: 0, y: 0 });
+      expect(layout.dockedPosition('target', 0)).toEqual({ x: NODE_RADIUS * 2, y: 0 }); // east
+      const south = layout.dockedPosition('target', 2)!;
+      expect(south.x).toBeCloseTo(0);
+      expect(south.y).toBeCloseTo(NODE_RADIUS * 2);
+    });
+
+    it('dockedPosition is undefined for a node with no recorded position', () => {
+      const layout = new FloorLayout();
+      expect(layout.dockedPosition('ghost', 0)).toBeUndefined();
+    });
+
+    it('nearestDockSlot finds the compass direction whose slot lands closest to the given point', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('target', { x: 0, y: 0 });
+      layout.setNodePosition('moving', { x: 1000, y: 1000 }); // far away, irrelevant to slot-freeness here
+      // A point just east of target should resolve to dir 0 (east).
+      const slot = layout.nearestDockSlot('target', 'moving', { x: NODE_RADIUS * 2 + 3, y: 2 }, 50);
+      expect(slot).toBeDefined();
+      expect(slot!.dir).toBe(0);
+      expect(slot!.position).toEqual(layout.dockedPosition('target', 0));
+    });
+
+    it('nearestDockSlot returns undefined once every direction is farther than maxDistance', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('target', { x: 0, y: 0 });
+      layout.setNodePosition('moving', { x: 1000, y: 1000 });
+      expect(layout.nearestDockSlot('target', 'moving', { x: 5000, y: 5000 }, 10)).toBeUndefined();
+    });
+
+    it('nearestDockSlot skips a direction whose TARGET-side anchor is already taken by a real edge', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('target', { x: 0, y: 0 });
+      layout.setNodePosition('other', { x: 200, y: 0 }); // occupies target's east (dir 0) anchor
+      layout.setEdgeCurve('e1', 'target', 'other', 0);
+      layout.setNodePosition('moving', { x: 1000, y: 1000 });
+
+      // A point right next to the now-occupied east slot must NOT
+      // resolve to dir 0 -- it should either fall through to a
+      // farther, still-free direction or find nothing at all within
+      // this tight a radius.
+      const slot = layout.nearestDockSlot('target', 'moving', { x: NODE_RADIUS * 2 + 3, y: 2 }, 50);
+      if (slot) expect(slot.dir).not.toBe(0);
+    });
+
+    it('nearestDockSlot skips a direction whose MOVING-node-side (opposite) anchor is already taken', () => {
+      const layout = new FloorLayout();
+      layout.setNodePosition('target', { x: 0, y: 0 });
+      layout.setNodePosition('moving', { x: 1000, y: 1000 });
+      // Due west of 'moving' -- an unrelated real edge here books
+      // moving's dir 4 (west) anchor, entirely unrelated to target.
+      layout.setNodePosition('elsewhere', { x: 800, y: 1000 });
+      layout.setEdgeCurve('e-unrelated', 'moving', 'elsewhere', 0);
+
+      // Docking 'moving' onto target's EAST side (dir 0) would need
+      // moving's dir 4 (west, the anchor facing back toward target)
+      // free -- but that's exactly the one the unrelated edge above
+      // just took, so dir 0 must be skipped even though target's own
+      // east anchor is wide open.
+      const slot = layout.nearestDockSlot('target', 'moving', { x: NODE_RADIUS * 2 + 3, y: 2 }, 50);
+      expect(slot?.dir).not.toBe(0);
+    });
+  });
 });

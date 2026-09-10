@@ -615,4 +615,59 @@ export class FloorLayout {
     }
     return false;
   }
+
+  /** Docking (design doc §5.6, 2026-09-09 — "attaching the node
+   * without needing to add a path in between"): the exact world
+   * position a node would sit at if docked onto `targetNodeId` from
+   * compass direction `dir` (skin/octagon.ts's port-index convention,
+   * same one octagonPortAnchor uses). Deliberately the same
+   * `2 * NODE_RADIUS` boundary wouldOverlap already treats as "not
+   * overlapping" — docking never needs a wouldOverlap exception, it
+   * just always lands EXACTLY on that boundary. That's slightly
+   * farther apart than the two octagons' own edges (which meet at the
+   * smaller apothem distance), leaving a few world-units' gap between
+   * the bodies — deliberate, not a rounding slip: pathSkin.ts's
+   * drawDockSeam renders a small connector plate filling exactly that
+   * gap, which is the visual Falcon asked for ("something in between
+   * the node to indicate that they are docked"). */
+  dockedPosition(targetNodeId: NodeId, dir: number): Point | undefined {
+    const center = this.nodePositions.get(targetNodeId);
+    if (!center) return undefined;
+    const angle = (dir * Math.PI) / 4;
+    return { x: center.x + NODE_RADIUS * 2 * Math.cos(angle), y: center.y + NODE_RADIUS * 2 * Math.sin(angle) };
+  }
+
+  /** The nearest valid dock slot to `point`, docking `movingNodeId`
+   * onto `targetNodeId` — tries all 8 compass directions and returns
+   * the closest one within `maxDistance` whose facing anchor pair
+   * (dir on the target, the opposite dir on the moving node) is
+   * currently free on BOTH sides, or undefined if none qualifies
+   * (either every direction is out of range, or the only in-range
+   * ones already have that side's anchor taken by a real edge/sketch).
+   * Anchor occupancy is checked here rather than left to the eventual
+   * setEdgeCurve call so a caller (FluxCanvas's drag-release check)
+   * can tell "no valid slot" apart from "found a slot" before doing
+   * anything else. */
+  nearestDockSlot(
+    targetNodeId: NodeId,
+    movingNodeId: NodeId,
+    point: Point,
+    maxDistance: number,
+  ): { dir: number; position: Point } | undefined {
+    let best: { dir: number; position: Point } | undefined;
+    let bestDist = maxDistance;
+    for (let dir = 0; dir < OCTAGON_PORT_COUNT; dir++) {
+      if (this.isAnchorOccupied(targetNodeId, dir)) continue;
+      const oppositeDir = (dir + OCTAGON_PORT_COUNT / 2) % OCTAGON_PORT_COUNT;
+      if (this.isAnchorOccupied(movingNodeId, oppositeDir)) continue;
+      const position = this.dockedPosition(targetNodeId, dir);
+      if (!position) continue;
+      const dist = Math.hypot(position.x - point.x, position.y - point.y);
+      if (dist <= bestDist) {
+        bestDist = dist;
+        best = { dir, position };
+      }
+    }
+    return best;
+  }
 }

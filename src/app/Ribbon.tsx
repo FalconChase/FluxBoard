@@ -45,11 +45,25 @@ const SKETCH_STYLE_OPTIONS: { style: SketchStyle; label: string; hint: string }[
   { style: 'polypath', label: 'Polypath', hint: 'Click to place each point, double-click/Enter to finish' },
 ];
 
-export const NODE_KINDS: NodeKind[] = ['source', 'distributor', 'merger', 'sorter', 'mixer', 'buffer', 'sink'];
+export const NODE_KINDS: NodeKind[] = [
+  'source',
+  'distributor',
+  'merger',
+  'sorter',
+  'mixer',
+  'buffer',
+  'sink',
+  // Trigger system (design doc §4.8, 2026-09-09 node-design session):
+  // "Silo" is not its own kind -- it's just 'buffer' above, used at
+  // larger capacity.
+  'gate',
+  'sensor',
+];
 /** Falcon, 2026-09-09 ("only show 4 icons... more or all will be
  * shown on the side panel", extended to Nodes/Paths/Modify "for
  * uniformity"): the 4 most-used node kinds shown in the ribbon row
- * itself -- NodesOverflowPanel below still lists all 7. */
+ * itself -- NodesOverflowPanel below still lists all of NODE_KINDS
+ * (7, then gate/sensor added the same day -- 9). */
 const KEPT_NODE_KINDS: NodeKind[] = ['source', 'distributor', 'buffer', 'sink'];
 export const EDGE_STYLES: { style: EdgeStyle; label: string; color: string }[] = [
   { style: 'transparent', label: 'Transparent', color: theme.text3 },

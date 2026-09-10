@@ -67,6 +67,20 @@ describe('GraphModel', () => {
     expect(() => graph.setEdgeFlowRate('nope', 1)).toThrow();
   });
 
+  it('setEdgeKind defaults to undefined (item) and can be switched to signal and back', () => {
+    const graph = buildGraph();
+    expect(graph.getEdge('e1')?.edgeKind).toBeUndefined();
+    graph.setEdgeKind('e1', 'signal');
+    expect(graph.getEdge('e1')?.edgeKind).toBe('signal');
+    graph.setEdgeKind('e1', 'item');
+    expect(graph.getEdge('e1')?.edgeKind).toBe('item');
+  });
+
+  it('setEdgeKind throws for an unknown edge', () => {
+    const graph = buildGraph();
+    expect(() => graph.setEdgeKind('nope', 'signal')).toThrow();
+  });
+
   it('removeEdge deletes the edge and drops it from the source node\'s out-edge list', () => {
     const graph = buildGraph();
     graph.removeEdge('e1');

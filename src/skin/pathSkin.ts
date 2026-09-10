@@ -1,7 +1,7 @@
 import type { EdgePath } from '../floor/bezier';
 import type { Point } from '../floor/bezier';
 import type { Camera, Viewport } from '../floor/camera';
-import { hexWithAlpha } from './canvasUtil';
+import { hexWithAlpha, roundRectPath } from './canvasUtil';
 import type { ObjectShape } from './ObjectRegistry';
 import { annotationIcons, type AnnotationIconKind } from './annotationIcons';
 
@@ -13,7 +13,20 @@ import { annotationIcons, type AnnotationIconKind } from './annotationIcons';
  * path's own color, no belt/tube band at all — the clean PCB-trace
  * look the mockup's paths used, now a real selectable style rather
  * than an artifact of how that mockup happened to render. */
-export type EdgeStyle = 'transparent' | 'conveyor' | 'glassTube' | 'trace';
+export type EdgeStyle = 'transparent' | 'conveyor' | 'glassTube' | 'trace' | 'copper';
+
+/** Copper (design doc §5.5, 2026-09-09 follow-up): the visual identity
+ * for a Sensor's signal path — the render-side half of the glow that
+ * §5.5 originally deferred ("visual treatment ... explicitly deferred
+ * to a later Skin-layer pass"). Falcon: "it will only glow so grey
+ * orange when no pulse but light orange when triggered" — direction-
+ * agnostic, so App.tsx's wiring rule (only a Sensor/Gate on both ends)
+ * is what actually restricts where this style is used, not the color
+ * itself. Exported so a swatch preview (Ribbon/PropertiesPanel) can't
+ * visually drift from the real render, same convention as every other
+ * style's colors. */
+export const COPPER_IDLE_COLOR = '#9c8267';
+export const COPPER_TRIGGERED_COLOR = '#ff9d3d';
 
 /** Skin-owned item orientation mode (design doc §5.3) — edge-owned for
  * v1, not item-owned. */
@@ -143,6 +156,12 @@ export function drawPathUnder(
   viewport: Viewport,
   skin: EdgeSkin,
   beltPhaseDistance: number,
+  /** Copper only (design doc §5.5) — true while the Sensor at either
+   * end of this edge last evaluated its condition as true. Ignored by
+   * every other style; defaults false so every pre-existing call site
+   * (none of which know about copper) keeps rendering exactly as
+   * before. */
+  copperTriggered = false,
 ): void {
   const zoom = camera.zoom;
   if (skin.style === 'conveyor') {
@@ -157,6 +176,14 @@ export function drawPathUnder(
     // uses the color at full opacity, not hexWithAlpha, so it reads
     // crisp at any zoom.
     strokeCurve(ctx, curve, camera, viewport, Math.max(1.5, 2.2 * zoom), skin.color);
+  } else if (skin.style === 'copper') {
+    // Same thin-line treatment as 'trace' (ignores skin.color/
+    // strokeWidth entirely — copper's whole point is the fixed idle/
+    // triggered glow, not a user-picked color), just swapping which
+    // fixed color it draws based on the connected Sensor's last
+    // evaluated condition.
+    const color = copperTriggered ? COPPER_TRIGGERED_COLOR : COPPER_IDLE_COLOR;
+    strokeCurve(ctx, curve, camera, viewport, Math.max(2, 2.6 * zoom), color);
   }
   // 'transparent': nothing drawn — the base state (§5.2).
 }
@@ -228,6 +255,38 @@ export function drawPathDirectionArrow(
   ctx.closePath();
   ctx.fillStyle = 'rgba(58, 58, 66, 0.6)';
   ctx.fill();
+  ctx.restore();
+}
+
+/** Docking's visual "something in between" (design doc §5.6,
+ * 2026-09-09 — Falcon: "there will be something in between the node
+ * to indicate that they are docked"): a small connector plate at a
+ * dock edge's midpoint, filling the few-world-unit gap
+ * FloorLayout.dockedPosition deliberately leaves between the two
+ * touching octagons (their own edges meet at the smaller apothem
+ * distance; docking uses the same 2×NODE_RADIUS boundary
+ * wouldOverlap treats as "not overlapping," which sits slightly
+ * farther out). Drawn instead of the normal conveyor/glass-tube
+ * render stack for a `edgeKind: 'dock'` edge — FluxCanvas's render
+ * loop skips drawPathUnder/drawPathOver/the direction arrow for
+ * those entirely, since a dock isn't a path the user drew, it's a
+ * structural joint between two nodes acting "like a single unit." */
+export function drawDockSeam(ctx: CanvasRenderingContext2D, curve: EdgePath, camera: Camera, viewport: Viewport): void {
+  const worldPoint = curve.getPointAtProgress(0.5);
+  const angle = curve.totalLength > 0 ? curve.getTangentAngleAtProgress(0.5) : 0;
+  const screen = camera.worldToScreen(worldPoint, viewport);
+  const halfLength = Math.max(4, 6 * camera.zoom);
+  const halfWidth = Math.max(2, 3 * camera.zoom);
+
+  ctx.save();
+  ctx.translate(screen.x, screen.y);
+  ctx.rotate(angle + Math.PI / 2); // perpendicular to the docking direction, like a weld seam
+  roundRectPath(ctx, -halfLength, -halfWidth, halfLength * 2, halfWidth * 2, halfWidth * 0.6);
+  ctx.fillStyle = '#6b7280';
+  ctx.fill();
+  ctx.strokeStyle = '#3f4552';
+  ctx.lineWidth = Math.max(1, camera.zoom);
+  ctx.stroke();
   ctx.restore();
 }
 

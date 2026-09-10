@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { GraphModel } from '../core/GraphModel';
 import type { EdgeDef, NodeDef } from '../core/types';
 import { getPortCapacity } from '../core/nodes/portCapacity';
+import { hasSignalInput, watchedNodeIds } from '../core/nodes/index';
 import type { FloorLayout } from '../floor/floorLayout';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
@@ -299,6 +300,8 @@ function NodeProperties({
       {node.kind === 'sink' && (
         <p style={{ fontSize: 12, color: theme.text3 }}>Sink has nothing to configure — it just consumes.</p>
       )}
+      {node.kind === 'gate' && <GateFields nodeId={nodeId} graph={graph} />}
+      {node.kind === 'sensor' && <SensorFields node={node} graph={graph} onChange={patch} />}
 
       <SingleOutputSidePicker nodeId={nodeId} kind={node.kind} graph={graph} floorLayout={floorLayout} />
 
@@ -307,6 +310,8 @@ function NodeProperties({
 
       <div style={sectionTitleStyle}>Z-order</div>
       <ZOrderButtons nodeId={nodeId} graph={graph} skinConfig={skinConfig} />
+
+      <DockSection nodeId={nodeId} graph={graph} floorLayout={floorLayout} skinConfig={skinConfig} />
 
       <div style={sectionTitleStyle}>Position</div>
       <LockToggle nodeId={nodeId} skinConfig={skinConfig} />
@@ -732,6 +737,146 @@ function SingleOutputSidePicker({
   );
 }
 
+/** Docking (design doc §5.6, 2026-09-09 — "attaching the node without
+ * needing to add a path in between ... it will act and behave like a
+ * single unit"): shown only when this node is one end of a `dock`
+ * edge (created by FluxCanvas's drag-to-snap gesture, App.tsx's
+ * handleDockNodes). Renders nothing for every ordinary node — the
+ * common case — so it's always safe to drop into NodeProperties
+ * unconditionally rather than gating it per-kind. Falcon, 2026-09-09
+ * ("there will be something in between the node to indicate that
+ * they are docked and on the properties panel just toggle detach (if
+ * docked) to detach to prevent accidental dragging"): Detach lives
+ * here rather than as a drag-apart gesture specifically so it can't
+ * happen by accident. "Flip direction" isn't something Falcon asked
+ * for directly, but handleDockNodes' own doc comment flags that its
+ * source/target default (stationary = source) is a documented guess,
+ * not an inferred intent — this is the one-click fix for when it
+ * guessed the wrong way (e.g. a Gate docked as a Silo's out-gate when
+ * an in-gate was meant), without needing to detach and redo the drag.
+ *
+ * Direct-mutation-plus-local-useState-mirror, same convention as
+ * LockToggle just below — a click here changes graph/floorLayout/
+ * skinConfig (the real stores) and bumps a local counter purely to
+ * make THIS component re-render afterward (nothing else about
+ * NodeProperties depends on React state for a store mutation like
+ * this one). */
+function DockSection({
+  nodeId,
+  graph,
+  floorLayout,
+  skinConfig,
+}: {
+  nodeId: string;
+  graph: GraphModel;
+  floorLayout: FloorLayout;
+  skinConfig: SkinConfig;
+}) {
+  const [, forceUpdate] = useState(0);
+  // Keyed off `docked`, not `edgeKind === 'dock'` (design doc §5.7) —
+  // a Silo↔Sensor dock is `edgeKind: 'signal'` (it's a copper/watch
+  // connection, never a real item edge) but is still `docked: true`,
+  // so it still gets this section. See types.ts's `docked` doc
+  // comment for why the two fields are orthogonal.
+  const dockEdge = graph.getAllEdges().find((e) => e.docked && (e.source === nodeId || e.target === nodeId));
+  if (!dockEdge) return null;
+
+  const isSource = dockEdge.source === nodeId;
+  const partnerId = isSource ? dockEdge.target : dockEdge.source;
+  const partnerNode = graph.getNode(partnerId);
+
+  function flipDirection(): void {
+    const anchors = floorLayout.getEdgeAnchors(dockEdge!.id);
+    if (!anchors) return;
+    const oldSourceId = dockEdge!.source;
+    const oldTargetId = dockEdge!.target;
+    const newSourceNode = graph.getNode(oldTargetId);
+    const newTargetNode = graph.getNode(oldSourceId);
+    if (!newSourceNode || !newTargetNode) return;
+
+    // Same silent-rejection convention as every other wiring check —
+    // excludes the dock edge itself from its own pre-flip counts,
+    // since flipping doesn't add a connection, it repurposes this one.
+    const sourceCap = getPortCapacity(newSourceNode.kind);
+    const targetCap = getPortCapacity(newTargetNode.kind);
+    const otherOutputsFromNewSource = graph.outputEdges(oldTargetId).filter((e) => e.id !== dockEdge!.id).length;
+    const otherInputsToNewTarget = graph.inputEdges(oldSourceId).filter((e) => e.id !== dockEdge!.id).length;
+    if (sourceCap.maxOutputs !== undefined && otherOutputsFromNewSource >= sourceCap.maxOutputs) return;
+    if (targetCap.maxInputs !== undefined && otherInputsToNewTarget >= targetCap.maxInputs) return;
+
+    const skin = skinConfig.getEdgeSkin(dockEdge!.id);
+    const oldEdgeKind = dockEdge!.edgeKind;
+    graph.removeEdge(dockEdge!.id);
+    floorLayout.removeEdgeCurve(dockEdge!.id);
+    skinConfig.removeEdge(dockEdge!.id);
+
+    const newId = `${dockEdge!.id}-flip-${Date.now()}`;
+    graph.addEdge({
+      id: newId,
+      source: oldTargetId,
+      target: oldSourceId,
+      sourcePort: 0,
+      targetPort: 0,
+      flowRate: dockEdge!.flowRate,
+      active: dockEdge!.active,
+      // Preserve whatever edgeKind this dock actually had (design doc
+      // §5.7) — a Silo↔Sensor dock is 'signal', not 'dock' (see
+      // types.ts's `docked` doc comment); flipping it must never
+      // silently turn a copper/watch connection into a real item edge.
+      edgeKind: oldEdgeKind,
+      docked: true,
+    });
+    floorLayout.setEdgeCurve(newId, oldTargetId, oldSourceId, 0, {
+      sourceAnchor: anchors.targetAnchor,
+      targetAnchor: anchors.sourceAnchor,
+    });
+    skinConfig.setEdgeSkin(newId, skin);
+    forceUpdate((n) => n + 1);
+  }
+
+  function detach(): void {
+    graph.removeEdge(dockEdge!.id);
+    floorLayout.removeEdgeCurve(dockEdge!.id);
+    skinConfig.removeEdge(dockEdge!.id);
+    forceUpdate((n) => n + 1);
+  }
+
+  // A Silo↔Sensor dock isn't item flow at all (design doc §5.7) — say
+  // "watching"/"watched by" for that pair instead of the generic
+  // "feed"/"from" wording, which reads like a physical item edge.
+  const node = graph.getNode(nodeId);
+  const isSensorWatchDock = node?.kind === 'sensor' || partnerNode?.kind === 'sensor';
+  const relationLabel = isSensorWatchDock
+    ? node?.kind === 'sensor'
+      ? 'watching'
+      : 'watched by'
+    : isSource
+      ? 'to feed'
+      : 'from';
+
+  return (
+    <div>
+      <div style={sectionTitleStyle}>Dock</div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5, marginBottom: 6 }}>
+        Docked {relationLabel} {partnerNode?.kind ?? 'a node'} ({partnerId}) — moves as one unit; drag either one and
+        both stay joined.
+      </p>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button type="button" onClick={flipDirection} style={smallButtonStyle}>
+          Flip direction
+        </button>
+        <button
+          type="button"
+          onClick={detach}
+          style={{ ...smallButtonStyle, color: theme.danger, borderColor: theme.dangerSoft }}
+        >
+          Detach
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LockToggle({ nodeId, skinConfig }: { nodeId: string; skinConfig: SkinConfig }) {
   const [locked, setLocked] = useState(skinConfig.getNodeLocked(nodeId));
   return (
@@ -808,8 +953,48 @@ function SourceFields({
   // registry's current value for the input, same "direct mutation +
   // local useState mirror" convention as the Locked checkbox below.
   const [size, setSize] = useState(() => objectRegistry.resolve(itemType).size);
+
+  // Falcon, 2026-09-09 ("off by default ... unless toggled on" /
+  // "auto deactivate on the source node once the path is filled" /
+  // resume "once theres room"): `active`/`autoDeactivated` live on
+  // node.config (see SimEngine.sourceActivationGate's own doc comment
+  // for why), and SimEngine can flip them on its own mid-run -- this
+  // poll mirrors EdgeLogicFields' speed-lock resync exactly, so the
+  // checkbox and hint text stay accurate whether a person toggled it
+  // or the sim auto-paused/auto-resumed it, without needing this panel
+  // open to trigger a refresh.
+  const [active, setActive] = useState(node.config.active !== false);
+  const [autoDeactivated, setAutoDeactivated] = useState(node.config.autoDeactivated === true);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setActive(node.config.active !== false);
+      setAutoDeactivated(node.config.autoDeactivated === true);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [node]);
+
   return (
     <>
+      <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={active}
+          onChange={(e) => {
+            const v = e.target.checked;
+            setActive(v);
+            setAutoDeactivated(false);
+            onChange({ active: v, autoDeactivated: false });
+          }}
+        />
+        Active (spawning)
+      </label>
+      <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
+        {active
+          ? "Spawning normally. If its path fills up (no room left under item spacing), it'll pause itself automatically."
+          : autoDeactivated
+            ? "Auto-paused — its path filled up. It'll resume on its own once there's room, or you can flip it back on here."
+            : 'Not spawning. Turn this on to let it produce items.'}
+      </div>
       <div style={rowStyle}>
         <label style={labelStyle}>Spawn cooldown (logic-seconds)</label>
         <input
@@ -1158,6 +1343,157 @@ function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
           }}
         />
       </div>
+    </>
+  );
+}
+
+/** Gate (design doc §4.8, 2026-09-09) — nothing in its OWN config to
+ * edit; its in/out role comes from wiring, and whether it opens comes
+ * entirely from a connected Sensor's signal. The one thing worth
+ * surfacing here is the "mandatory Sensor connection" rule itself
+ * (design doc §4.6's silent-rejection convention, applied to a read
+ * rather than a write) -- `hasSignalInput` is the exact same pure
+ * check the Logic layer itself relies on for correctness (gate.ts),
+ * just re-used here to warn a person building the graph rather than
+ * to change behavior. */
+function GateFields({ nodeId, graph }: { nodeId: string; graph: GraphModel }) {
+  const connected = hasSignalInput(nodeId, graph.getAllEdges(), graph.getAllNodes());
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
+        Gate has nothing of its own to configure. It forwards an arriving item immediately while open, and refuses
+        it while closed — only a Sensor wired to this Gate with an "Edge kind: Signal" connection can open it (see
+        that edge's own Logic section).
+      </p>
+      {connected ? (
+        <p style={{ fontSize: 11, color: theme.success }}>✓ A Sensor is wired in — this Gate can open.</p>
+      ) : (
+        <p style={{ fontSize: 11, color: theme.danger }}>
+          ⚠ No active Sensor connected via a Signal edge — this Gate can never open.
+        </p>
+      )}
+    </div>
+  );
+}
+
+const SENSOR_COMPARATOR_LABEL: Record<string, string> = {
+  gte: '≥ (at least)',
+  lte: '≤ (at most)',
+  gt: '> (more than)',
+  lt: '< (less than)',
+  eq: '= (exactly)',
+};
+
+/** Sensor (design doc §4.8; auto-watch extended §5.7, 2026-09-09
+ * follow-up — "the sensor nodes should auto-watch the node it is
+ * connected to or docked to") — v1 condition config: which node(s) to
+ * watch, and the shared comparator/threshold applied to each one's
+ * queue length (the only metric implemented so far — see sensor.ts's
+ * own doc comment).
+ *
+ * Fully automatic while connected (Falcon's own pick over "auto-filled
+ * but overridable"): the moment this Sensor has at least one active
+ * incoming copper/signal edge (hand-drawn OR docked — sensor.ts's
+ * watchedNodeIds doesn't distinguish), that wiring is the ONLY thing
+ * that decides what's watched — the manual dropdown is replaced with a
+ * plain read-out of the live-wired node(s), and stays that way until
+ * every such edge is gone. The dropdown reappears, unchanged from
+ * before, the moment this Sensor has none — so an older graph built
+ * before this existed keeps behaving exactly as it always did. */
+function SensorFields({
+  node,
+  graph,
+  onChange,
+}: {
+  node: NodeDef;
+  graph: GraphModel;
+  onChange: (fields: Record<string, unknown>) => void;
+}) {
+  const [watchNodeId, setWatchNodeId] = useState(
+    typeof node.config.watchNodeId === 'string' ? node.config.watchNodeId : '',
+  );
+  const [comparator, setComparator] = useState(
+    typeof node.config.comparator === 'string' ? node.config.comparator : 'gte',
+  );
+  const [threshold, setThreshold] = useState(typeof node.config.threshold === 'number' ? node.config.threshold : 0);
+
+  const candidates = graph.getAllNodes().filter((n) => n.id !== node.id);
+  const liveWatched = watchedNodeIds(graph.inputEdges(node.id));
+
+  return (
+    <>
+      {liveWatched.length > 0 ? (
+        <div style={rowStyle}>
+          <label style={labelStyle}>Watch node (its queue length)</label>
+          <p style={{ fontSize: 12, color: theme.text2, lineHeight: 1.5, margin: 0 }}>
+            {liveWatched
+              .map((id) => {
+                const n = graph.getNode(id);
+                return `${id}${n ? ` (${n.kind})` : ''}`;
+              })
+              .join(', ')}
+          </p>
+          <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: 2 }}>
+            Auto-watching whatever this Sensor is wired or docked to — a copper wire's direction decides this
+            (ingoing = watched). Detach or delete that connection to pick a node manually again.
+          </p>
+        </div>
+      ) : (
+        <div style={rowStyle}>
+          <label style={labelStyle}>Watch node (its queue length)</label>
+          <select
+            value={watchNodeId}
+            style={inputStyle}
+            onChange={(e) => {
+              setWatchNodeId(e.target.value);
+              onChange({ watchNodeId: e.target.value || undefined, metric: 'queueLength' });
+            }}
+          >
+            <option value="">— none selected —</option>
+            {candidates.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.id} ({n.kind})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div style={rowStyle}>
+        <label style={labelStyle}>Condition</label>
+        <select
+          value={comparator}
+          style={inputStyle}
+          onChange={(e) => {
+            setComparator(e.target.value);
+            onChange({ comparator: e.target.value });
+          }}
+        >
+          {Object.entries(SENSOR_COMPARATOR_LABEL).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Threshold</label>
+        <input
+          type="number"
+          value={threshold}
+          style={inputStyle}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setThreshold(v);
+            onChange({ threshold: v });
+          }}
+        />
+      </div>
+      <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: -4 }}>
+        Fires a signal every tick, re-evaluated live: {liveWatched.length > 1 ? 'ANY watched node\'s' : 'watched'}{' '}
+        queue length {SENSOR_COMPARATOR_LABEL[comparator]} {threshold}. Wire this Sensor to a Gate with an "Edge
+        kind: Signal" edge (see that edge's Logic section) — the Gate stays open for as long as this condition
+        holds.
+      </p>
     </>
   );
 }
@@ -1859,6 +2195,8 @@ function EdgeLogicFields({
   const [flowRate, setFlowRate] = useState(edge.flowRate);
   const [active, setActive] = useState(edge.active);
   const [speedLocked, setSpeedLocked] = useState(edge.speedLocked ?? false);
+  const [respectItemSize, setRespectItemSize] = useState(edge.respectItemSize !== false);
+  const [edgeKind, setEdgeKind] = useState<'item' | 'signal'>(edge.edgeKind === 'signal' ? 'signal' : 'item');
 
   const pathLength = floorLayout.getEdgeCurve(edge.id)?.totalLength ?? 0;
   const [speed, setSpeed] = useState(flowRate * pathLength);
@@ -1912,63 +2250,113 @@ function EdgeLogicFields({
         </div>
       </div>
       <div style={rowStyle}>
-        <label style={labelStyle}>Speed (world units / second)</label>
-        <input
-          type="number"
-          min={0}
-          step={1}
-          value={Math.round(speed * 100) / 100}
-          style={inputStyle}
-          disabled={pathLength <= 0}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            setSpeed(v);
-            if (pathLength > 0) {
-              const nextFlowRate = v / pathLength;
-              setFlowRate(nextFlowRate);
-              graph.setEdgeFlowRate(edge.id, nextFlowRate);
-              if (speedLocked) graph.setEdgeSpeedLock(edge.id, true, v);
-            }
-          }}
-        />
-      </div>
-      <label
-        style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: -4 }}
-      >
-        <input
-          type="checkbox"
-          checked={speedLocked}
-          disabled={pathLength <= 0}
-          onChange={(e) => {
-            const locked = e.target.checked;
-            setSpeedLocked(locked);
-            graph.setEdgeSpeedLock(edge.id, locked, locked ? speed : undefined);
-          }}
-        />
-        Lock apparent speed
-      </label>
-      <div style={rowStyle}>
-        <label style={labelStyle}>Flow rate (progress / logic-second)</label>
-        <input
-          type="number"
-          min={0}
-          step={0.01}
-          value={flowRate}
+        <label style={labelStyle}>Edge kind (design doc \u00a75.5)</label>
+        <select
+          value={edgeKind}
           style={inputStyle}
           onChange={(e) => {
-            const v = Number(e.target.value);
-            setFlowRate(v);
-            setSpeed(v * pathLength);
-            graph.setEdgeFlowRate(edge.id, v);
-            if (speedLocked && pathLength > 0) graph.setEdgeSpeedLock(edge.id, true, v * pathLength);
+            const v = e.target.value as 'item' | 'signal';
+            setEdgeKind(v);
+            graph.setEdgeKind(edge.id, v);
           }}
-        />
+        >
+          <option value="item">Item (physical, default)</option>
+          <option value="signal">Signal (Sensor \u2192 Gate pulse)</option>
+        </select>
       </div>
-      <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
-        {speedLocked
-          ? "This path's speed stays pinned as it's resized \u2014 flow rate above is kept in sync automatically."
-          : "Speed is converted to flow rate using this path's current length \u2014 if you drag a connected node afterward, the path's length changes but flow rate doesn't auto-adjust, so re-enter speed to keep it pinned (or turn on Lock apparent speed above)."}
-      </div>
+      {edgeKind === 'signal' ? (
+        <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: -4, marginBottom: 10 }}>
+          A signal edge carries a Sensor's on/off condition, not a physical item \u2014 speed/flow rate don't apply.
+          Only "Active" below still matters: an inactive signal edge is skipped entirely, same as a real Sensor
+          connection that doesn't exist.
+        </p>
+      ) : (
+        <>
+          <div style={rowStyle}>
+            <label style={labelStyle}>Speed (world units / second)</label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={Math.round(speed * 100) / 100}
+              style={inputStyle}
+              disabled={pathLength <= 0}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setSpeed(v);
+                if (pathLength > 0) {
+                  const nextFlowRate = v / pathLength;
+                  setFlowRate(nextFlowRate);
+                  graph.setEdgeFlowRate(edge.id, nextFlowRate);
+                  if (speedLocked) graph.setEdgeSpeedLock(edge.id, true, v);
+                }
+              }}
+            />
+          </div>
+          <label
+            style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: -4 }}
+          >
+            <input
+              type="checkbox"
+              checked={speedLocked}
+              disabled={pathLength <= 0}
+              onChange={(e) => {
+                const locked = e.target.checked;
+                setSpeedLocked(locked);
+                graph.setEdgeSpeedLock(edge.id, locked, locked ? speed : undefined);
+              }}
+            />
+            Lock apparent speed
+          </label>
+          <div style={rowStyle}>
+            <label style={labelStyle}>Flow rate (progress / logic-second)</label>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={flowRate}
+              style={inputStyle}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setFlowRate(v);
+                setSpeed(v * pathLength);
+                graph.setEdgeFlowRate(edge.id, v);
+                if (speedLocked && pathLength > 0) graph.setEdgeSpeedLock(edge.id, true, v * pathLength);
+              }}
+            />
+          </div>
+          <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
+            {speedLocked
+              ? "This path's speed stays pinned as it's resized \u2014 flow rate above is kept in sync automatically."
+              : "Speed is converted to flow rate using this path's current length \u2014 if you drag a connected node afterward, the path's length changes but flow rate doesn't auto-adjust, so re-enter speed to keep it pinned (or turn on Lock apparent speed above)."}
+          </div>
+          {edge.edgeKind !== 'dock' && (
+            <>
+              <label
+                style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: -4 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={respectItemSize}
+                  disabled={pathLength <= 0}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setRespectItemSize(enabled);
+                    graph.setEdgeItemSpacing(edge.id, enabled);
+                    if (enabled && pathLength > 0) graph.setEdgePathLength(edge.id, pathLength);
+                  }}
+                />
+                Respect item size (no overlap)
+              </label>
+              <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
+                {respectItemSize
+                  ? "Items on this path keep at least their own size of clearance from whichever item is ahead of them \u2014 they queue like physical objects instead of stacking (on by default)."
+                  : 'Turned off for this path \u2014 items can catch up to and visually stack on top of one another. Check this back on to keep them spaced out by size again.'}
+              </div>
+            </>
+          )}
+        </>
+      )}
       <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
         <input
           type="checkbox"
@@ -2009,6 +2397,12 @@ function EdgeSkinFields({ edgeId, skinConfig }: { edgeId: string; skinConfig: Sk
           <option value="conveyor">Conveyor</option>
           <option value="glassTube">Glass tube</option>
           <option value="trace">Trace</option>
+          {/* Copper (design doc §5.5) isn't offered as a free pick --
+              App.tsx applies it automatically to a Sensor's signal
+              connections. Listed only so a copper edge's OWN dropdown
+              shows its real current value instead of falling through
+              to nothing selected. */}
+          {style === 'copper' && <option value="copper">Copper (auto — Sensor signal path)</option>}
         </select>
       </div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>

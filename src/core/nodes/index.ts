@@ -7,8 +7,12 @@ import { mergerBehavior } from './merger';
 import { sorterBehavior } from './sorter';
 import { mixerBehavior } from './mixer';
 import { bufferBehavior } from './buffer';
+import { gateBehavior } from './gate';
+import { sensorBehavior } from './sensor';
 
 export * from './contract';
+export { hasSignalInput } from './gate';
+export { watchedNodeIds } from './sensor';
 
 /**
  * Node-kind behavior registry — SimEngine dispatches to this by
@@ -23,4 +27,6 @@ export const nodeHandlers: Partial<Record<NodeDef['kind'], NodeBehavior>> = {
   sorter: sorterBehavior,
   mixer: mixerBehavior,
   buffer: bufferBehavior,
+  gate: gateBehavior,
+  sensor: sensorBehavior,
 };

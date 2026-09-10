@@ -106,4 +106,42 @@ const buffer: IconDrawFn = (ctx, cx, cy, size) => {
   }
 };
 
-export const nodeIcons = { source, sink, distributor, merger, sorter, mixer, buffer } as const;
+/** Gate (design doc §4.8) — a classic pipe-valve "bowtie": two
+ * triangles pointing at each other, meeting at the center. Reads as a
+ * valve regardless of which of its 2 physical/signal ports face which
+ * direction (a Gate's in/out role comes from wiring, not config). */
+const gate: IconDrawFn = (ctx, cx, cy, size) => {
+  const s = size * 0.55;
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.75, cy - s * 0.5);
+  ctx.lineTo(cx, cy);
+  ctx.lineTo(cx - s * 0.75, cy + s * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + s * 0.75, cy - s * 0.5);
+  ctx.lineTo(cx, cy);
+  ctx.lineTo(cx + s * 0.75, cy + s * 0.5);
+  ctx.closePath();
+  ctx.fill();
+};
+
+/** Sensor (design doc §4.8 — "like a neuron"): a small dot with two
+ * radiating pulse arcs, the familiar radar/signal-strength glyph. */
+const sensor: IconDrawFn = (ctx, cx, cy, size) => {
+  const dotY = cy + size * 0.25;
+  const r = size * 0.16;
+  ctx.beginPath();
+  ctx.arc(cx, dotY, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineWidth = Math.max(1.5, size * 0.12);
+  ctx.lineCap = 'round';
+  for (let i = 1; i <= 2; i++) {
+    ctx.beginPath();
+    ctx.arc(cx, dotY, r + i * size * 0.22, -Math.PI * 0.85, -Math.PI * 0.15);
+    ctx.stroke();
+  }
+};
+
+export const nodeIcons = { source, sink, distributor, merger, sorter, mixer, buffer, gate, sensor } as const;

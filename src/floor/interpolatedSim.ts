@@ -60,8 +60,12 @@ export class InterpolatedSimDriver {
    * timestamp (e.g. from requestAnimationFrame). Advances the sim by
    * zero or more fixed ticks (dt = 1 "logic second" per tick), each
    * tick's dt scaled so `flowRate` reads as "progress per logic
-   * second" regardless of tickIntervalMs. */
-  update(nowMs: number): void {
+   * second" regardless of tickIntervalMs.
+   *
+   * `itemSizeOf` (Falcon, 2026-09-09 — no-overlap spacing): passed
+   * straight through to the engine's own tick, unchanged, every fixed
+   * tick this call advances. See SimEngine.tick's doc comment. */
+  update(nowMs: number, itemSizeOf?: (itemType: string) => number): void {
     if (this.lastNow === null) {
       this.lastNow = nowMs;
       return;
@@ -79,7 +83,7 @@ export class InterpolatedSimDriver {
 
     while (this.accumulatorMs >= this.tickIntervalMs) {
       this.captureInto(this.prevSnapshot);
-      this.engine.tick(1);
+      this.engine.tick(1, itemSizeOf);
       this.captureInto(this.currSnapshot);
       this.accumulatorMs -= this.tickIntervalMs;
     }
