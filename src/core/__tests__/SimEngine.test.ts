@@ -258,21 +258,25 @@ describe('SimEngine: no-overlap item spacing', () => {
 });
 
 /**
- * Source auto-activation (design doc §5.9 follow-up, 2026-09-09 —
- * Falcon: "on source node's properties i want it off by default
- * meaning its not spawning any item unless toggled on or activate
- * even its connected by a path ... i want to implement an auto
- * deactivate on the source node once the path is filled", then,
- * confirming, "auto[-resume] ... once theres room"). Manual on/off
- * lives in `node.config.active` (undefined means the OLD always-on
- * behavior — only App.tsx's defaultConfigFor writes `active: false`
- * for a BRAND NEW source, so existing saves are untouched);
- * `autoDeactivated` distinguishes "the system paused this" (eligible
- * to auto-resume) from "a person paused this" (stays off until they
- * say otherwise) — see SimEngine.sourceActivationGate's own doc
- * comment.
+ * Source manual active switch (design doc §5.9 follow-up, 2026-09-09
+ * — Falcon: "on source node's properties i want it off by default
+ * meaning its not spawning any item unless toggled on", then
+ * REDESIGNED 2026-09-10 after the auto-deactivate/auto-resume half of
+ * that same feature turned out to be exactly what read as "blinking":
+ * Falcon, watching a recorded clip of the checkbox flipping on its
+ * own every couple seconds — "once activated it will not deactivate
+ * on its own ... or maybe i need gate node for this" — picked making
+ * `active` a pure manual switch over layering more tuning onto the
+ * auto-toggle (a same-day hysteresis attempt, since removed, cut the
+ * flip rate but never eliminated it — see git history / SimEngine's
+ * own comments). SimEngine now only ever reads `active` (undefined
+ * still means the OLD pre-this-feature default of "always try," so
+ * existing saves stay untouched) and never writes it — see
+ * SimEngine.sourceCanSpawnThisTick's own doc comment for the full
+ * reasoning. `autoDeactivated` is retired: no longer read or written
+ * anywhere in the codebase.
  */
-describe('SimEngine: source auto-activation', () => {
+describe('SimEngine: source manual active switch', () => {
   function buildActivationGraph(sourceConfig?: Record<string, unknown>) {
     const graph = new GraphModel();
     graph.addNode({ id: 'src', kind: 'source', config: { cooldown: 0, itemType: 'widget', ...sourceConfig } });
@@ -314,49 +318,120 @@ describe('SimEngine: source auto-activation', () => {
     expect(engine.getNodeState('src')?.spawnedCount ?? 0).toBe(0);
   });
 
-  it('auto-deactivates once its path is full, marking it as the system’s doing', () => {
+  it('never gets switched off by the system, even once its path is completely full for a long time', () => {
     const graph = buildActivationGraph({ active: true });
     const engine = new SimEngine(graph);
 
     for (let t = 0; t < 5; t++) engine.tick(1, itemSizeOf);
-
     expect(engine.getItemsInFlight()).toHaveLength(1); // only the one item that fit
-    expect(graph.getNode('src')?.config.active).toBe(false);
-    expect(graph.getNode('src')?.config.autoDeactivated).toBe(true);
+
+    // The actual regression this test guards against: the OLD code
+    // wrote `active: false, autoDeactivated: true` right here. Keep
+    // running for a long time with the path staying full (nothing
+    // downstream to drain it) and confirm the switch never moves.
+    for (let t = 0; t < 2000; t++) engine.tick(1, itemSizeOf);
+    expect(graph.getNode('src')?.config.active).toBe(true);
+    expect(graph.getNode('src')?.config.autoDeactivated).toBeUndefined();
   });
 
-  it('auto-resumes on its own once room frees up, with no action from a person', () => {
+  it('quietly resumes spawning once room frees up, without the switch ever having moved', () => {
     const graph = buildActivationGraph({ active: true, cooldown: 0 });
     const engine = new SimEngine(graph);
 
-    for (let t = 0; t < 5; t++) engine.tick(1, itemSizeOf); // fills the path, auto-deactivates
-    expect(graph.getNode('src')?.config.autoDeactivated).toBe(true);
-
     // Room-for-exactly-one with cooldown 0 settles into a repeating
-    // fill/deactivate/deliver/resume cycle rather than a single
-    // one-shot resume (correct for a bottleneck this tight) — sample
-    // every tick for "was it ever resumed" rather than asserting one
-    // final snapshot.
-    let everResumed = false;
+    // fill/hold/deliver/spawn-again cycle — real throughput despite
+    // the tight bottleneck, and `active` should read `true` at every
+    // single sample along the way, not just "was ever true again."
+    let everFalse = false;
     for (let t = 0; t < 15000; t++) {
       engine.tick(1, itemSizeOf);
-      if (graph.getNode('src')?.config.active !== false) everResumed = true;
+      if (graph.getNode('src')?.config.active === false) everFalse = true;
     }
 
-    expect(everResumed).toBe(true);
+    expect(everFalse).toBe(false);
     expect(engine.getNodeState('snk')?.consumedCount ?? 0).toBeGreaterThanOrEqual(1);
     expect(engine.getNodeState('src')?.spawnedCount ?? 0).toBeGreaterThan(1);
   });
 
-  it('a manual off is never auto-resumed, even once the path is completely empty again', () => {
+  it('a manual off stays off for as long as it runs, however empty the path gets', () => {
     const graph = buildActivationGraph({ active: true, cooldown: 0 });
     const engine = new SimEngine(graph);
 
     engine.tick(1, itemSizeOf); // spawns the one item that fits
-    graph.updateNodeConfig('src', { active: false, autoDeactivated: false }); // a person turns it off themselves
+    graph.updateNodeConfig('src', { active: false }); // a person turns it off themselves
 
     for (let t = 0; t < 15000; t++) engine.tick(1, itemSizeOf); // plenty of time for the item to clear
 
     expect(graph.getNode('src')?.config.active).toBe(false);
+  });
+});
+
+/**
+ * Spawn limit (2026-09-10 follow-up — Falcon: "i want the source node
+ * to have a set or limited spawn feature like a switch like it only
+ * outputs a user defined number of spawns or limited unlike the
+ * default that is unlimited"): a 4th independent gate alongside
+ * active/signal/room-to-spawn, all ANDed together in
+ * SimEngine.sourceCanSpawnThisTick.
+ */
+describe('SimEngine: source spawn limit', () => {
+  function buildLimitGraph(sourceConfig?: Record<string, unknown>) {
+    const graph = new GraphModel();
+    graph.addNode({ id: 'src', kind: 'source', config: { cooldown: 0, itemType: 'widget', ...sourceConfig } });
+    graph.addNode({ id: 'snk', kind: 'sink', config: {} });
+    // Instant, unbottlenecked path (no pathLength/spacing involved) so
+    // only the spawn-limit gate itself is under test — every spawned
+    // item is consumed the same or next tick, never backing anything up.
+    graph.addEdge({ id: 'e1', source: 'src', target: 'snk', sourcePort: 0, targetPort: 0, flowRate: 1000, active: true });
+    return graph;
+  }
+
+  it('spawnLimitEnabled off (the default) spawns without limit — old saves and freshly placed sources are untouched', () => {
+    const graph = buildLimitGraph();
+    const engine = new SimEngine(graph);
+
+    for (let t = 0; t < 50; t++) engine.tick(1);
+
+    expect(engine.getNodeState('src')?.spawnedCount).toBe(50);
+  });
+
+  it('stops for good exactly at the configured limit, however much longer it keeps running', () => {
+    const graph = buildLimitGraph({ spawnLimitEnabled: true, spawnLimit: 5 });
+    const engine = new SimEngine(graph);
+
+    for (let t = 0; t < 100; t++) engine.tick(1);
+
+    expect(engine.getNodeState('src')?.spawnedCount).toBe(5);
+    expect(engine.getNodeState('snk')?.consumedCount).toBe(5);
+  });
+
+  it('a limit of 0 spawns nothing at all, from the very first tick', () => {
+    const graph = buildLimitGraph({ spawnLimitEnabled: true, spawnLimit: 0 });
+    const engine = new SimEngine(graph);
+
+    for (let t = 0; t < 20; t++) engine.tick(1);
+
+    expect(engine.getNodeState('src')?.spawnedCount ?? 0).toBe(0);
+  });
+
+  it('is ANDed with the manual active switch — active: false still blocks spawning even with room left under the limit', () => {
+    const graph = buildLimitGraph({ spawnLimitEnabled: true, spawnLimit: 5, active: false });
+    const engine = new SimEngine(graph);
+
+    for (let t = 0; t < 20; t++) engine.tick(1);
+
+    expect(engine.getNodeState('src')?.spawnedCount ?? 0).toBe(0);
+  });
+
+  it('toggling the switch back off after the limit already stopped it does not retroactively unstick anything on its own — turning spawnLimitEnabled off resumes unlimited spawning', () => {
+    const graph = buildLimitGraph({ spawnLimitEnabled: true, spawnLimit: 3 });
+    const engine = new SimEngine(graph);
+
+    for (let t = 0; t < 20; t++) engine.tick(1);
+    expect(engine.getNodeState('src')?.spawnedCount).toBe(3);
+
+    graph.updateNodeConfig('src', { spawnLimitEnabled: false });
+    for (let t = 0; t < 20; t++) engine.tick(1);
+    expect(engine.getNodeState('src')?.spawnedCount).toBe(23); // 3 + 20 more, unlimited again
   });
 });

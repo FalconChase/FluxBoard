@@ -405,6 +405,151 @@ const personOutline: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
   ctx.restore();
 };
 
+/** People — a pasted-in three-person cluster glyph (Falcon, 2026-09-10,
+ * titled "people" in its source SVG), filled "currentColor"
+ * fill-rule="evenodd" (viewBox 0 0 20 20), four paths -- two are
+ * ring-shaped heads needing evenodd to punch their hole (same pattern
+ * cityWorker's head ring above already uses), the other two are thin
+ * connecting shoulder/body curves. All four filled with the same
+ * evenodd rule the source `<g>` declared for its whole group. */
+const PEOPLE_PATHS = [
+  new Path2D('M5 9a2 2 0 1 0 0-4a2 2 0 0 0 0 4m0 1a3 3 0 1 0 0-6a3 3 0 0 0 0 6'),
+  new Path2D(
+    'M3.854 8.896a.5.5 0 0 1 0 .708l-.338.337A3.47 3.47 0 0 0 2.5 12.394v1.856a.5.5 0 1 1-1 0v-1.856a4.47 4.47 0 0 1 1.309-3.16l.337-.338a.5.5 0 0 1 .708 0m11.792-.3a.5.5 0 0 0 0 .708l.338.337A3.47 3.47 0 0 1 17 12.094v2.156a.5.5 0 0 0 1 0v-2.156a4.47 4.47 0 0 0-1.309-3.16l-.337-.338a.5.5 0 0 0-.708 0',
+  ),
+  new Path2D(
+    'M14 9a2 2 0 1 1 0-4a2 2 0 0 1 0 4m0 1a3 3 0 1 1 0-6a3 3 0 0 1 0 6m-4.5 3.25a2.5 2.5 0 0 0-2.5 2.5v1.3a.5.5 0 0 1-1 0v-1.3a3.5 3.5 0 0 1 7 0v1.3a.5.5 0 1 1-1 0v-1.3a2.5 2.5 0 0 0-2.5-2.5',
+  ),
+  new Path2D('M9.5 11.75a2 2 0 1 0 0-4a2 2 0 0 0 0 4m0 1a3 3 0 1 0 0-6a3 3 0 0 0 0 6'),
+];
+const people: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 20;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-10, -10);
+  for (const p of PEOPLE_PATHS) ctx.fill(p, 'evenodd');
+  ctx.restore();
+};
+
+/** Food — a pasted-in glyph (Falcon, 2026-09-10, titled
+ * "food-20-regular" in its source SVG), filled "currentColor"
+ * (viewBox 0 0 20 20), a single path. */
+const FOOD_PATH = new Path2D(
+  'M4.67 2c-.624 0-1.175.438-1.29 1.068C3.232 3.886 3 5.342 3 6.5c0 1.231.636 2.313 1.595 2.936c.271.177.405.405.405.6v.41q0 .027-.003.054c-.027.26-.151 1.429-.268 2.631C4.614 14.316 4.5 15.581 4.5 16a2 2 0 1 0 4 0c0-.42-.114-1.684-.229-2.869a302 302 0 0 0-.268-2.63L8 10.446v-.41c0-.196.134-.424.405-.6A3.5 3.5 0 0 0 10 6.5c0-1.158-.232-2.614-.38-3.432A1.305 1.305 0 0 0 8.33 2c-.34 0-.65.127-.884.336A1.5 1.5 0 0 0 6.5 2c-.359 0-.688.126-.946.336A1.32 1.32 0 0 0 4.671 2M6 3.5a.5.5 0 0 1 1 0v3a.5.5 0 0 0 1 0V3.33A.33.33 0 0 1 8.33 3c.157 0 .28.108.306.247C8.783 4.06 9 5.439 9 6.5a2.5 2.5 0 0 1-1.14 2.098c-.439.285-.86.786-.86 1.438v.41q0 .08.008.16c.028.258.151 1.424.268 2.622c.118 1.215.224 2.415.224 2.772a1 1 0 1 1-2 0c0-.357.106-1.557.224-2.772c.117-1.198.24-2.364.268-2.622q.008-.08.008-.16v-.41c0-.652-.421-1.153-.86-1.438A2.5 2.5 0 0 1 4 6.5c0-1.06.217-2.44.364-3.253A.305.305 0 0 1 4.671 3A.33.33 0 0 1 5 3.33V6.5a.5.5 0 0 0 1 0zm5 3A4.5 4.5 0 0 1 15.5 2a.5.5 0 0 1 .5.5v6.978l.02.224a626 626 0 0 1 .228 2.696c.124 1.507.252 3.161.252 3.602a2 2 0 1 1-4 0c0-.44.128-2.095.252-3.602c.062-.761.125-1.497.172-2.042l.03-.356H12.5A1.5 1.5 0 0 1 11 8.5zm2.998 3.044l-.021.245l-.057.653c-.047.544-.11 1.278-.172 2.038c-.126 1.537-.248 3.132-.248 3.52a1 1 0 1 0 2 0c0-.388-.122-1.983-.248-3.52a565 565 0 0 0-.229-2.691l-.021-.244v-.001L15 9.5V3.035A3.5 3.5 0 0 0 12 6.5v2a.5.5 0 0 0 .5.5h1a.5.5 0 0 1 .498.544',
+);
+const food: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 20;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-10, -10);
+  ctx.fill(FOOD_PATH);
+  ctx.restore();
+};
+
+/** Travel — a pasted-in glyph (Falcon, 2026-09-10, titled "travel" in
+ * its source SVG), filled "currentColor" (viewBox 0 0 24 24), a
+ * single path. */
+const TRAVEL_PATH = new Path2D(
+  'M12 4H5a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3l-1 1v1h1l2-2.03L9 18v-5H4V6h9v2h2V7a3 3 0 0 0-3-3M5 14a1 1 0 0 1 1 1a1 1 0 0 1-1 1a1 1 0 0 1-1-1a1 1 0 0 1 1-1m15.57-4.34c-.14-.4-.52-.66-.97-.66h-7.19c-.46 0-.83.26-.98.66L10 13.77v5.51c0 .38.32.72.7.72h.62c.38 0 .68-.38.68-.76V18h8v1.24c0 .38.31.76.69.76h.61c.38 0 .7-.34.7-.72v-5.51zm-8.16.34h7.19l1.03 3h-9.25zM12 16a1 1 0 0 1-1-1a1 1 0 0 1 1-1a1 1 0 0 1 1 1a1 1 0 0 1-1 1m8 0a1 1 0 0 1-1-1a1 1 0 0 1 1-1a1 1 0 0 1 1 1a1 1 0 0 1-1 1',
+);
+const travel: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 24;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-12, -12);
+  ctx.fill(TRAVEL_PATH);
+  ctx.restore();
+};
+
+/** Health (outline) — a pasted-in glyph (Falcon, 2026-09-10, titled
+ * "health-outline" in its source SVG), filled "currentColor" (viewBox
+ * 0 0 48 48), two paths: a plain cross (default nonzero fill) and a
+ * badge outline that needs 'evenodd' (Path2D.fill()'s second arg) or
+ * it fills solid instead of staying a thin ring — same two-rule split
+ * cityWorker's head/body pair above already uses. */
+const HEALTH_CROSS_PATH = new Path2D('M22 22v-7h4v7h7v4h-7l-.001 7h-4v-7h-7v-4z');
+const HEALTH_BADGE_PATH = new Path2D(
+  'M13.823 36.991c2.448 2.211 5.13 4.037 8.158 5.477c1.622.77 3.546.7 5.101-.187c2.623-1.496 4.906-3.297 7.113-5.29c4.679-4.226 7.406-10.041 7.585-16.174l.209-7.151c.024-.832.001-2.666.001-2.666a71 71 0 0 0-3.162-.426c-3.27-.392-6.526-.781-9.383-2.528l-2.037-1.245a5.54 5.54 0 0 0-5.737 0L19.72 7.994c-3.267 1.996-7.248 2.374-11.101 2.74c-.873.083-1.74.166-2.59.266c0 0-.024 1.845 0 2.689l.209 7.128c.179 6.133 2.906 11.948 7.585 16.174m-5.804-24.19c0 .32.003.615.01.83l.208 7.128c.163 5.57 2.64 10.876 6.926 14.748c2.312 2.087 4.833 3.802 7.677 5.154a3.55 3.55 0 0 0 3.252-.117c2.455-1.4 4.619-3.101 6.763-5.037c4.286-3.872 6.763-9.177 6.926-14.748l.209-7.151c.006-.224.01-.539.01-.875q-.702-.089-1.43-.176l-.054-.006a69 69 0 0 1-3.322-.455c-2.244-.38-4.592-.999-6.792-2.343l-2.037-1.246a3.54 3.54 0 0 0-3.651 0L20.763 9.7c-2.32 1.417-4.88 2.089-7.347 2.486c-1.53.246-3.178.403-4.721.551z',
+);
+const healthOutline: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 48;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-24, -24);
+  ctx.fill(HEALTH_CROSS_PATH);
+  ctx.fill(HEALTH_BADGE_PATH, 'evenodd');
+  ctx.restore();
+};
+
+/** Paper (line) — a pasted-in glyph (Falcon, 2026-09-10, titled
+ * "paper-line" in its source SVG), filled "currentColor" (viewBox 0 0
+ * 24 24), a single path — despite the source name ending "-line" this
+ * is actually a filled glyph (thin strokes drawn AS fill shapes), not
+ * a stroke-only one like moneyLine/services/goods above, so it's
+ * filled with plain ctx.fill() same as every other filled icon here. */
+const PAPER_LINE_PATH = new Path2D(
+  'M10 8a1 1 0 0 0 0 2zm4 2a1 1 0 1 0 0-2zm-4 2a1 1 0 1 0 0 2zm2 2a1 1 0 1 0 0-2zM6 8v1a1 1 0 0 0 1-1zm2 13H7a1 1 0 0 0 1 1zm0-.01v-1a1 1 0 0 0-1 1zM10 9v1h4V8h-4zm0 4v1h2v-2h-2zM5 4v1h1V3H5zm1 0H5v4h2V4zm0 4V7H3.25v2H6zm-3-.25h1V6H2v1.75zM6 4v1h10V3H6zm12 2h-1v11h2V6zM6 4H5v15.01h2V4zm2 17.01v1h2v-2H8zm12-3.76h-1V19h2v-1.75zM18 21v-1H8v2h10zm-8-2.01h1v-1.74H9v1.74zm.25-1.99v1h9.5v-2h-9.5zM8 21h1v-.01H7V21zm2-3.75h1a.75.75 0 0 1-.75.75v-2C9.56 16 9 16.56 9 17.25zM20 19h-1a1 1 0 0 1-1 1v2a3 3 0 0 0 3-3zm0-1.75h1c0-.69-.56-1.25-1.25-1.25v2a.75.75 0 0 1-.75-.75zM6 19.01H5a3 3 0 0 0 3 3v-2a1 1 0 0 1-1-1zM16 4v1a1 1 0 0 1 1 1h2a3 3 0 0 0-3-3zm-6 14.99H9a1 1 0 0 1-1 1v2a3 3 0 0 0 3-3zM3.25 8V7a.75.75 0 0 1 .75.75H2C2 8.44 2.56 9 3.25 9zM5 4V3a3 3 0 0 0-3 3h2a1 1 0 0 1 1-1z',
+);
+const paperLine: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 24;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-12, -12);
+  ctx.fill(PAPER_LINE_PATH);
+  ctx.restore();
+};
+
+/** Fruits (outline) — a pasted-in glyph (Falcon, 2026-09-10, titled
+ * "fruits-outline" in its source SVG), filled "currentColor"
+ * fill-rule="evenodd" (viewBox 0 0 48 48), thirteen paths — a stem/
+ * leaf group (the first four) and nine overlapping ring shapes (each
+ * needing evenodd, same reason people's head rings above need it). */
+const FRUITS_PATHS = [
+  new Path2D('M18.88 7.566a1 1 0 0 1 1 1v6.6a1 1 0 1 1-2 0v-6.6a1 1 0 0 1 1-1'),
+  new Path2D(
+    'M11.78 13.905c1.13-.27 2.283-.065 3.48.553c.975.505 1.667.736 2.206.847c.538.112.966.114 1.483.114v2h-.02c-.516 0-1.12 0-1.868-.155c-.757-.157-1.622-.462-2.72-1.03c-.878-.453-1.54-.517-2.096-.384c-.584.14-1.201.53-1.912 1.264c-1.632 1.688-2.139 3.426-2.316 4.762c-.1 1.644.197 4.89 1.668 8.063c.5 1.08 1.21 2.57 2.076 3.737c.432.582.866 1.03 1.283 1.306c.405.267.741.34 1.046.288c3.123-.538 3.71-.551 4.319-.551h1.037v2H18.38c-.422 0-.92 0-3.95.522c-.94.162-1.787-.127-2.488-.59c-.689-.455-1.284-1.106-1.787-1.783c-1.005-1.353-1.791-3.024-2.284-4.088c-1.638-3.532-1.972-7.137-1.848-9.064l.003-.032l.004-.032c.212-1.644.844-3.839 2.866-5.928c.845-.874 1.783-1.556 2.885-1.82',
+  ),
+  new Path2D(
+    'M14.64 11.41c1.496 1.431 2.307 3.166 2.307 4.51a1 1 0 1 0 2 0c0-2.05-1.168-4.275-2.925-5.956C14.244 8.265 11.743 7 8.896 7a1 1 0 0 0 0 2c2.244 0 4.268.999 5.743 2.41',
+  ),
+  new Path2D(
+    'M8.574 7.009a1 1 0 0 1 1.116.868c.492 3.93 3.945 6 6.734 7.115a1 1 0 0 1-.743 1.857c-2.869-1.147-7.335-3.604-7.975-8.724a1 1 0 0 1 .868-1.116m17.188 6.894c-1.152-.264-2.334-.066-3.57.548c-1.02.506-1.747.74-2.317.853s-1.022.115-1.56.115a1 1 0 0 0 0 2h.019c.537 0 1.16 0 1.93-.153c.781-.155 1.676-.458 2.816-1.024c.924-.458 1.632-.528 2.236-.39c.626.144 1.277.542 2.017 1.277c1.716 1.703 2.235 3.452 2.414 4.784a1 1 0 0 0 1.982-.266c-.222-1.653-.884-3.85-2.987-5.938c-.881-.874-1.85-1.548-2.98-1.806m.945 20.377a1 1 0 0 0-1.414.027c-.757.786-1.393 1.05-1.931.962c-3.252-.538-3.86-.55-4.485-.55a1 1 0 0 0 0 2h.028c.447 0 .967 0 4.13.523c1.522.252 2.785-.6 3.699-1.548a1 1 0 0 0-.027-1.415',
+  ),
+  new Path2D(
+    'M32.65 16.103c-1.003 1.81-1.263 3.709-.864 4.992a1 1 0 1 1-1.91.594c-.609-1.959-.153-4.43 1.025-6.556c1.193-2.152 3.206-4.101 5.925-4.947a1 1 0 1 1 .594 1.91c-2.143.666-3.78 2.222-4.77 4.007',
+  ),
+  new Path2D(
+    'M34.719 17.379c-1.168 1.71-2.748 2.793-4.073 3.013a1 1 0 1 0 .326 1.973c2.023-.335 4.027-1.851 5.398-3.858c1.388-2.032 2.227-4.706 1.762-7.515a1 1 0 1 0-1.974.326c.367 2.214-.288 4.375-1.44 6.06',
+  ),
+  new Path2D('M31.78 23a2.5 2.5 0 1 0 0 5a2.5 2.5 0 0 0 0-5m-4.5 2.5a4.5 4.5 0 1 1 9 0a4.5 4.5 0 0 1-9 0'),
+  new Path2D(
+    'M37.845 18.09a4.5 4.5 0 0 1 2.716 5.755a1 1 0 1 1-1.883-.675a2.5 2.5 0 1 0-4.706-1.69a1 1 0 1 1-1.882-.675a4.5 4.5 0 0 1 5.755-2.715',
+  ),
+  new Path2D(
+    'M36.253 23.176a4.501 4.501 0 0 1 3.822 8.014a1 1 0 0 1-1.144-1.64a2.5 2.5 0 1 0-3.008-3.99a1 1 0 1 1-1.262-1.552a4.5 4.5 0 0 1 1.592-.832',
+  ),
+  new Path2D('M27.78 29a2.5 2.5 0 1 0 0 5a2.5 2.5 0 0 0 0-5m-4.5 2.5a4.5 4.5 0 1 1 9 0a4.5 4.5 0 0 1-9 0'),
+  new Path2D('M35.78 29a2.5 2.5 0 1 0 0 5a2.5 2.5 0 0 0 0-5m-4.5 2.5a4.5 4.5 0 1 1 9 0a4.5 4.5 0 0 1-9 0'),
+  new Path2D('M31.78 35a2.5 2.5 0 1 0 0 5a2.5 2.5 0 0 0 0-5m-4.5 2.5a4.5 4.5 0 1 1 9 0a4.5 4.5 0 0 1-9 0'),
+  new Path2D(
+    'M37.834 33.966a1 1 0 0 1 1.278-.606a4.5 4.5 0 1 1-4.675 7.44a1 1 0 1 1 1.405-1.423a2.5 2.5 0 1 0 2.598-4.133a1 1 0 0 1-.606-1.279',
+  ),
+];
+const fruitsOutline: AnnotationIconDrawFn = (ctx, cx, cy, size) => {
+  const scale = size / 48;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-24, -24);
+  for (const p of FRUITS_PATHS) ctx.fill(p, 'evenodd');
+  ctx.restore();
+};
+
 export const annotationIcons: Record<
   | 'marker'
   | 'warning'
@@ -426,7 +571,13 @@ export const annotationIcons: Record<
   | 'house'
   | 'farm'
   | 'person'
-  | 'personOutline',
+  | 'personOutline'
+  | 'people'
+  | 'food'
+  | 'travel'
+  | 'healthOutline'
+  | 'paperLine'
+  | 'fruitsOutline',
   AnnotationIconDrawFn
 > = {
   marker,
@@ -450,6 +601,12 @@ export const annotationIcons: Record<
   farm,
   person,
   personOutline,
+  people,
+  food,
+  travel,
+  healthOutline,
+  paperLine,
+  fruitsOutline,
 };
 
 /** Falcon, 2026-09-09 ("also want to have it or those icons to
@@ -486,6 +643,12 @@ export const ANNOTATION_ICON_COLOR: Record<keyof typeof annotationIcons, string>
   farm: '#65a30d',
   person: '#0f766e',
   personOutline: '#334155',
+  people: '#db2777',
+  food: '#ea580c',
+  travel: '#0891b2',
+  healthOutline: '#dc2626',
+  paperLine: '#71717a',
+  fruitsOutline: '#9333ea',
 };
 
 export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string> = {
@@ -510,9 +673,15 @@ export const ANNOTATION_ICON_LABEL: Record<keyof typeof annotationIcons, string>
   farm: 'Farm',
   person: 'Person',
   personOutline: 'Person (outline)',
+  people: 'People',
+  food: 'Food',
+  travel: 'Travel',
+  healthOutline: 'Health (outline)',
+  paperLine: 'Paper (line)',
+  fruitsOutline: 'Fruits (outline)',
 };
 
-export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money', 'moneyAlt', 'moneyStack', 'moneyLine', 'services', 'goods', 'worker', 'cityWorker', 'bank', 'buildings', 'factory', 'house', 'farm', 'person', 'personOutline'];
+export const ANNOTATION_ICON_ORDER: (keyof typeof annotationIcons)[] = ['marker', 'warning', 'info', 'arrow', 'star', 'flag', 'money', 'moneyAlt', 'moneyStack', 'moneyLine', 'services', 'goods', 'worker', 'cityWorker', 'bank', 'buildings', 'factory', 'house', 'farm', 'person', 'personOutline', 'people', 'food', 'travel', 'healthOutline', 'paperLine', 'fruitsOutline'];
 
 /** Falcon, 2026-09-09 ("font style" — separate from the bold/italic
  * "type" controls): a small fixed picker of CSS font-family stacks

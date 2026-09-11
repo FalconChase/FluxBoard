@@ -73,9 +73,58 @@ export interface PortCapacity {
  *    see sensor.ts's watchedNodeIds/evaluateSignals — so from the
  *    Buffer's own side this is just one more ordinary output edge).
  *    Not kind-distinguished any more than the original 2 were.
+ *  - source: bumped 0 -> 1 inputs (2026-09-10 — Falcon: "i want to add
+ *    additional feature to source node like it will deactivate by
+ *    using sensor nodes condition"): source.ts still has no
+ *    onItemArrival at all, so this one new input slot is NEVER a real
+ *    physical item port — it exists purely for a Command node's
+ *    signal (SimEngine's `sourceCanSpawnThisTick` reads `state.open`
+ *    the exact same generic way Gate does). App.tsx's own
+ *    `isSourceSignalTarget` guard is what actually keeps a real item
+ *    edge — or a signal edge from anything but a Command — from ever
+ *    landing here (this numeric cap alone can't tell edge kinds or
+ *    source kinds apart, same limitation gate's coarse `maxInputs: 2`
+ *    already accepted) — this bump just makes room for the one
+ *    legitimate Command->Source signal edge the feature needs.
+ *  - counter: bumped 1 -> 2 inputs (2026-09-10, same-day Command
+ *    follow-up — Falcon, after asking why a Sensor+Command pair
+ *    stopped a Source: "counter node is just like a checkpoint between
+ *    path[,] i want it to count only role and can manually be
+ *    resetable or by a command when docked with command"): the
+ *    original 1 was the real item input (a Counter has no
+ *    onItemArrival branching by port, so more would be ambiguous, same
+ *    reasoning as gate's single real input slot); the 2nd is room for
+ *    a Command node's reset signal, the exact same "bump the numeric
+ *    cap, let App.tsx's kind-aware guard do the real restricting"
+ *    pattern source's own 0 -> 1 bump above already used. 2 outputs
+ *    unchanged (1 real item out + 1 optional copper "watch" output to
+ *    a Sensor, exactly buffer's "2 real + 1 copper" pattern minus the
+ *    optional-overflow slot buffer alone has).
+ *  - command (2026-09-10 follow-up — Falcon: "the command node is the
+ *    one has command on it ... it is compatible only with wire and
+ *    dockable to source node and sensor node"): 1 input (a signal
+ *    from its ONE Sensor, Falcon's pick — "one-to-one, like Gate" over
+ *    allowing several), 1 output (a signal to whatever it commands —
+ *    originally its one Source, extended the same session to also
+ *    cover its one Counter, see the dock-pair note below). Zero
+ *    physical ports at all — command.ts has no onItemArrival, same
+ *    conservation rationale as Sensor's own fully-copper ports; unlike
+ *    Sensor, Command's real restriction (which kinds it may pair
+ *    with) is tight enough to also give it a real numeric cap here,
+ *    not just the compatibility-check-only treatment Sensor needed.
+ *  - transform (2026-09-10 — "now i want to introduce the transform
+ *    node"): 1 real item input, 1 real item output, confirmed —
+ *    transform.ts's onItemArrival only ever looks up ONE output edge
+ *    (same single-target-lookup shape as Mixer/Merger's single output
+ *    above), and it's a plain relabel-then-forward with no recipe
+ *    buffering that would need more than one arriving stream. No
+ *    signal/copper ports at all — it's an ordinary flow node, not part
+ *    of the Sensor/Gate/Command trigger system, so it gets no dock
+ *    compatibility below either (place a wire, same as Distributor/
+ *    Sorter/Mixer).
  */
 export const NATURAL_PORT_CAPACITY: Record<NodeKind, PortCapacity> = {
-  source: { maxInputs: 0, maxOutputs: 1 },
+  source: { maxInputs: 1, maxOutputs: 1 },
   sink: { maxOutputs: 0 },
   distributor: {},
   merger: { maxOutputs: 1 },
@@ -84,6 +133,9 @@ export const NATURAL_PORT_CAPACITY: Record<NodeKind, PortCapacity> = {
   buffer: { maxOutputs: 3 },
   gate: { maxInputs: 2, maxOutputs: 2 },
   sensor: {},
+  counter: { maxInputs: 2, maxOutputs: 2 },
+  command: { maxInputs: 1, maxOutputs: 1 },
+  transform: { maxInputs: 1, maxOutputs: 1 },
 };
 
 export function getPortCapacity(kind: NodeKind): PortCapacity {
@@ -98,7 +150,7 @@ export function getPortCapacity(kind: NodeKind): PortCapacity {
  * silo-silo, silo-gates, silo-sensor"): which node-kind PAIRS may be
  * drag-to-snap docked, order-agnostic (a Gate can be wired as either a
  * Silo's in-gate or its out-gate; a Silo-Silo pair has no inherent
- * direction either). Three pairs total:
+ * direction either). Three pairs originally:
  *  - gate <-> buffer (the original pair)
  *  - buffer <-> buffer ("silo-silo" — two Silos docked together share
  *    an instant huge-flowRate item edge, same mechanism as gate<->
@@ -108,18 +160,71 @@ export function getPortCapacity(kind: NodeKind): PortCapacity {
  *    dock is a copper/signal connection so the Sensor auto-watches
  *    that Silo, App.tsx's handleDockNodes gives this pair edgeKind:
  *    'signal' rather than 'dock' for exactly that reason)
+ * Extended 2026-09-10 (Falcon, confirming Counter's dock pairs via
+ * AskUserQuestion: "Source, Sensor, and Buffer/Silo too") with three
+ * more:
+ *  - counter <-> source (a real item dock, same "huge flowRate seam"
+ *    mechanism as gate<->buffer — a Source's spawned item can dock
+ *    straight into a Counter tallying everything it produces)
+ *  - counter <-> buffer (also a real item dock — same "one real in,
+ *    one real out, no per-port routing" shape as Gate, so App.tsx's
+ *    handleDockNodes reuses Gate's own already-wired-side direction
+ *    heuristic for this pair too, not the plain stationary/dragged
+ *    default buffer<->buffer uses)
+ *  - counter <-> sensor ("counter-sensor" — NOT an item edge, exactly
+ *    like silo-sensor above: the Sensor auto-watches the Counter's
+ *    `count` instead of a Silo's `queue.length`. App.tsx's
+ *    handleDockNodes already generalizes to this pair for free, since
+ *    its silo/sensor direction logic never actually checked "buffer"
+ *    specifically, only "the non-Sensor side")
+ * Extended again 2026-09-10, same session, for the new Command node
+ * (Falcon: "it is compatible only with wire and dockable to source
+ * node and sensor node"):
+ *  - command <-> sensor — NOT an item edge, but the OPPOSITE direction
+ *    convention from counter<->sensor/silo<->sensor above: those are
+ *    "watched" pairs (the non-Sensor side is the edge SOURCE, since
+ *    it's the thing being read); this is a "commanded" pair, so the
+ *    SENSOR is always the edge source and Command always the target —
+ *    the same direction Sensor already has wiring to Gate, just now
+ *    also reachable by docking.
+ *  - command <-> source — also not an item edge (Source has no real
+ *    physical input at all — see its own maxInputs note above);
+ *    Command is always the edge source, Source always the target, no
+ *    ambiguity to read either way.
+ * Extended again 2026-09-10, same session, for Command's new reset
+ * relationship with Counter (Falcon: "i want it to count only role and
+ * can manually be resetable or by a command when docked with command"):
+ *  - command <-> counter — also not an item edge (this fills Counter's
+ *    NEW signal-only input slot, see its maxInputs note above, never
+ *    the real item one already in use for ordinary item producers).
+ *    Same direction as command <-> source: Command is always the edge
+ *    source, Counter always the target — no physical-side ambiguity to
+ *    read the way gate<->buffer/counter<->buffer need, since this dock
+ *    never touches Counter's real item ports at all.
  * Every other pairing is explicitly left for a later discussion, same
  * "closed, easy-to-extend list" deferral the copper-path rule already
- * used for anything beyond Sensor/Gate/Buffer — see isCopperCompatible
- * in App.tsx for that sibling rule. Lives here (not App.tsx) because
- * FluxCanvas.tsx also needs it, to know which nearby node counts as a
- * valid drag-to-snap target while a node is mid-drag, not just at the
- * moment a dock is created. */
+ * used for anything beyond Sensor/Gate/Buffer/Counter/Source/Command —
+ * see isCopperCompatible in App.tsx for that sibling rule. Lives here
+ * (not App.tsx) because FluxCanvas.tsx also needs it, to know which
+ * nearby node counts as a valid drag-to-snap target while a node is
+ * mid-drag, not just at the moment a dock is created. */
 export function isDockCompatible(kindA: NodeKind, kindB: NodeKind): boolean {
   if (kindA === 'gate' && kindB === 'buffer') return true;
   if (kindA === 'buffer' && kindB === 'gate') return true;
   if (kindA === 'buffer' && kindB === 'buffer') return true;
   if (kindA === 'buffer' && kindB === 'sensor') return true;
   if (kindA === 'sensor' && kindB === 'buffer') return true;
+  if (kindA === 'counter' && kindB === 'source') return true;
+  if (kindA === 'source' && kindB === 'counter') return true;
+  if (kindA === 'counter' && kindB === 'buffer') return true;
+  if (kindA === 'buffer' && kindB === 'counter') return true;
+  if (kindA === 'counter' && kindB === 'sensor') return true;
+  if (kindA === 'sensor' && kindB === 'counter') return true;
+  if (kindA === 'command' && kindB === 'sensor') return true;
+  if (kindA === 'sensor' && kindB === 'command') return true;
+  if (kindA === 'command' && kindB === 'source') return true;
+  if (kindA === 'source' && kindB === 'command') return true;
+  if (kindA === 'command' && kindB === 'counter') return true;
+  if (kindA === 'counter' && kindB === 'command') return true;
   return false;
 }

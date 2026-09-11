@@ -189,18 +189,21 @@ export class SimEngine {
   }
 
   /** Falcon, 2026-09-09 ("i want to implement an auto deactivate on
-   * the source node once the path is filled"): true unless spawning
-   * one more item of `node`'s configured itemType, right now, onto its
-   * first active output edge, would immediately violate that edge's
-   * own item-spacing rule (see enforceItemSpacing) — i.e. there's
-   * genuinely nowhere left to put it without it landing behind the
-   * path's own start. Mirrors source.ts's own port selection
-   * (`outputEdges.find(e => e.active)`) and itemType fallback exactly,
-   * so this always asks the question about the SAME edge/item trySpawn
-   * would actually use. An edge that isn't a spacing edge at all (see
-   * spacingEnabled) always reports room — this feature only exists
-   * because spacing exists; a source feeding an edge with no size
-   * enforcement keeps its old always-spawn behavior untouched. */
+   * the source node once the path is filled"), redesigned 2026-09-10
+   * (see `sourceCanSpawnThisTick`'s doc comment — this is now a pure
+   * read, never a trigger for writing anything back to the graph):
+   * true unless spawning one more item of `node`'s configured
+   * itemType, right now, onto its first active output edge, would
+   * immediately violate that edge's own item-spacing rule (see
+   * enforceItemSpacing) — i.e. there's genuinely nowhere left to put
+   * it without it landing behind the path's own start. Mirrors
+   * source.ts's own port selection (`outputEdges.find(e => e.active)`)
+   * and itemType fallback exactly, so this always asks the question
+   * about the SAME edge/item trySpawn would actually use. An edge
+   * that isn't a spacing edge at all (see spacingEnabled) always
+   * reports room — this feature only exists because spacing exists; a
+   * source feeding an edge with no size enforcement keeps its old
+   * always-spawn behavior untouched. */
   private sourceHasRoomToSpawn(node: NodeDef, outputEdges: EdgeDef[], itemSizeOf: (itemType: string) => number): boolean {
     const edge = outputEdges.find((e) => e.active);
     if (!edge || !this.spacingEnabled(edge)) return true;
@@ -236,7 +239,7 @@ export class SimEngine {
 
       const state = this.runtime.get(targetNode.id) ?? {};
       const outputEdges = this.graph.outputEdges(targetNode.id);
-      const result = handler(inFlight.item, targetNode, state, outputEdges, edge, () => this.nextItemId());
+      const result = handler(inFlight.item, targetNode, state, outputEdges, edge, () => this.nextItemId(), this.makeTickContext());
 
       if (result.accepted === false) {
         // Node refused the item this tick (backpressure) — it stays
@@ -266,50 +269,109 @@ export class SimEngine {
 
   /**
    * Falcon, 2026-09-09 ("on source node's properties i want it off by
-   * default meaning its not spawning any item unless toggled on ...
-   * i want to implement an auto deactivate on the source node once
-   * the path is filled ... [resuming] auto ... once theres room"):
-   * a source's `active`/`autoDeactivated` flags live in its own
-   * `node.config` (persisted, the same place cooldown/itemType
-   * already live) rather than runtime state — a Properties panel
-   * checkbox needs to read/write it directly via
-   * GraphModel.updateNodeConfig, the one write path every other
-   * per-node field already goes through, and SimEngine has no other
-   * bridge to a live per-tick runtime store from outside itself.
+   * default meaning its not spawning any item unless toggled on"),
+   * REDESIGNED 2026-09-10 after the auto-deactivate/auto-resume half
+   * of that same feature turned out to be the actual source of the
+   * "blinking" bug: SimEngine used to be able to flip `node.config.active`
+   * to false itself (marking the reason via a second `autoDeactivated`
+   * flag) whenever the output path filled up, then flip it back once
+   * room reopened. That self-toggling of a value the Properties panel
+   * shows as a literal checkbox IS the blink — no matter how the
+   * threshold was tuned (see the 2026-09-10 hysteresis attempt, since
+   * superseded), a value that both a person AND the system can write
+   * will keep visibly flipping as long as the system keeps writing it.
    *
-   * `active !== false` is "should this source be trying to spawn
-   * right now" (his choice: new sources default OFF via
-   * defaultConfigFor in App.tsx; sources from before this feature, or
-   * loaded from an old save, have no `active` field at all and keep
-   * spawning exactly as they always did — undefined here still means
-   * the OLD default, unlike respectItemSize). `autoDeactivated` marks
-   * WHY it's off: true only when SimEngine itself flipped it off for
-   * running out of room, as opposed to a person turning it off on
-   * purpose — only an auto-deactivated source is ever auto-resumed;
-   * a manual off stays off until a person flips it back themselves.
+   * Falcon's own fix, once he watched a recorded clip of it: make
+   * `active` a PURE manual switch. SimEngine now only ever READS it
+   * (`active !== false` — undefined still means the OLD pre-this-
+   * feature default of "always try," so existing saves are
+   * untouched) and never writes it back, under any circumstance. "No
+   * room this tick" is handled exactly the way every other node's own
+   * backpressure already works — the tick's spawn is silently skipped
+   * — with no config write and therefore nothing to visibly flicker.
+   * `autoDeactivated` is retired: no longer read or written anywhere;
+   * a pre-existing save that happens to carry `true` on it is simply
+   * an inert leftover field now, not a state this method still cares
+   * about. A source that genuinely needs a visible, deliberate
+   * open/closed valve — the thing the auto-deactivate feature was
+   * really reaching for — gets one from a Gate node fed by a Sensor
+   * instead (design doc §4.8): that pair already models exactly this,
+   * with its own dedicated open/closed state, instead of overloading
+   * a source's own on/off switch to double as one.
    */
-  private sourceActivationGate(node: NodeDef, outputEdges: EdgeDef[], itemSizeOf?: (itemType: string) => number): boolean {
+  /** Extended 2026-09-10 (Falcon: "i want to add additional feature to
+   * source node like it will deactivate by using sensor nodes
+   * condition ... a new counter node ... compatible to be docked with
+   * sensor and source node") — Source can now ALSO be gated by a
+   * signal, layered on TOP of the pure-manual `active` switch above
+   * rather than replacing it (both must allow spawning — Falcon's own
+   * pick, "separate signal flag, ANDed with the switch"): reads
+   * `state.open` off the SAME generic `'signal'` Action/runtime-state
+   * field Gate already uses (applyActions writes `open` into ANY
+   * signal edge's target, not just a Gate's — see its own comment
+   * below), so wiring this up needed zero new SimEngine plumbing
+   * beyond this one read.
+   *
+   * Revised same day (Falcon, immediately after: "sensor node only
+   * senses and triggers signal[,] the command node is the one has
+   * command on it"): that signal is never written by a Sensor
+   * directly — only a Command node (command.ts) may target a Source
+   * this way (App.tsx's isSourceSignalTarget enforces it at wire/dock
+   * time), with the Sensor's own signal going to the Command instead
+   * and the Command relaying it onward. This method doesn't know or
+   * care about that distinction — `state.open` is just read generically
+   * off whatever last wrote it — so the only thing that actually
+   * changed here was who's allowed to write it, enforced entirely
+   * outside SimEngine.
+   *
+   * Deliberately the OPPOSITE default from Gate, though, and that's
+   * the one genuinely new piece of judgment here: Gate treats an unset
+   * `open` as CLOSED (`state.open === true` required) because a Gate
+   * with no Sensor wired in is meaningless — see gate.ts's own doc
+   * comment, "can never open... by construction." A Source is the
+   * opposite: it existed for a long time before this feature, every
+   * already-saved graph has sources with no Command anywhere near
+   * them, and none of those should suddenly stop spawning just because
+   * this shipped. So a Source's signal gate defaults to OPEN
+   * (`state.open !== false` — only an explicit `false`, which only
+   * ever comes from a Command currently relaying a closed signal,
+   * blocks it) and only ever starts mattering the moment someone
+   * actually wires a Command in.
+   *
+   * Extended 2026-09-10, same session (Falcon: "i want the source node
+   * to have a set or limited spawn feature like a switch like it only
+   * outputs a user defined number of spawns or limited unlike the
+   * default that is unlimited"): a 4th, independent gate, ANDed in
+   * alongside the three above — every one of them already has to allow
+   * spawning for a tick to actually happen, and this is no different.
+   * `config.spawnLimitEnabled` is the switch (off by default, so every
+   * existing Source keeps spawning unbounded exactly as before this
+   * shipped — same "opt-in, never retroactively changes old graphs"
+   * shape every other Source feature here uses); `config.spawnLimit` is
+   * the user-defined ceiling. Compares against `state.spawnedCount` —
+   * already tracked by source.ts's own trySpawn on every successful
+   * spawn (it just had nothing reading it back before this) — so
+   * hitting the limit needed zero new runtime-state plumbing, only this
+   * one extra read. A disabled switch (or a Source that isn't even
+   * kind 'source', though this method already returns early for that)
+   * skips the check entirely, same "only matters once configured"
+   * shape `open`/`active` already have. */
+  private sourceCanSpawnThisTick(
+    node: NodeDef,
+    outputEdges: EdgeDef[],
+    itemSizeOf: ((itemType: string) => number) | undefined,
+    ctx: NodeTickContext,
+  ): boolean {
     if (node.kind !== 'source') return true;
-
-    const manuallyActive = node.config.active !== false;
-    const autoDeactivated = node.config.autoDeactivated === true;
-
-    if (!manuallyActive) {
-      if (!itemSizeOf || !autoDeactivated || !this.sourceHasRoomToSpawn(node, outputEdges, itemSizeOf)) {
-        return false;
-      }
-      // Room opened back up on the exact edge that filled it -- this
-      // was the system's own doing, not a person's choice, so it's the
-      // system's to undo.
-      this.graph.updateNodeConfig(node.id, { active: true, autoDeactivated: false });
+    if (node.config.active === false) return false;
+    if (ctx.getNodeState(node.id)?.open === false) return false;
+    if (node.config.spawnLimitEnabled === true) {
+      const limit = typeof node.config.spawnLimit === 'number' ? node.config.spawnLimit : 0;
+      const spawnedCount = ctx.getNodeState(node.id)?.spawnedCount;
+      if ((typeof spawnedCount === 'number' ? spawnedCount : 0) >= limit) return false;
     }
-
-    if (itemSizeOf && !this.sourceHasRoomToSpawn(node, outputEdges, itemSizeOf)) {
-      this.graph.updateNodeConfig(node.id, { active: false, autoDeactivated: true });
-      return false;
-    }
-
-    return true;
+    if (!itemSizeOf) return true;
+    return this.sourceHasRoomToSpawn(node, outputEdges, itemSizeOf);
   }
 
   private runPerTickHooks(dt: number, itemSizeOf?: (itemType: string) => number): void {
@@ -320,7 +382,7 @@ export class SimEngine {
 
       const outputEdges = this.graph.outputEdges(node.id);
 
-      if (behavior.trySpawn && this.sourceActivationGate(node, outputEdges, itemSizeOf)) {
+      if (behavior.trySpawn && this.sourceCanSpawnThisTick(node, outputEdges, itemSizeOf, ctx)) {
         const state = this.runtime.get(node.id) ?? {};
         const result = behavior.trySpawn(node, state, outputEdges, dt, () => this.nextItemId(), ctx);
         this.runtime.set(node.id, result.newState);
@@ -337,6 +399,13 @@ export class SimEngine {
       if (behavior.evaluateSignals) {
         const state = this.runtime.get(node.id) ?? {};
         const result = behavior.evaluateSignals(node, state, outputEdges, dt, () => this.nextItemId(), ctx);
+        this.runtime.set(node.id, result.newState);
+        this.applyActions(result.actions, node.id);
+      }
+
+      if (behavior.onTick) {
+        const state = this.runtime.get(node.id) ?? {};
+        const result = behavior.onTick(node, state, outputEdges, dt, () => this.nextItemId(), ctx);
         this.runtime.set(node.id, result.newState);
         this.applyActions(result.actions, node.id);
       }

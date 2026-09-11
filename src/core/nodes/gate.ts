@@ -48,15 +48,32 @@ const onItemArrival: OnItemArrival = (item, _node, state, outputEdges) => {
 export const gateBehavior: NodeBehavior = { onItemArrival };
 
 /** Pure helper (no SimEngine/GraphModel dependency — just plain data
- * in, boolean out) for a future properties-panel/placement check:
- * true once at least one active `edgeKind: 'signal'` edge targets
- * this Gate FROM a `sensor` node. Not called from gate.ts's own
+ * in, boolean out) for a properties-panel/placement check: true once
+ * at least one active `edgeKind: 'signal'` edge targets `gateId` FROM
+ * a node of `requiredSourceKind`. Not called from gate.ts's own
  * onItemArrival — correctness doesn't depend on it (see the doc
- * comment above), it's only for surfacing the "this Gate can never
- * open" case to a person building the graph. */
-export function hasSignalInput(gateId: NodeId, allEdges: EdgeDef[], allNodes: NodeDef[]): boolean {
+ * comment above), it's only for surfacing the "this node can never be
+ * driven" case to a person building the graph.
+ *
+ * `requiredSourceKind` defaults to `'sensor'`, so Gate's own call site
+ * (App.tsx's GateFields, unchanged) keeps its original meaning exactly.
+ * Reused with an explicit override by PropertiesPanel's SourceFields
+ * (2026-09-10) and CommandFields (2026-09-10, Command feature): a
+ * Source's signal-gated input must be fed by a `'command'` node, never
+ * a `'sensor'` directly (Falcon: "sensor node only senses and triggers
+ * signal[,] the command node is the one has command on it") — the
+ * `gateId` param name is a holdover from when Gate was the only kind
+ * this mattered for, but the check itself was always generic over any
+ * target node id and, now, over what kind is allowed to drive it. */
+export function hasSignalInput(
+  gateId: NodeId,
+  allEdges: EdgeDef[],
+  allNodes: NodeDef[],
+  requiredSourceKind: NodeDef['kind'] = 'sensor',
+): boolean {
   const nodesById = new Map(allNodes.map((n) => [n.id, n] as const));
   return allEdges.some(
-    (e) => e.target === gateId && e.active && e.edgeKind === 'signal' && nodesById.get(e.source)?.kind === 'sensor',
+    (e) =>
+      e.target === gateId && e.active && e.edgeKind === 'signal' && nodesById.get(e.source)?.kind === requiredSourceKind,
   );
 }

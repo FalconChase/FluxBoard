@@ -45,25 +45,38 @@ const SKETCH_STYLE_OPTIONS: { style: SketchStyle; label: string; hint: string }[
   { style: 'polypath', label: 'Polypath', hint: 'Click to place each point, double-click/Enter to finish' },
 ];
 
-export const NODE_KINDS: NodeKind[] = [
+/** Falcon, 2026-09-10 ("i just want to categorize the nodes on the
+ * options panel to be basic nodes and compound nodes"), confirmed
+ * split: every kind that just moves/routes/gates an item without ever
+ * changing WHAT it is stays "Basic"; the two kinds whose whole job is
+ * producing a different item than what arrived (Mixer's recipe
+ * output, Transform's type relabel) are "Compound". See
+ * NodesOverflowPanel below for where the two section headers actually
+ * render; KEPT_NODE_KINDS (the ribbon row's 4-icon subset) is a
+ * separate, independently-picked list, unaffected by this grouping. */
+export const BASIC_NODE_KINDS: NodeKind[] = [
   'source',
+  'sink',
+  'buffer',
   'distributor',
   'merger',
   'sorter',
-  'mixer',
-  'buffer',
-  'sink',
-  // Trigger system (design doc §4.8, 2026-09-09 node-design session):
-  // "Silo" is not its own kind -- it's just 'buffer' above, used at
-  // larger capacity.
   'gate',
   'sensor',
+  'counter',
+  'command',
 ];
+export const COMPOUND_NODE_KINDS: NodeKind[] = ['transform', 'mixer'];
+/** Full flat list, both categories concatenated -- kept for any future
+ * caller that just needs "every node kind" without caring which
+ * category it's in (nothing in this file needs that today; the two
+ * lists above are what NodesOverflowPanel actually renders). */
+export const NODE_KINDS: NodeKind[] = [...BASIC_NODE_KINDS, ...COMPOUND_NODE_KINDS];
 /** Falcon, 2026-09-09 ("only show 4 icons... more or all will be
  * shown on the side panel", extended to Nodes/Paths/Modify "for
  * uniformity"): the 4 most-used node kinds shown in the ribbon row
  * itself -- NodesOverflowPanel below still lists all of NODE_KINDS
- * (7, then gate/sensor added the same day -- 9). */
+ * (7, then gate/sensor added the same day -- 9, then counter -- 10). */
 const KEPT_NODE_KINDS: NodeKind[] = ['source', 'distributor', 'buffer', 'sink'];
 export const EDGE_STYLES: { style: EdgeStyle; label: string; color: string }[] = [
   { style: 'transparent', label: 'Transparent', color: theme.text3 },
@@ -163,6 +176,13 @@ interface RibbonProps {
   onGridSpacingChange: (spacing: number) => void;
   tickIntervalMs: number;
   onTickIntervalMsChange: (ms: number) => void;
+
+  /** Falcon, 2026-09-10 ("toggle off option for path direction"): shows
+   * or hides every path's direction arrowhead across the whole canvas.
+   * Pure display preference, same App.tsx-owned on/off pattern as
+   * snapToGrid; defaults to true (arrows shown, today's behavior). */
+  showPathDirection: boolean;
+  onToggleShowPathDirection: () => void;
   canvasBackground: CanvasBackground;
   onCanvasBackgroundChange: (bg: CanvasBackground) => void;
   /** Falcon, 2026-09-09 ("import svgs or images for user custom"):
@@ -245,6 +265,8 @@ export function Ribbon({
   onGridSpacingChange,
   tickIntervalMs,
   onTickIntervalMsChange,
+  showPathDirection,
+  onToggleShowPathDirection,
   canvasBackground,
   onCanvasBackgroundChange,
   customIconLibrary,
@@ -412,6 +434,13 @@ export function Ribbon({
                 />
                 <RibbonToggleButton label="Snap to grid" hint="F8" active={snapToGrid} onClick={onToggleSnapToGrid} />
               </div>
+            </RibbonGroup>
+            <RibbonGroup title="Paths">
+              <RibbonToggleButton
+                label="Show direction"
+                active={showPathDirection}
+                onClick={onToggleShowPathDirection}
+              />
             </RibbonGroup>
             <RibbonGroup title="Simulation">
               <RibbonNumberField
@@ -713,8 +742,19 @@ export function NodesOverflowPanel({
       <button type="button" onClick={onBack} style={overflowBackButtonStyle}>
         ← Back to Projects
       </button>
-      <div style={overflowSectionLabelStyle}>All nodes</div>
-      {NODE_KINDS.map((kind) => (
+      <div style={overflowSectionLabelStyle}>Basic nodes</div>
+      {BASIC_NODE_KINDS.map((kind) => (
+        <OverflowRowButton
+          key={kind}
+          preview={<NodeIconPreview kind={kind} size={24} />}
+          label={kind}
+          title={`Place a ${kind}`}
+          active={armedKind === kind}
+          onClick={() => onArmKind(armedKind === kind ? null : kind)}
+        />
+      ))}
+      <div style={overflowSectionLabelStyle}>Compound nodes</div>
+      {COMPOUND_NODE_KINDS.map((kind) => (
         <OverflowRowButton
           key={kind}
           preview={<NodeIconPreview kind={kind} size={24} />}

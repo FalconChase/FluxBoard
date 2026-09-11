@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { octagonVertices, isPointInOctagon, octagonPortAnchor, OCTAGON_PORT_COUNT } from '../octagon';
+import { octagonVertices, isPointInOctagon, octagonPortAnchor, OCTAGON_PORT_COUNT, compassLabel } from '../octagon';
 
 /**
  * Milestone 5 target test: isPointInOctagon, the click hit-test the
@@ -41,5 +41,29 @@ describe('octagon geometry', () => {
 
   it('has one port anchor per compass direction', () => {
     expect(OCTAGON_PORT_COUNT).toBe(8);
+  });
+});
+
+/** 2026-09-10 (Falcon: "the ports are named according to compass like
+ * the N,NE,SE,S,SW,W,NW") — compassLabel is now what every port-based
+ * field in PropertiesPanel labels its options with, so its mapping
+ * needs to exactly match octagonPortAnchor's own doc comment
+ * (0=E,1=SE,2=S,3=SW,4=W,5=NW,6=N,7=NE), clockwise, and wrap for any
+ * out-of-range index rather than throwing. */
+describe('compassLabel', () => {
+  it('matches octagonPortAnchor\'s own 0=E..7=NE clockwise convention', () => {
+    expect(compassLabel(0)).toBe('E');
+    expect(compassLabel(1)).toBe('SE');
+    expect(compassLabel(2)).toBe('S');
+    expect(compassLabel(3)).toBe('SW');
+    expect(compassLabel(4)).toBe('W');
+    expect(compassLabel(5)).toBe('NW');
+    expect(compassLabel(6)).toBe('N');
+    expect(compassLabel(7)).toBe('NE');
+  });
+
+  it('wraps out-of-range indices instead of throwing', () => {
+    expect(compassLabel(8)).toBe('E');
+    expect(compassLabel(-1)).toBe('NE');
   });
 });

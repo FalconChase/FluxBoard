@@ -144,4 +144,94 @@ const sensor: IconDrawFn = (ctx, cx, cy, size) => {
   }
 };
 
-export const nodeIcons = { source, sink, distributor, merger, sorter, mixer, buffer, gate, sensor } as const;
+/** Counter (2026-09-10) — classic tally marks: four vertical strokes
+ * plus a diagonal fifth crossing them, the universal "counting what
+ * passes by" glyph, distinct from buffer's static stacked-bars "tray"
+ * read. */
+const counter: IconDrawFn = (ctx, cx, cy, size) => {
+  const s = size * 0.5;
+  ctx.lineWidth = Math.max(1.5, size * 0.12);
+  ctx.lineCap = 'round';
+  const gap = s * 0.42;
+  const startX = cx - gap * 1.5;
+  for (let i = 0; i < 4; i++) {
+    const x = startX + i * gap;
+    ctx.beginPath();
+    ctx.moveTo(x, cy - s * 0.62);
+    ctx.lineTo(x, cy + s * 0.62);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.moveTo(startX - gap * 0.35, cy + s * 0.5);
+  ctx.lineTo(startX + gap * 3.35, cy - s * 0.5);
+  ctx.stroke();
+};
+
+/** Command (2026-09-10 follow-up) — the classic power-button glyph: a
+ * mostly-closed circle with a gap at the top, and a vertical stroke
+ * passing through that gap. Reads as "on/off switch" at a glance,
+ * distinct from Sensor's radar-pulse read (Command ACTS, Sensor only
+ * senses — Falcon: "sensor node only senses and triggers signal[,]
+ * the command node is the one has command on it"). */
+const command: IconDrawFn = (ctx, cx, cy, size) => {
+  const r = size * 0.42;
+  ctx.lineWidth = Math.max(1.5, size * 0.14);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  // Circle with a gap at the top (roughly -110°..-70° left open).
+  ctx.arc(cx, cy, r, -Math.PI * 0.39, Math.PI * 1.39);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r * 1.15);
+  ctx.lineTo(cx, cy - r * 0.15);
+  ctx.stroke();
+};
+
+/** Transform (2026-09-10 — "now i want to introduce the transform
+ * node"): a stroked square becoming a filled circle, joined by a short
+ * arrow — reads literally as "this shape becomes that shape," distinct
+ * from Distributor/Merger's routing-line glyphs above (those are about
+ * WHERE an item goes; this is about WHAT it becomes). */
+const transform: IconDrawFn = (ctx, cx, cy, size) => {
+  const s = size * 0.5;
+  const leftX = cx - s * 1.05;
+  const rightX = cx + s * 1.05;
+  const half = s * 0.42;
+  ctx.lineWidth = Math.max(1.5, size * 0.12);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // Left: the input shape, outline only (a plain square -- "what
+  // arrives").
+  ctx.strokeRect(leftX - half, cy - half, half * 2, half * 2);
+  // Right: the output shape, filled (a circle -- "what it becomes"),
+  // the same fill-vs-outline contrast Sink's solid triangle already
+  // uses against Distributor's stroked lines.
+  ctx.beginPath();
+  ctx.arc(rightX, cy, s * 0.46, 0, Math.PI * 2);
+  ctx.fill();
+  // A short arrow between the two, reading literally as "becomes."
+  const arrowStartX = leftX + half + s * 0.12;
+  const arrowEndX = rightX - s * 0.46 - s * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(arrowStartX, cy);
+  ctx.lineTo(arrowEndX, cy);
+  ctx.moveTo(arrowEndX - s * 0.22, cy - s * 0.18);
+  ctx.lineTo(arrowEndX, cy);
+  ctx.lineTo(arrowEndX - s * 0.22, cy + s * 0.18);
+  ctx.stroke();
+};
+
+export const nodeIcons = {
+  source,
+  sink,
+  distributor,
+  merger,
+  sorter,
+  mixer,
+  buffer,
+  gate,
+  sensor,
+  counter,
+  command,
+  transform,
+} as const;

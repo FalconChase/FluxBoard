@@ -15,9 +15,11 @@ import type { NodeBehavior, PerTickHook, Action } from './contract';
  *    worked example from the design discussion: an adjacent Silo —
  *    just a `buffer` node, §4.2 — at larger capacity). FALLBACK ONLY
  *    as of the auto-watch follow-up below — see watchedNodeIds.
- *  - metric: what to read off that node's state. Only 'queueLength'
- *    (a buffer/silo's live `queue.length`) exists for v1; unrecognized
- *    or missing reads as 0.
+ *  - metric: what to read off that node's state. 'queueLength' (a
+ *    buffer/silo's live `queue.length`) was the only v1 metric;
+ *    'count' (a Counter's live running tally, `state.count` —
+ *    counter.ts) was added 2026-09-10 alongside the Counter node
+ *    itself. Unrecognized or missing reads as 0.
  *  - comparator + threshold: how the read value is compared. Defaults
  *    to 'gte' / 0 (always true) so a freshly-placed, unconfigured
  *    Sensor doesn't silently do nothing — see defaultConfigFor in
@@ -26,6 +28,13 @@ import type { NodeBehavior, PerTickHook, Action } from './contract';
  *    node it watches — see watchedNodeIds' doc comment for why that
  *    makes Falcon's "one node at a time, or multiple with the same
  *    condition" true by construction rather than something enforced.
+ *  - testPulseSeq / testPulseDuration (2026-09-10 follow-up — Falcon:
+ *    "i want sensor node with a temporary activate button for
+ *    temporary and testing purposes[,] this transmit power
+ *    temporarily"): a manual test override, bumped by
+ *    PropertiesPanel's "Force ON" button — see evaluateSignals below
+ *    for the full countdown mechanism. Not part of the Sensor's real
+ *    condition at all, purely a debugging aid.
  *
  * Level-based, not edge-triggered: every tick this re-evaluates the
  * condition and re-broadcasts its CURRENT truth value, rather than
@@ -61,6 +70,10 @@ function readMetric(metric: unknown, watchedState: Record<string, unknown> | und
     const queue = watchedState?.queue;
     return Array.isArray(queue) ? queue.length : 0;
   }
+  if (metric === 'count') {
+    const count = watchedState?.count;
+    return typeof count === 'number' ? count : 0;
+  }
   return 0;
 }
 
@@ -80,7 +93,7 @@ function compare(value: number, comparator: unknown, threshold: number): boolean
   }
 }
 
-const evaluateSignals: PerTickHook = (node, state, outputEdges, _dt, _makeItemId, ctx) => {
+const evaluateSignals: PerTickHook = (node, state, outputEdges, dt, _makeItemId, ctx) => {
   const threshold = typeof node.config.threshold === 'number' ? node.config.threshold : 0;
 
   // Auto-watch takes priority over the manual dropdown whenever any
@@ -116,10 +129,51 @@ const evaluateSignals: PerTickHook = (node, state, outputEdges, _dt, _makeItemId
     conditionMet = compare(0, node.config.comparator, threshold);
   }
 
+  // Test pulse (2026-09-10 follow-up — Falcon: "i want sensor node
+  // with a temporary activate button for temporary and testing
+  // purposes[,] this transmit power temporarily"): a manual override
+  // that forces `conditionMet` to true for a fixed real-world duration,
+  // regardless of what the actual watched condition reads -- lets
+  // Falcon test a downstream Gate/Command/Counter chain by hand,
+  // without needing a real watched node to actually cross a threshold.
+  // Same "config bump + a per-tick hook notices it" channel Counter's
+  // manual Reset button already uses (PropertiesPanel has no other way
+  // to reach into runtime state) — `testPulseSeq` is the bump,
+  // `testPulseDuration` (seconds) how long the override lasts once
+  // fired. A fresh bump (including a RE-press while one is already
+  // counting down) restarts the countdown at the full duration rather
+  // than stacking; letting it run out simply resumes normal per-tick
+  // evaluation with nothing left over to revert.
+  const testPulseSeq = typeof node.config.testPulseSeq === 'number' ? node.config.testPulseSeq : 0;
+  const lastTestPulseSeq = typeof state.lastTestPulseSeq === 'number' ? state.lastTestPulseSeq : 0;
+  const testPulseDuration =
+    typeof node.config.testPulseDuration === 'number' && node.config.testPulseDuration > 0
+      ? node.config.testPulseDuration
+      : 2;
+  let testPulseRemaining = typeof state.testPulseRemaining === 'number' ? state.testPulseRemaining : 0;
+  if (testPulseSeq !== lastTestPulseSeq) {
+    testPulseRemaining = testPulseDuration;
+  }
+  const testPulseActive = testPulseRemaining > 0;
+  if (testPulseActive) {
+    conditionMet = true;
+  }
+  const nextTestPulseRemaining = testPulseActive ? Math.max(0, testPulseRemaining - dt) : 0;
+
   const signalEdges = outputEdges.filter((e) => e.active && e.edgeKind === 'signal');
   const actions: Action[] = signalEdges.map((e) => ({ type: 'signal', edgeId: e.id, value: conditionMet }));
 
-  return { newState: { ...state, lastValue: value, lastConditionMet: conditionMet, watchedNodeIds: watchIds }, actions };
+  return {
+    newState: {
+      ...state,
+      lastValue: value,
+      lastConditionMet: conditionMet,
+      watchedNodeIds: watchIds,
+      lastTestPulseSeq: testPulseSeq,
+      testPulseRemaining: nextTestPulseRemaining,
+    },
+    actions,
+  };
 };
 
 export const sensorBehavior: NodeBehavior = { evaluateSignals };

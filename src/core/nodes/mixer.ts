@@ -14,6 +14,18 @@ type Buffers = Record<number, Item[]>;
  * a complete-but-blocked recipe just waits (items stay queued in node
  * state, not lost), rather than destroying inputs with no
  * compensating output.
+ *
+ * Output lookup (2026-09-10, "the ports are named according to
+ * compass"): mixer is capped to exactly 1 output (portCapacity.ts) —
+ * PropertiesPanel's SingleOutputSidePicker is the ONLY thing that ever
+ * moves it, and does so by directly reassigning the edge's own
+ * physical anchor. A separate `config.outputPort` guess, matched by
+ * sourcePort, used to exist alongside that (and could silently drift
+ * out of sync with wherever the picker actually put the edge — recipe
+ * complete, nothing ever sent, no error). Since there is only ever one
+ * real output edge to begin with, this just takes "the" active one
+ * directly instead, same lookup merger/gate already use for their own
+ * single-output cases.
  */
 const onItemArrival: OnItemArrival = (item, node, state, outputEdges, arrivalEdge, makeItemId) => {
   const capacity = typeof node.config.bufferCapacity === 'number' ? node.config.bufferCapacity : Infinity;
@@ -41,8 +53,7 @@ const onItemArrival: OnItemArrival = (item, node, state, outputEdges, arrivalEdg
     return { newState: { ...state, buffers }, actions: [] };
   }
 
-  const outputPort = typeof node.config.outputPort === 'number' ? node.config.outputPort : 0;
-  const outEdge = outputEdges.find((e) => e.sourcePort === outputPort && e.active);
+  const outEdge = outputEdges.find((e) => e.active);
   if (!outEdge) {
     // Recipe complete but nowhere to send it — hold everything queued.
     return { newState: { ...state, buffers }, actions: [] };

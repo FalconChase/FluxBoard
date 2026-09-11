@@ -227,6 +227,31 @@ export function clearAllStores(
   groupRegistry.clear();
 }
 
+/** Reconciles every edge's sourcePort/targetPort to match its actual
+ * floor-layer anchor (2026-09-10, Falcon: "the ports are named
+ * according to compass like the N,NE,SE,S,SW,W,NW" — confirmed via
+ * AskUserQuestion: ports auto-derived from the physical anchor). An
+ * edge's logical port now just IS the octagon anchor it's plugged
+ * into (GraphModel.updateEdgePorts's own doc comment), which every
+ * App.tsx edge-creation call site sets correctly at creation time —
+ * this is only for edges that reached their current sourcePort/
+ * targetPort some OTHER way: a save file written before this change
+ * (every wire's port stuck at whatever it was pre-migration, usually
+ * 0 even where its real anchors differ — exactly the "3 wires, 1
+ * weight field" bug report that prompted this), or the built-in demo
+ * graph, whose edges are hand-authored the same pre-migration way. A
+ * no-op for any edge with no recorded anchor at all (nothing to
+ * reconcile against) or already in sync. */
+export function syncEdgePortsToAnchors(graph: GraphModel, floorLayout: FloorLayout): void {
+  for (const edge of graph.getAllEdges()) {
+    const anchors = floorLayout.getEdgeAnchors(edge.id);
+    if (!anchors) continue;
+    if (edge.sourcePort !== anchors.sourceAnchor || edge.targetPort !== anchors.targetAnchor) {
+      graph.updateEdgePorts(edge.id, { sourcePort: anchors.sourceAnchor, targetPort: anchors.targetAnchor });
+    }
+  }
+}
+
 /** Populates the given (already-constructed, already-empty) stores
  * from a saved snapshot — mutates them in place rather than building
  * fresh instances, so callers can pass the SAME singleton instances
@@ -290,6 +315,14 @@ export function populateState(
     const skin = saved.edgeSkin[edge.id];
     if (skin) skinConfig.setEdgeSkin(edge.id, skin);
   }
+
+  // 2026-09-10 ("the ports are named according to compass"): a save
+  // from before this change has every edge's sourcePort/targetPort
+  // stuck at whatever they were pre-migration (usually 0, even when
+  // the edge's real anchors — just restored above — differ) — this
+  // reconciles them, one time, on load. See syncEdgePortsToAnchors's
+  // own doc comment below for why this exists at all.
+  syncEdgePortsToAnchors(graph, floorLayout);
 
   for (const sketch of saved.sketches) {
     sketchLayer.add(sketch);

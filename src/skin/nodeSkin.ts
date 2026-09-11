@@ -31,6 +31,17 @@ export const nodeSkinDefaults: Record<NodeKind, NodeSkinDefaults> = {
   // and a signal-blue Sensor, both distinct from every color above.
   gate: { fill: '#eab308', stroke: '#a16207', icon: nodeIcons.gate },
   sensor: { fill: '#0ea5e9', stroke: '#0369a1', icon: nodeIcons.sensor },
+  // Counter (2026-09-10) — tally green, distinct from every kind above
+  // (and readable next to sensor-blue/gate-amber on a graph that wires
+  // all three together).
+  counter: { fill: '#22c55e', stroke: '#15803d', icon: nodeIcons.counter },
+  // Command (2026-09-10 follow-up) — indigo/violet, distinct from
+  // every kind above including sensor-blue/gate-amber/counter-green,
+  // the three kinds it most often sits between on a graph.
+  command: { fill: '#6366f1', stroke: '#4338ca', icon: nodeIcons.command },
+  // Transform (2026-09-10, "now i want to introduce the transform
+  // node") — rose pink, distinct from every kind above.
+  transform: { fill: '#ec4899', stroke: '#be185d', icon: nodeIcons.transform },
 };
 
 /**
@@ -42,20 +53,52 @@ export const nodeSkinDefaults: Record<NodeKind, NodeSkinDefaults> = {
  * destroy items, nothing to show; distributor/sorter/mixer route
  * items through in the same tick, they don't store anything either).
  * Buffer is the one kind that's genuinely a "silo" — it queues items
- * — so it's the only kind with a badge today, and it shows its LIVE
- * queue length (current holdings), not a lifetime counter.
+ * — so it shows its LIVE queue length (current holdings), not a
+ * lifetime counter.
+ *
+ * Counter (2026-09-10) is the one deliberate exception to "no lifetime
+ * tally" above: for THIS kind a running lifetime count is the entire
+ * point (Falcon: "it only counts what pass to it"), not a side effect
+ * to hide — so its badge shows `state.count` directly, same live-
+ * runtime-state mechanism as Buffer's, just a growing tally instead of
+ * a current-holdings snapshot. It's also the only UI surface this
+ * count gets — see counter.ts's own doc comment — reset via
+ * PropertiesPanel's "Reset count" button (counter.ts's onTick).
  *
  * source.spawnedCount/sink.consumedCount/distributor+sorter.
  * routedCount/mixer.producedCount still exist in RuntimeState (tests
- * rely on them, and they're cheap to keep tracking for later use —
- * e.g. a future source spawn-limit badge) — this function just no
- * longer surfaces them as a badge. Returns undefined when the kind
- * has nothing to show, so the caller skips drawing a badge entirely.
- */
-export function getBadgeCount(kind: NodeKind, state: RuntimeState): number | undefined {
-  if (kind === 'buffer') {
+ * rely on them, and they're cheap to keep tracking for later use) —
+ * this function just doesn't surface most of them as a badge.
+ *
+ * source (2026-09-10 follow-up — Falcon: "i want the source node to
+ * have a set or limited spawn feature like a switch"): the one other
+ * deliberate exception, alongside Counter, and only once that switch
+ * (config.spawnLimitEnabled) is actually on — an unlimited Source (the
+ * default, and every graph saved before this feature existed) shows no
+ * badge at all, same as before. Once limited, this is a countdown of
+ * spawns REMAINING (`config.spawnLimit` minus `state.spawnedCount`,
+ * floored at 0), not a growing tally — Falcon, same session: "i want it
+ * to show like countdown of or diminishing" (an earlier "count/limit"
+ * string form, e.g. "5/10", read as ascending and didn't land). Reaches
+ * 0 exactly when SimEngine.sourceCanSpawnThisTick stops it for good.
+ *
+ * Returns undefined when the kind (or an unlimited Source) has nothing
+ * to show, so the caller skips drawing a badge entirely. Takes the
+ * full NodeDef, not just its kind, because the Source case needs to
+ * read `node.config` — Buffer/Counter still only ever look at `state`. */
+export function getBadgeCount(node: NodeDef, state: RuntimeState): number | string | undefined {
+  if (node.kind === 'buffer') {
     const queue = state.queue;
     return Array.isArray(queue) ? queue.length : undefined;
+  }
+  if (node.kind === 'counter') {
+    const count = state.count;
+    return typeof count === 'number' ? count : 0;
+  }
+  if (node.kind === 'source' && node.config.spawnLimitEnabled === true) {
+    const spawnedCount = typeof state.spawnedCount === 'number' ? state.spawnedCount : 0;
+    const limit = typeof node.config.spawnLimit === 'number' ? node.config.spawnLimit : 0;
+    return Math.max(0, limit - spawnedCount);
   }
   return undefined;
 }
@@ -63,12 +106,14 @@ export function getBadgeCount(kind: NodeKind, state: RuntimeState): number | und
 /** Badge is a pill overlaid ON TOP of the icon — not exclusive with it
  * (design doc §4.5: "under/over layering pattern the path skin stack
  * already uses"). Genuinely unbounded: sized by measured text width,
- * no digit cap, no "999+" truncation. */
+ * no digit cap, no "999+" truncation. `count` also accepts a pre-
+ * formatted string (2026-09-10 follow-up, for Source's "spawned/limit"
+ * badge above) — a bare number is still just stringified same as ever. */
 function drawBadge(
   ctx: CanvasRenderingContext2D,
   center: Point,
   radius: number,
-  count: number,
+  count: number | string,
   zoom: number,
   accentColor: string,
 ): void {
@@ -252,7 +297,7 @@ export function drawNode(
     skin.icon(ctx, center.x, center.y, radius * 0.92);
   }
 
-  const count = getBadgeCount(node.kind, state);
+  const count = getBadgeCount(node, state);
   if (count !== undefined) {
     drawBadge(ctx, center, radius, count, zoom, skin.stroke);
   }

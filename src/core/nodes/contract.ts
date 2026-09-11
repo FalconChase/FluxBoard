@@ -52,6 +52,19 @@ export type OnItemArrival = (
   outputEdges: EdgeDef[],
   arrivalEdge: EdgeDef,
   makeItemId: () => string,
+  /** Added 2026-09-10 (distributor/sorter downstream-capacity check —
+   * see `backpressure.ts`'s `targetBufferIsFull`) for the same reason
+   * `PerTickHook`'s `ctx` exists: a handler that forwards onto an
+   * output edge needs to see the TARGET node's own state (its queue
+   * length) to know whether forwarding there is actually safe, and
+   * nothing in the original 6-arg signature could reach that.
+   * Optional, same back-compat reasoning as `PerTickHook.ctx` — a
+   * shorter-parameter-list handler (sink, gate, buffer's own
+   * onItemArrival, every existing direct call in nodeRegistry.test.ts)
+   * is still assignable to this type unchanged; only a handler that
+   * actually forwards onto an edge and cares about this needs to
+   * declare it. */
+  ctx?: NodeTickContext,
 ) => OnItemArrivalResult;
 
 /**
@@ -117,4 +130,25 @@ export interface NodeBehavior {
    * doc above. Not item-shaped at all: any `Action`s it returns should
    * be `{ type: 'signal', ... }`, never send/forward/consume. */
   evaluateSignals?: PerTickHook;
+  /** Counter only, so far (2026-09-10) — runs every tick
+   * UNCONDITIONALLY, regardless of whether anything arrived or any
+   * other hook fired this tick, for housekeeping that can't wait on
+   * the next item to check itself. Counter's own use: PropertiesPanel
+   * has no direct line to NodeRuntimeStateStore (config is the only
+   * channel any Fields component ever writes through — see
+   * PropertiesPanel.tsx), so its "Reset count" button bumps
+   * `config.resetSeq` as an ordinary config write instead of opening a
+   * new one; this hook is what actually notices that bump and zeroes
+   * `state.count`, checked every tick (not just lazily on the node's
+   * next arrival) so the reset takes effect even while nothing is
+   * currently flowing through it — matters when a Sensor is watching
+   * this Counter to gate a Source, where waiting for "the next
+   * arrival" to apply a reset could mean waiting forever (see
+   * counter.ts's own onTick doc comment). Distinct from trySpawn/
+   * tryDrain/evaluateSignals (all already unconditional-per-tick too)
+   * only in NAME, so each of those keeps describing one specific role
+   * rather than growing a second unrelated meaning — nothing stops a
+   * future kind reusing this same slot for its own per-tick,
+   * not-item-shaped bookkeeping. */
+  onTick?: PerTickHook;
 }

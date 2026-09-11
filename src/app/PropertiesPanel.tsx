@@ -3,6 +3,7 @@ import { GraphModel } from '../core/GraphModel';
 import type { EdgeDef, NodeDef } from '../core/types';
 import { getPortCapacity } from '../core/nodes/portCapacity';
 import { hasSignalInput, watchedNodeIds } from '../core/nodes/index';
+import { compassLabel } from '../skin/octagon';
 import type { FloorLayout } from '../floor/floorLayout';
 import type { SkinConfig } from '../skin/SkinConfig';
 import type { EdgeStyle, ItemOrientationMode } from '../skin/pathSkin';
@@ -287,21 +288,24 @@ function NodeProperties({
       <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'capitalize', marginBottom: 2 }}>{node.kind}</div>
       <div style={{ fontSize: 11, color: theme.text3, marginBottom: 4 }}>{node.id}</div>
 
-      {node.kind === 'source' && <SourceFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
-      {node.kind === 'distributor' && <DistributorFields node={node} onChange={patch} />}
+      {node.kind === 'source' && <SourceFields node={node} graph={graph} onChange={patch} objectRegistry={objectRegistry} />}
+      {node.kind === 'distributor' && <DistributorFields node={node} onChange={patch} graph={graph} />}
       {node.kind === 'merger' && (
         <p style={{ fontSize: 12, color: theme.text3 }}>
           Merger has nothing to configure — every arriving item forwards straight out its one output.
         </p>
       )}
-      {node.kind === 'sorter' && <SorterFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
-      {node.kind === 'mixer' && <MixerFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
-      {node.kind === 'buffer' && <BufferFields node={node} onChange={patch} />}
+      {node.kind === 'sorter' && <SorterFields node={node} onChange={patch} objectRegistry={objectRegistry} graph={graph} />}
+      {node.kind === 'mixer' && <MixerFields node={node} onChange={patch} objectRegistry={objectRegistry} graph={graph} />}
+      {node.kind === 'buffer' && <BufferFields node={node} onChange={patch} graph={graph} />}
       {node.kind === 'sink' && (
         <p style={{ fontSize: 12, color: theme.text3 }}>Sink has nothing to configure — it just consumes.</p>
       )}
       {node.kind === 'gate' && <GateFields nodeId={nodeId} graph={graph} />}
       {node.kind === 'sensor' && <SensorFields node={node} graph={graph} onChange={patch} />}
+      {node.kind === 'counter' && <CounterFields node={node} graph={graph} onChange={patch} />}
+      {node.kind === 'command' && <CommandFields nodeId={nodeId} graph={graph} />}
+      {node.kind === 'transform' && <TransformFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
 
       <SingleOutputSidePicker nodeId={nodeId} kind={node.kind} graph={graph} floorLayout={floorLayout} />
 
@@ -670,7 +674,16 @@ function MultiProperties({
  * renders once the node actually has its one output wired — nothing
  * to point at a side before that. Compass layout matches
  * skin/octagon.ts's anchor convention (0=E,1=SE,2=S,3=SW,4=W,5=NW,
- * 6=N,7=NE). */
+ * 6=N,7=NE) — labels now come straight from `compassLabel` there
+ * instead of a locally-duplicated string list.
+ *
+ * 2026-09-10 ("the ports are named according to compass"): `pick`
+ * used to only move the FLOOR-layer anchor — sourcePort was still a
+ * decoupled logical number back then, so nothing here needed to touch
+ * it. Now that sourcePort just IS the anchor (GraphModel.
+ * updateEdgePorts's own doc comment), leaving it unsynced here would
+ * have been the exact desync bug this whole feature exists to fix —
+ * `graph.updateEdgePorts` is now called in the same click. */
 function SingleOutputSidePicker({
   nodeId,
   kind,
@@ -691,16 +704,14 @@ function SingleOutputSidePicker({
   const anchors = floorLayout.getEdgeAnchors(edge.id);
   if (!anchors) return null;
 
-  // [label, anchorIndex] in visual reading order for a 3x3 compass
-  // grid, center cell left empty.
-  const COMPASS: (readonly [string, number] | null)[] = [
-    ['NW', 5], ['N', 6], ['NE', 7],
-    ['W', 4], null, ['E', 0],
-    ['SW', 3], ['S', 2], ['SE', 1],
-  ];
+  // Grid cell -> anchor index, in visual reading order for a 3x3
+  // compass grid, center cell left empty (null).
+  const COMPASS_GRID: (number | null)[] = [5, 6, 7, 4, null, 0, 3, 2, 1];
 
   function pick(anchorIndex: number): void {
-    floorLayout.reassignAnchor(edge!.id, 'source', anchorIndex);
+    const ok = floorLayout.reassignAnchor(edge!.id, 'source', anchorIndex);
+    if (!ok) return;
+    graph.updateEdgePorts(edge!.id, { sourcePort: anchorIndex });
     forceRender((n) => n + 1); // FloorLayout mutates directly (§4.6) — nudge this panel to reread it
   }
 
@@ -708,9 +719,9 @@ function SingleOutputSidePicker({
     <>
       <div style={sectionTitleStyle}>Output side</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, width: 108, marginBottom: 4 }}>
-        {COMPASS.map((cell, i) => {
-          if (!cell) return <div key={`empty-${i}`} />;
-          const [label, anchorIndex] = cell;
+        {COMPASS_GRID.map((anchorIndex, i) => {
+          if (anchorIndex === null) return <div key={`empty-${i}`} />;
+          const label = compassLabel(anchorIndex);
           const active = anchorIndex === anchors.sourceAnchor;
           return (
             <button
@@ -811,12 +822,15 @@ function DockSection({
     skinConfig.removeEdge(dockEdge!.id);
 
     const newId = `${dockEdge!.id}-flip-${Date.now()}`;
+    // 2026-09-10 ("the ports are named according to compass"): the
+    // flipped edge's ports are the same swapped anchors setEdgeCurve
+    // re-attaches it at just below, not a hardcoded 0.
     graph.addEdge({
       id: newId,
       source: oldTargetId,
       target: oldSourceId,
-      sourcePort: 0,
-      targetPort: 0,
+      sourcePort: anchors.targetAnchor,
+      targetPort: anchors.sourceAnchor,
       flowRate: dockEdge!.flowRate,
       active: dockEdge!.active,
       // Preserve whatever edgeKind this dock actually had (design doc
@@ -931,12 +945,54 @@ function ItemTypeSelect({
   );
 }
 
+/** Shared compass-labeled port dropdown (2026-09-10, Falcon: "the
+ * ports are named according to compass like the N,NE,SE,S,SW,W,NW") —
+ * used by every field that references a sourcePort/targetPort number
+ * (sorter rule/default ports, mixer recipe ports, buffer overflow/
+ * output ports), same "read from what's actually there instead of a
+ * free-typed number that could reference nothing real" fix
+ * ItemTypeSelect above already gives item types. `edges` is whichever
+ * real edges are relevant to this port's ROLE — a node's own
+ * `outputEdges` (sourcePort) for an output-role port like buffer's
+ * main/overflow or sorter's rule targets, its `inputEdges` (targetPort)
+ * for an input-role port like a mixer recipe row — and `portOf` picks
+ * which field off each. The current `value` is always included even
+ * if no matching edge exists yet (a pre-existing save, or a port
+ * picked before its wire was drawn), same "don't silently jump to a
+ * different option" convention as ItemTypeSelect's unregistered-type
+ * case. */
+function PortSelect({
+  edges,
+  portOf,
+  value,
+  onChange,
+}: {
+  edges: EdgeDef[];
+  portOf: (e: EdgeDef) => number;
+  value: number;
+  onChange: (port: number) => void;
+}) {
+  const ports = [...new Set(edges.map(portOf))].sort((a, b) => a - b);
+  return (
+    <select value={value} style={inputStyle} onChange={(e) => onChange(Number(e.target.value))}>
+      {!ports.includes(value) && <option value={value}>{compassLabel(value)} (no wire yet)</option>}
+      {ports.map((p) => (
+        <option key={p} value={p}>
+          {compassLabel(p)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function SourceFields({
   node,
+  graph,
   onChange,
   objectRegistry,
 }: {
   node: NodeDef;
+  graph: GraphModel;
   onChange: (fields: Record<string, unknown>) => void;
   objectRegistry: ObjectRegistry;
 }) {
@@ -954,24 +1010,59 @@ function SourceFields({
   // local useState mirror" convention as the Locked checkbox below.
   const [size, setSize] = useState(() => objectRegistry.resolve(itemType).size);
 
-  // Falcon, 2026-09-09 ("off by default ... unless toggled on" /
-  // "auto deactivate on the source node once the path is filled" /
-  // resume "once theres room"): `active`/`autoDeactivated` live on
-  // node.config (see SimEngine.sourceActivationGate's own doc comment
-  // for why), and SimEngine can flip them on its own mid-run -- this
-  // poll mirrors EdgeLogicFields' speed-lock resync exactly, so the
-  // checkbox and hint text stay accurate whether a person toggled it
-  // or the sim auto-paused/auto-resumed it, without needing this panel
-  // open to trigger a refresh.
+  // Falcon, 2026-09-09 ("off by default ... unless toggled on"), then
+  // 2026-09-10 ("it deactivates and activates making it looks
+  // blinking ... maybe i need gate node for this"): `active` used to
+  // be a two-way flag SimEngine could also flip on its own (an
+  // "auto-deactivated" state, resumed automatically once room opened
+  // up) -- that self-toggling is exactly what read as blinking, so
+  // Falcon's own call was to make it a PURE manual switch instead: the
+  // system never writes to it again (see
+  // SimEngine.sourceCanSpawnThisTick's doc comment). No room this tick
+  // is now handled the same quiet way every other node's backpressure
+  // already is -- that tick's spawn just doesn't happen, with no
+  // config write and no dimming. A source that wants a real, visible
+  // open/closed valve should get one from a Gate + Sensor pair
+  // instead (design doc §4.8) -- that's what those nodes are for, not
+  // this checkbox. `autoDeactivated` is no longer written or read
+  // anywhere; a pre-existing save that happens to carry `true` on it
+  // is simply inert now, not something this panel still needs to
+  // poll for.
   const [active, setActive] = useState(node.config.active !== false);
-  const [autoDeactivated, setAutoDeactivated] = useState(node.config.autoDeactivated === true);
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setActive(node.config.active !== false);
-      setAutoDeactivated(node.config.autoDeactivated === true);
-    }, 250);
-    return () => window.clearInterval(id);
+    setActive(node.config.active !== false);
   }, [node]);
+
+  // Spawn limit (2026-09-10 follow-up — Falcon: "i want the source
+  // node to have a set or limited spawn feature like a switch like it
+  // only outputs a user defined number of spawns or limited unlike the
+  // default that is unlimited"): a THIRD, independent gate alongside
+  // `active` and the Command signal above (SimEngine.
+  // sourceCanSpawnThisTick ANDs all three) — off by default, so a
+  // freshly placed or already-saved Source keeps spawning unbounded
+  // exactly as before this shipped. `spawnLimit` stays disabled/greyed
+  // whenever the switch is off, same "field only matters once its own
+  // switch is on" shape the rest of the panel doesn't otherwise use,
+  // but felt clearer here than hiding the field outright — it's still
+  // right there to pre-fill before switching the limit on.
+  const [spawnLimitEnabled, setSpawnLimitEnabled] = useState(node.config.spawnLimitEnabled === true);
+  const [spawnLimit, setSpawnLimit] = useState(typeof node.config.spawnLimit === 'number' ? node.config.spawnLimit : 10);
+
+  // Signal-gated spawning (2026-09-10 — Falcon: "i want to add
+  // additional feature to source node like it will deactivate by
+  // using sensor nodes condition"; revised same session — "sensor node
+  // only senses and triggers signal[,] the command node is the one has
+  // command on it"): a SECOND, independent gate layered on top of the
+  // manual switch above (both must allow spawning — SimEngine's
+  // sourceCanSpawnThisTick ANDs them), driven entirely by wiring rather
+  // than anything in this panel to edit — same read-only status-line
+  // treatment GateFields already uses for its own "is a Sensor actually
+  // wired in" check, just reused here with `'command'` since the
+  // underlying `hasSignalInput` helper is generic over both the target
+  // node id and the required source kind. A Sensor may no longer target
+  // a Source directly — only a Command node can, see App.tsx's
+  // isSourceSignalTarget.
+  const signalGated = hasSignalInput(node.id, graph.getAllEdges(), graph.getAllNodes(), 'command');
 
   return (
     <>
@@ -982,19 +1073,22 @@ function SourceFields({
           onChange={(e) => {
             const v = e.target.checked;
             setActive(v);
-            setAutoDeactivated(false);
-            onChange({ active: v, autoDeactivated: false });
+            onChange({ active: v });
           }}
         />
         Active (spawning)
       </label>
-      <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
+      <div style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: signalGated ? 4 : 10 }}>
         {active
-          ? "Spawning normally. If its path fills up (no room left under item spacing), it'll pause itself automatically."
-          : autoDeactivated
-            ? "Auto-paused — its path filled up. It'll resume on its own once there's room, or you can flip it back on here."
-            : 'Not spawning. Turn this on to let it produce items.'}
+          ? "Spawning every cooldown. If there's no room on a given tick, that spawn is just skipped — this switch stays on either way."
+          : 'Not spawning. Turn this on to let it produce items.'}
       </div>
+      {signalGated && (
+        <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginTop: 0, marginBottom: 10 }}>
+          Also wired to a Command node — this switch AND whatever that Command last relayed both have to allow it for
+          spawning to actually happen.
+        </p>
+      )}
       <div style={rowStyle}>
         <label style={labelStyle}>Spawn cooldown (logic-seconds)</label>
         <input
@@ -1040,27 +1134,181 @@ function SourceFields({
           }}
         />
       </div>
+      <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 6 }}>
+        <input
+          type="checkbox"
+          checked={spawnLimitEnabled}
+          onChange={(e) => {
+            const v = e.target.checked;
+            setSpawnLimitEnabled(v);
+            onChange({ spawnLimitEnabled: v, spawnLimit });
+          }}
+        />
+        Limit total spawns
+      </label>
+      <div style={{ ...rowStyle, opacity: spawnLimitEnabled ? 1 : 0.5 }}>
+        <label style={labelStyle}>Spawn limit</label>
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={spawnLimit}
+          disabled={!spawnLimitEnabled}
+          style={inputStyle}
+          onChange={(e) => {
+            const v = Math.max(0, Math.round(Number(e.target.value)));
+            setSpawnLimit(v);
+            onChange({ spawnLimit: v });
+          }}
+        />
+      </div>
+      <p style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
+        {spawnLimitEnabled
+          ? `Stops spawning for good once it has produced ${spawnLimit} item${spawnLimit === 1 ? '' : 's'} — the node's badge counts down from ${spawnLimit} to 0 as spawns remain, and dims the same way the switch above does.`
+          : 'Off — spawns without limit for as long as the switch above stays on.'}
+      </p>
     </>
   );
 }
 
-function DistributorFields({ node, onChange }: { node: NodeDef; onChange: (fields: Record<string, unknown>) => void }) {
-  const [mode, setMode] = useState(node.config.mode === 'broadcast' ? 'broadcast' : 'roundRobin');
+/** Weighted round-robin (2026-09-10 follow-up — Falcon: "its a round
+ * robin but set to a certain outflow in a certain way"): a third Mode
+ * option alongside the existing two, plus a weight field per output
+ * PORT (not per edge — matching how distributor.ts's own
+ * `buildWeightedSequence` keys `config.weights`). Ports come from the
+ * node's actual output edges (`graph.outputEdges`), deduplicated — a
+ * distributor with several wires off the same octagon side shares one
+ * weight field for it, same as it already shares one round-robin turn.
+ *
+ * Same-day follow-up (Falcon: "the ports are named according to
+ * compass like the N,NE,SE,S,SW,W,NW"): sourcePort now just IS the
+ * physical anchor a wire is drawn from (App.tsx's edge-creation sites)
+ * — draw each output from a different octagon side and it gets its
+ * own port, hence its own weight field here, with zero manual editing.
+ * Sorted ascending (unchanged), which IS clockwise order (0=E round to
+ * 7=NE — octagon.ts's own anchor convention), matching "distributor
+ * should be clockwise". Labeled with `compassLabel` instead of the
+ * raw index for the same reason every other port-based field now is. */
+function DistributorFields({
+  node,
+  onChange,
+  graph,
+}: {
+  node: NodeDef;
+  onChange: (fields: Record<string, unknown>) => void;
+  graph: GraphModel;
+}) {
+  const [mode, setMode] = useState(
+    node.config.mode === 'broadcast' ? 'broadcast' : node.config.mode === 'weighted' ? 'weighted' : 'roundRobin',
+  );
+  const [weights, setWeights] = useState<Record<string, number>>(
+    (node.config.weights as Record<string, number> | undefined) ?? {},
+  );
+  const outputPorts = [...new Set(graph.outputEdges(node.id).map((e) => e.sourcePort))].sort((a, b) => a - b);
+
+  function setWeight(port: number, value: number): void {
+    const next = { ...weights, [String(port)]: value };
+    setWeights(next);
+    onChange({ weights: next });
+  }
+
   return (
-    <div style={rowStyle}>
-      <label style={labelStyle}>Mode</label>
-      <select
-        value={mode}
-        style={inputStyle}
-        onChange={(e) => {
-          setMode(e.target.value);
-          onChange({ mode: e.target.value });
-        }}
-      >
-        <option value="roundRobin">Round-robin</option>
-        <option value="broadcast">Broadcast</option>
-      </select>
-    </div>
+    <>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Mode</label>
+        <select
+          value={mode}
+          style={inputStyle}
+          onChange={(e) => {
+            const v = e.target.value;
+            setMode(v);
+            onChange({ mode: v });
+          }}
+        >
+          <option value="roundRobin">Round-robin</option>
+          <option value="broadcast">Broadcast</option>
+          <option value="weighted">Weighted round-robin</option>
+        </select>
+      </div>
+      {mode === 'weighted' && (
+        <>
+          <p style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 8 }}>
+            Each port gets its own number of turns per cycle — e.g. weights 1 / 3 / 5 send 5x more down the third port
+            than the first. Blank/unset defaults to 1; 0 skips that port entirely.
+          </p>
+          {outputPorts.length === 0 && (
+            <p style={{ fontSize: 11, color: theme.text3 }}>No output wires yet — wire this up first.</p>
+          )}
+          {outputPorts.map((port) => (
+            <div key={port} style={rowStyle}>
+              <label style={labelStyle}>{compassLabel(port)} weight</label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={weights[String(port)] ?? 1}
+                style={inputStyle}
+                onChange={(e) => setWeight(port, Math.max(0, Math.round(Number(e.target.value))))}
+              />
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
+/** Transform (2026-09-10, "now i want to introduce the transform
+ * node"): one fixed A -> B rule, both picked from the same registered-
+ * item-type dropdown SourceFields' own Item type field already uses --
+ * `inputType` is a label only (shown here so the node reads clearly as
+ * "A -> B"), never a filter transform.ts itself enforces; every
+ * arriving item is relabeled to `outputType` regardless of what it
+ * arrived as. */
+function TransformFields({
+  node,
+  onChange,
+  objectRegistry,
+}: {
+  node: NodeDef;
+  onChange: (fields: Record<string, unknown>) => void;
+  objectRegistry: ObjectRegistry;
+}) {
+  const [inputType, setInputType] = useState(
+    typeof node.config.inputType === 'string' ? node.config.inputType : 'widget',
+  );
+  const [outputType, setOutputType] = useState(
+    typeof node.config.outputType === 'string' ? node.config.outputType : 'widget',
+  );
+  return (
+    <>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Converts from</label>
+        <ItemTypeSelect
+          value={inputType}
+          objectRegistry={objectRegistry}
+          onChange={(v) => {
+            setInputType(v);
+            onChange({ inputType: v });
+          }}
+        />
+      </div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Converts to</label>
+        <ItemTypeSelect
+          value={outputType}
+          objectRegistry={objectRegistry}
+          onChange={(v) => {
+            setOutputType(v);
+            onChange({ outputType: v });
+          }}
+        />
+      </div>
+      <p style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
+        Every item arriving as "{inputType}" (or any other type) leaves this node relabeled "{outputType}" —
+        instantly, no delay. "Converts from" is just this node's own label, not a filter.
+      </p>
+    </>
   );
 }
 
@@ -1073,10 +1321,12 @@ function SorterFields({
   node,
   onChange,
   objectRegistry,
+  graph,
 }: {
   node: NodeDef;
   onChange: (fields: Record<string, unknown>) => void;
   objectRegistry: ObjectRegistry;
+  graph: GraphModel;
 }) {
   const initialRules = Array.isArray(node.config.rules) ? (node.config.rules as SorterRuleRow[]) : [];
   const [rules, setRules] = useState<SorterRuleRow[]>(initialRules.map((r) => ({ ...r })));
@@ -1084,6 +1334,11 @@ function SorterFields({
     typeof node.config.defaultPort === 'number' ? String(node.config.defaultPort) : '',
   );
   const [unmatchedPolicy, setUnmatchedPolicy] = useState(node.config.unmatchedPolicy === 'drop' ? 'drop' : 'hold');
+  // 2026-09-10 ("the ports are named according to compass"): a
+  // sorter's rule/default ports are all output-role (they pick which
+  // OUTGOING wire an item leaves on), so both pull from the same set
+  // of this node's actual outputEdges, compass-labeled by PortSelect.
+  const outputEdges = graph.outputEdges(node.id);
 
   function commitRules(next: SorterRuleRow[]): void {
     setRules(next);
@@ -1094,6 +1349,9 @@ function SorterFields({
     <>
       <div style={rowStyle}>
         <label style={labelStyle}>Rules (first match wins)</label>
+        {outputEdges.length === 0 && (
+          <p style={{ fontSize: 11, color: theme.text3, marginBottom: 4 }}>No output wires yet — wire this up first.</p>
+        )}
         {rules.map((rule, i) => (
           <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
             <div style={{ flex: 2 }}>
@@ -1107,16 +1365,17 @@ function SorterFields({
                 }}
               />
             </div>
-            <input
-              type="number"
-              placeholder="port"
-              value={rule.outputPort}
-              style={{ ...inputStyle, flex: 1 }}
-              onChange={(e) => {
-                const next = rules.map((r, idx) => (idx === i ? { ...r, outputPort: Number(e.target.value) } : r));
-                commitRules(next);
-              }}
-            />
+            <div style={{ flex: 1 }}>
+              <PortSelect
+                edges={outputEdges}
+                portOf={(e) => e.sourcePort}
+                value={rule.outputPort}
+                onChange={(v) => {
+                  const next = rules.map((r, idx) => (idx === i ? { ...r, outputPort: v } : r));
+                  commitRules(next);
+                }}
+              />
+            </div>
             <button
               type="button"
               onClick={() => commitRules(rules.filter((_, idx) => idx !== i))}
@@ -1128,7 +1387,7 @@ function SorterFields({
         ))}
         <button
           type="button"
-          onClick={() => commitRules([...rules, { itemType: '', outputPort: 0 }])}
+          onClick={() => commitRules([...rules, { itemType: '', outputPort: outputEdges[0]?.sourcePort ?? 0 }])}
           style={smallButtonStyle}
         >
           + Add rule
@@ -1136,15 +1395,43 @@ function SorterFields({
       </div>
       <div style={rowStyle}>
         <label style={labelStyle}>Default port (blank = none)</label>
-        <input
-          type="number"
-          value={defaultPort}
-          style={inputStyle}
-          onChange={(e) => {
-            setDefaultPort(e.target.value);
-            onChange({ defaultPort: e.target.value === '' ? undefined : Number(e.target.value) });
-          }}
-        />
+        {defaultPort === '' ? (
+          <button
+            type="button"
+            onClick={() => {
+              const v = outputEdges[0]?.sourcePort ?? 0;
+              setDefaultPort(String(v));
+              onChange({ defaultPort: v });
+            }}
+            style={smallButtonStyle}
+          >
+            Set a default port
+          </button>
+        ) : (
+          <div style={{ display: 'flex', gap: 4 }}>
+            <div style={{ flex: 1 }}>
+              <PortSelect
+                edges={outputEdges}
+                portOf={(e) => e.sourcePort}
+                value={Number(defaultPort)}
+                onChange={(v) => {
+                  setDefaultPort(String(v));
+                  onChange({ defaultPort: v });
+                }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDefaultPort('');
+                onChange({ defaultPort: undefined });
+              }}
+              style={{ ...smallButtonStyle, flex: '0 0 auto', padding: '5px 8px' }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
       <div style={rowStyle}>
         <label style={labelStyle}>Unmatched policy</label>
@@ -1173,22 +1460,34 @@ function MixerFields({
   node,
   onChange,
   objectRegistry,
+  graph,
 }: {
   node: NodeDef;
   onChange: (fields: Record<string, unknown>) => void;
   objectRegistry: ObjectRegistry;
+  graph: GraphModel;
 }) {
   const recipeObj = (node.config.recipe ?? {}) as Record<number, string>;
   const [rows, setRows] = useState<RecipeRow[]>(
     Object.entries(recipeObj).map(([port, itemType]) => ({ port: Number(port), itemType: String(itemType) })),
   );
-  const [outputPort, setOutputPort] = useState(typeof node.config.outputPort === 'number' ? node.config.outputPort : 0);
   const [outputType, setOutputType] = useState(
     typeof node.config.outputType === 'string' ? node.config.outputType : 'item',
   );
   const [bufferCapacity, setBufferCapacity] = useState(
     typeof node.config.bufferCapacity === 'number' ? String(node.config.bufferCapacity) : '',
   );
+  // 2026-09-10 ("the ports are named according to compass"): a recipe
+  // row's port is input-role (which INCOMING wire has to deliver a
+  // matching item before the recipe can fire) — pulls from the
+  // mixer's actual inputEdges, keyed by targetPort. Mixer's own single
+  // output no longer has a separate "Output port" field here at all —
+  // it's capped to exactly one real output edge (portCapacity.ts),
+  // moved with the compass grid in NodeProperties' own "Output side"
+  // section (SingleOutputSidePicker) instead of a second, easy-to-
+  // desync config number pointed at the same thing (mixer.ts just
+  // takes "the" active output edge directly now).
+  const inputEdges = graph.inputEdges(node.id);
 
   function commitRows(next: RecipeRow[]): void {
     setRows(next);
@@ -1201,18 +1500,22 @@ function MixerFields({
     <>
       <div style={rowStyle}>
         <label style={labelStyle}>Recipe (input port → item type)</label>
+        {inputEdges.length === 0 && (
+          <p style={{ fontSize: 11, color: theme.text3, marginBottom: 4 }}>No input wires yet — wire this up first.</p>
+        )}
         {rows.map((row, i) => (
           <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
-            <input
-              type="number"
-              placeholder="port"
-              value={row.port}
-              style={{ ...inputStyle, flex: 1 }}
-              onChange={(e) => {
-                const next = rows.map((r, idx) => (idx === i ? { ...r, port: Number(e.target.value) } : r));
-                commitRows(next);
-              }}
-            />
+            <div style={{ flex: 1 }}>
+              <PortSelect
+                edges={inputEdges}
+                portOf={(e) => e.targetPort}
+                value={row.port}
+                onChange={(v) => {
+                  const next = rows.map((r, idx) => (idx === i ? { ...r, port: v } : r));
+                  commitRows(next);
+                }}
+              />
+            </div>
             <div style={{ flex: 2 }}>
               <ItemTypeSelect
                 value={row.itemType}
@@ -1233,22 +1536,13 @@ function MixerFields({
             </button>
           </div>
         ))}
-        <button type="button" onClick={() => commitRows([...rows, { port: rows.length, itemType: '' }])} style={smallButtonStyle}>
+        <button
+          type="button"
+          onClick={() => commitRows([...rows, { port: inputEdges[0]?.targetPort ?? 0, itemType: '' }])}
+          style={smallButtonStyle}
+        >
           + Add input
         </button>
-      </div>
-      <div style={rowStyle}>
-        <label style={labelStyle}>Output port</label>
-        <input
-          type="number"
-          value={outputPort}
-          style={inputStyle}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            setOutputPort(v);
-            onChange({ outputPort: v });
-          }}
-        />
       </div>
       <div style={rowStyle}>
         <label style={labelStyle}>Output item type</label>
@@ -1277,7 +1571,7 @@ function MixerFields({
   );
 }
 
-function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Record<string, unknown>) => void }) {
+function BufferFields({ node, onChange, graph }: { node: NodeDef; onChange: (fields: Record<string, unknown>) => void; graph: GraphModel }) {
   const [capacity, setCapacity] = useState(
     typeof node.config.capacity === 'number' ? String(node.config.capacity) : '',
   );
@@ -1286,6 +1580,13 @@ function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
     typeof node.config.overflowPort === 'number' ? node.config.overflowPort : 1,
   );
   const [outputPort, setOutputPort] = useState(typeof node.config.outputPort === 'number' ? node.config.outputPort : 0);
+  // 2026-09-10 ("the ports are named according to compass"): both of
+  // Silo's two real output roles (main drain + optional overflow) are
+  // output-role, so both pull from the same actual outputEdges set,
+  // excluding a copper "watch" edge to a Sensor (design doc §5.7) —
+  // that one's never a candidate for either role, same edgeKind !==
+  // 'signal' exclusion buffer.ts's own onItemArrival already applies.
+  const outputEdges = graph.outputEdges(node.id).filter((e) => e.edgeKind !== 'signal');
 
   return (
     <>
@@ -1318,30 +1619,36 @@ function BufferFields({ node, onChange }: { node: NodeDef; onChange: (fields: Re
       {overflowPolicy === 'divert' && (
         <div style={rowStyle}>
           <label style={labelStyle}>Overflow port</label>
-          <input
-            type="number"
-            value={overflowPort}
-            style={inputStyle}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setOverflowPort(v);
-              onChange({ overflowPort: v });
-            }}
-          />
+          {outputEdges.length === 0 ? (
+            <p style={{ fontSize: 11, color: theme.text3 }}>No output wires yet — wire this up first.</p>
+          ) : (
+            <PortSelect
+              edges={outputEdges}
+              portOf={(e) => e.sourcePort}
+              value={overflowPort}
+              onChange={(v) => {
+                setOverflowPort(v);
+                onChange({ overflowPort: v });
+              }}
+            />
+          )}
         </div>
       )}
       <div style={rowStyle}>
         <label style={labelStyle}>Output port</label>
-        <input
-          type="number"
-          value={outputPort}
-          style={inputStyle}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            setOutputPort(v);
-            onChange({ outputPort: v });
-          }}
-        />
+        {outputEdges.length === 0 ? (
+          <p style={{ fontSize: 11, color: theme.text3 }}>No output wires yet — wire this up first.</p>
+        ) : (
+          <PortSelect
+            edges={outputEdges}
+            portOf={(e) => e.sourcePort}
+            value={outputPort}
+            onChange={(v) => {
+              setOutputPort(v);
+              onChange({ outputPort: v });
+            }}
+          />
+        )}
       </div>
     </>
   );
@@ -1376,12 +1683,74 @@ function GateFields({ nodeId, graph }: { nodeId: string; graph: GraphModel }) {
   );
 }
 
+/** Command (2026-09-10 follow-up — Falcon: "sensor node only senses
+ * and triggers signal[,] the command node is the one has command on
+ * it ... it is compatible only with wire and dockable to source node
+ * and sensor node"; extended the same day to a 3rd target — "i want
+ * [the Counter] to count only role and can manually be resetable or
+ * by a command when docked with command"): also nothing of its own to
+ * configure — it just relays whatever its one Sensor last told it onto
+ * whatever it's attached to (command.ts): activate/deactivate for a
+ * Source, or a reset pulse for a Counter (counter.ts's own onTick).
+ * Two independent read-only status lines, mirroring GateFields' single
+ * one: one for the INPUT side (is a Sensor actually wired in — reuses
+ * `hasSignalInput` with its default `'sensor'` kind, same as
+ * GateFields), one for the OUTPUT side (is it actually attached to a
+ * Source OR a Counter at all — a Command with nothing downstream has a
+ * signal with nowhere to go). Docking to a Sensor does nothing TO the
+ * Sensor (Falcon: "although command can be docked to a sensor node but
+ * it wont do anything to sensor node unlike other node it attach to")
+ * — that's simply a natural consequence of this being Command's input
+ * side, not something this panel needs to call out specially. */
+function CommandFields({ nodeId, graph }: { nodeId: string; graph: GraphModel }) {
+  const sensorConnected = hasSignalInput(nodeId, graph.getAllEdges(), graph.getAllNodes());
+  const attachedOutputs = graph
+    .outputEdges(nodeId)
+    .filter((e) => e.active && e.edgeKind === 'signal')
+    .map((e) => graph.getNode(e.target)?.kind);
+  const sourceAttached = attachedOutputs.includes('source');
+  const counterAttached = attachedOutputs.includes('counter');
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
+        Command has nothing of its own to configure. It relays whatever its Sensor last told it, every tick — onto a
+        Source that means activate/deactivate; onto a Counter it means "reset the count" instead.
+      </p>
+      {sensorConnected ? (
+        <p style={{ fontSize: 11, color: theme.success, marginBottom: 2 }}>✓ A Sensor is wired in — this Command has something to relay.</p>
+      ) : (
+        <p style={{ fontSize: 11, color: theme.danger, marginBottom: 2 }}>
+          ⚠ No active Sensor connected via a Signal edge — this Command has nothing to relay yet.
+        </p>
+      )}
+      {sourceAttached && (
+        <p style={{ fontSize: 11, color: theme.success }}>✓ Attached to a Source — it can be activated/deactivated from here.</p>
+      )}
+      {counterAttached && (
+        <p style={{ fontSize: 11, color: theme.success }}>✓ Attached to a Counter — it can reset its count from here.</p>
+      )}
+      {!sourceAttached && !counterAttached && (
+        <p style={{ fontSize: 11, color: theme.danger }}>⚠ Not attached to a Source or Counter — this Command has nothing to act on.</p>
+      )}
+    </div>
+  );
+}
+
 const SENSOR_COMPARATOR_LABEL: Record<string, string> = {
   gte: '≥ (at least)',
   lte: '≤ (at most)',
   gt: '> (more than)',
   lt: '< (less than)',
   eq: '= (exactly)',
+};
+
+/** Metric options (2026-09-10 follow-up — 'count' added alongside the
+ * Counter node; see sensor.ts's readMetric). One shared metric for
+ * every node this Sensor watches, same "one comparator+threshold for
+ * all of them" simplification the design doc already committed to. */
+const SENSOR_METRIC_LABEL: Record<string, string> = {
+  queueLength: 'Queue length',
+  count: 'Count (items passed)',
 };
 
 /** Sensor (design doc §4.8; auto-watch extended §5.7, 2026-09-09
@@ -1416,6 +1785,18 @@ function SensorFields({
     typeof node.config.comparator === 'string' ? node.config.comparator : 'gte',
   );
   const [threshold, setThreshold] = useState(typeof node.config.threshold === 'number' ? node.config.threshold : 0);
+  const [metric, setMetric] = useState(typeof node.config.metric === 'string' ? node.config.metric : 'queueLength');
+  // Test pulse (2026-09-10 follow-up — Falcon: "i want sensor node
+  // with a temporary activate button for temporary and testing
+  // purposes[,] this transmit power temporarily"): same "config bump,
+  // a per-tick hook notices it" channel Counter's Reset button already
+  // uses — see sensor.ts's evaluateSignals for the countdown itself.
+  const [testPulseSeq, setTestPulseSeq] = useState(
+    typeof node.config.testPulseSeq === 'number' ? node.config.testPulseSeq : 0,
+  );
+  const [testPulseDuration, setTestPulseDuration] = useState(
+    typeof node.config.testPulseDuration === 'number' ? node.config.testPulseDuration : 2,
+  );
 
   const candidates = graph.getAllNodes().filter((n) => n.id !== node.id);
   const liveWatched = watchedNodeIds(graph.inputEdges(node.id));
@@ -1424,7 +1805,7 @@ function SensorFields({
     <>
       {liveWatched.length > 0 ? (
         <div style={rowStyle}>
-          <label style={labelStyle}>Watch node (its queue length)</label>
+          <label style={labelStyle}>Watch node</label>
           <p style={{ fontSize: 12, color: theme.text2, lineHeight: 1.5, margin: 0 }}>
             {liveWatched
               .map((id) => {
@@ -1440,13 +1821,22 @@ function SensorFields({
         </div>
       ) : (
         <div style={rowStyle}>
-          <label style={labelStyle}>Watch node (its queue length)</label>
+          <label style={labelStyle}>Watch node</label>
           <select
             value={watchNodeId}
             style={inputStyle}
             onChange={(e) => {
-              setWatchNodeId(e.target.value);
-              onChange({ watchNodeId: e.target.value || undefined, metric: 'queueLength' });
+              const id = e.target.value;
+              setWatchNodeId(id);
+              // Falcon, 2026-09-10 (Counter follow-up): a manually-
+              // picked Counter defaults the metric to 'count' rather
+              // than the old blanket 'queueLength' -- still just a
+              // convenience default, the dropdown below can always
+              // override it either way.
+              const picked = candidates.find((n) => n.id === id);
+              const nextMetric = picked?.kind === 'counter' ? 'count' : 'queueLength';
+              setMetric(nextMetric);
+              onChange({ watchNodeId: id || undefined, metric: nextMetric });
             }}
           >
             <option value="">— none selected —</option>
@@ -1458,6 +1848,23 @@ function SensorFields({
           </select>
         </div>
       )}
+      <div style={rowStyle}>
+        <label style={labelStyle}>Metric</label>
+        <select
+          value={metric}
+          style={inputStyle}
+          onChange={(e) => {
+            setMetric(e.target.value);
+            onChange({ metric: e.target.value });
+          }}
+        >
+          {Object.entries(SENSOR_METRIC_LABEL).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </div>
       <div style={rowStyle}>
         <label style={labelStyle}>Condition</label>
         <select
@@ -1490,11 +1897,110 @@ function SensorFields({
       </div>
       <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: -4 }}>
         Fires a signal every tick, re-evaluated live: {liveWatched.length > 1 ? 'ANY watched node\'s' : 'watched'}{' '}
-        queue length {SENSOR_COMPARATOR_LABEL[comparator]} {threshold}. Wire this Sensor to a Gate with an "Edge
-        kind: Signal" edge (see that edge's Logic section) — the Gate stays open for as long as this condition
-        holds.
+        {(SENSOR_METRIC_LABEL[metric] ?? metric).toLowerCase()} {SENSOR_COMPARATOR_LABEL[comparator]} {threshold}.
+        Wire this Sensor to a Gate — or, as of 2026-09-10, a Source — with an "Edge kind: Signal" edge (see that
+        edge's Logic section); it stays open/spawning for as long as this condition holds.
+      </p>
+      <div style={sectionTitleStyle}>Test / Debug</div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Pulse duration (seconds)</label>
+        <input
+          type="number"
+          min={0.1}
+          step={0.5}
+          value={testPulseDuration}
+          style={inputStyle}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setTestPulseDuration(v);
+            onChange({ testPulseDuration: v });
+          }}
+        />
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          const next = testPulseSeq + 1;
+          setTestPulseSeq(next);
+          onChange({ testPulseSeq: next });
+        }}
+        style={{ ...smallButtonStyle, width: '100%' }}
+      >
+        Force ON ({testPulseDuration}s)
+      </button>
+      <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: 4 }}>
+        Temporarily broadcasts a "true" signal for {testPulseDuration}s, regardless of the actual condition above —
+        for testing a downstream Gate/Command/Counter without needing the real condition to trip. Pressing again
+        while it's still counting down restarts the timer instead of stacking. Purely a debug aid; the real
+        condition resumes on its own once the pulse ends.
       </p>
     </>
+  );
+}
+
+/** Counter (2026-09-10 — Falcon: "a new counter node this node only
+ * acts as a counter ... it only counts what pass to it") — nothing to
+ * configure about HOW it counts: every arrival always counts, same "no
+ * per-port routing" simplicity Gate's single real output already has,
+ * and — confirmed again the same day, after Falcon asked why a
+ * Sensor+Command pair stopped a Source — a Counter is never itself
+ * gated or paused by anything; that was always the SOURCE stopping,
+ * never this node refusing on its own account. The live count itself
+ * isn't shown here — it's already the canvas badge (nodeSkin.ts's
+ * getBadgeCount), the same live-runtime-state badge Buffer's queue
+ * length already uses, so there's no separate read-out to duplicate.
+ *
+ * Reset, two independent ways (Falcon confirmed "resettable" via
+ * AskUserQuestion, then the same day: "can manually be resetable or by
+ * a command when docked with command"):
+ *  - Manual (the button below): PropertiesPanel has no direct line to
+ *    NodeRuntimeStateStore — config is the only thing any Fields
+ *    component here ever mutates — so rather than open a new
+ *    UI->runtime channel just for one button, this rides the existing
+ *    config channel instead: bumping `resetSeq` is an ordinary config
+ *    write, and counter.ts's own per-tick hook (onTick) notices the
+ *    bump and zeroes `state.count` the very next tick — checked every
+ *    tick, not just on the node's next arrival, so it applies even
+ *    while nothing is currently flowing through it.
+ *  - Command-driven (new, no UI control here — it's wiring, not a
+ *    config field): dock or wire a Command node onto this Counter's
+ *    new signal-only input slot and it fires the exact same reset,
+ *    triggered by its Sensor's condition instead of a click — see
+ *    counter.ts's own onTick doc comment for the full rising-edge
+ *    mechanism and its `true`-fires-reset polarity. The status line
+ *    below just reports whether one is actually wired in, same
+ *    read-only treatment GateFields/CommandFields already use for
+ *    their own "is X actually connected" checks. */
+function CounterFields({
+  node,
+  graph,
+  onChange,
+}: {
+  node: NodeDef;
+  graph: GraphModel;
+  onChange: (fields: Record<string, unknown>) => void;
+}) {
+  const resetSeq = typeof node.config.resetSeq === 'number' ? node.config.resetSeq : 0;
+  const commandWired = hasSignalInput(node.id, graph.getAllEdges(), graph.getAllNodes(), 'command');
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
+        Counts every item that passes through — nothing else to configure. The running total shows as the badge on
+        the node itself. Dock or wire a Sensor to it to read that count elsewhere ("Metric: Count").
+      </p>
+      {commandWired && (
+        <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginTop: 0, marginBottom: 8 }}>
+          Also wired to a Command node — it resets this count on its own, independent of the button below.
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={() => onChange({ resetSeq: resetSeq + 1 })}
+        style={{ ...smallButtonStyle, width: '100%' }}
+      >
+        Reset count
+      </button>
+    </div>
   );
 }
 
@@ -2162,6 +2668,57 @@ function PathShapeField({ edgeId, floorLayout }: { edgeId: string; floorLayout: 
   );
 }
 
+/** Compass-labeled "which side of the node is this wire's end plugged
+ * into" dropdown for an ORDINARY edge (2026-09-10, Falcon: "the ports
+ * are named according to compass ... how can i set it in the
+ * properties which port?") — the generic sibling of
+ * SingleOutputSidePicker above, usable on EITHER end of any edge, not
+ * just a maxOutputs-1 kind's single output. Moving it reassigns the
+ * REAL floor-layer anchor (`floorLayout.reassignAnchor`) and keeps
+ * GraphModel's sourcePort/targetPort in lockstep in the same click
+ * (`graph.updateEdgePorts`) — the two are never allowed to drift apart
+ * post-2026-09-10 (see GraphModel.updateEdgePorts's own doc comment).
+ * A side already taken by a DIFFERENT edge on this node is disabled
+ * rather than silently rejected on click (reassignAnchor would refuse
+ * it anyway; disabling tells the user why up front). */
+function EdgeSideSelect({
+  edgeId,
+  nodeId,
+  end,
+  value,
+  graph,
+  floorLayout,
+  onChange,
+}: {
+  edgeId: string;
+  nodeId: string;
+  end: 'source' | 'target';
+  value: number;
+  graph: GraphModel;
+  floorLayout: FloorLayout;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <select
+      value={value}
+      style={inputStyle}
+      onChange={(e) => {
+        const v = Number(e.target.value);
+        const ok = floorLayout.reassignAnchor(edgeId, end, v);
+        if (!ok) return;
+        graph.updateEdgePorts(edgeId, end === 'source' ? { sourcePort: v } : { targetPort: v });
+        onChange(v);
+      }}
+    >
+      {Array.from({ length: 8 }, (_, i) => i).map((i) => (
+        <option key={i} value={i} disabled={i !== value && floorLayout.isAnchorOccupied(nodeId, i)}>
+          {compassLabel(i)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** Speed (Falcon, 2026-09-03: "why does a longer path make the
  * object seem to travel faster?" — because `flowRate` is progress-
  * per-second, edge-length-independent by design (design doc §5.1: an
@@ -2223,29 +2780,27 @@ function EdgeLogicFields({
     <>
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Source port</label>
-          <input
-            type="number"
+          <label style={labelStyle}>Source side</label>
+          <EdgeSideSelect
+            edgeId={edge.id}
+            nodeId={edge.source}
+            end="source"
             value={sourcePort}
-            style={inputStyle}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setSourcePort(v);
-              graph.updateEdgePorts(edge.id, { sourcePort: v });
-            }}
+            graph={graph}
+            floorLayout={floorLayout}
+            onChange={setSourcePort}
           />
         </div>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Target port</label>
-          <input
-            type="number"
+          <label style={labelStyle}>Target side</label>
+          <EdgeSideSelect
+            edgeId={edge.id}
+            nodeId={edge.target}
+            end="target"
             value={targetPort}
-            style={inputStyle}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setTargetPort(v);
-              graph.updateEdgePorts(edge.id, { targetPort: v });
-            }}
+            graph={graph}
+            floorLayout={floorLayout}
+            onChange={setTargetPort}
           />
         </div>
       </div>

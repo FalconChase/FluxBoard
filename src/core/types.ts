@@ -37,7 +37,49 @@ export type NodeKind =
    * capacity, §4.2) and fires a level-based signal down its outgoing
    * signal edges (edgeKind: 'signal', below) to every connected Gate.
    * Carries no physical item and has no onItemArrival at all. */
-  | 'sensor';
+  | 'sensor'
+  /** Counter (design doc §4.8/§5.7 follow-up, 2026-09-10 — Falcon: "a
+   * new counter node this node only acts as a counter like it only
+   * counts what pass to it unlike buffer/silo that stores items"): 1
+   * real item input, 1 real item output, no storage of its own —
+   * every arrival is immediately forwarded onward (subject to the same
+   * downstream-capacity check distributor/buffer already use) while
+   * `state.count` ticks up. Exists to be WATCHED: dockable/wireable
+   * with a Sensor (which reads `count` as a metric, mirroring how it
+   * already reads a Buffer's `queue.length`) and with a Source (a
+   * physical item dock, so a Counter can sit right at a Source's
+   * output and tally everything it spawns) and with a Buffer/Silo.
+   * See counter.ts. */
+  | 'counter'
+  /** Command (design doc §4.8 follow-up, 2026-09-10 — Falcon:
+   * "sensor node only senses and triggers signal[,] the command node
+   * is the one has command on it ... if a command node receives a
+   * signal it will do a command to the node attached to it say source
+   * node"): the missing "act" half of the Sensor relationship, for a
+   * Source's active/inactive switch specifically — the same
+   * senses-vs-acts split Sensor/Gate already have for item flow.
+   * ZERO physical ports, both its ports are copper/signal-only (like
+   * Sensor): one signal IN from a Sensor, one signal OUT to a Source,
+   * strictly one-to-one (Falcon's pick over allowing several on
+   * either side). Every tick it just relays whatever it last received
+   * from its Sensor back out to its Source, level-based like Sensor
+   * itself — no storage, no threshold/comparator of its own, nothing
+   * to configure. Docking/wiring it TO a Sensor has no effect ON that
+   * Sensor (a Command only ever commands what's on its OUTPUT side);
+   * only its Source side is ever actually commanded. See command.ts. */
+  | 'command'
+  /** Transform (2026-09-10 — originally explored as a "Mixer used with
+   * a single input/output port" during the §4.8 node-design session
+   * and dropped there; revisited and built the same day this feature
+   * list otherwise closed out, as its own dedicated kind rather than a
+   * constrained Mixer config). 1 real item input, 1 real item output,
+   * no storage of its own — an arriving item is relabeled from
+   * `config.inputType` to `config.outputType` and forwarded onward the
+   * SAME tick it arrives (confirmed: instant passthrough, no
+   * processing delay). One fixed A -> B rule per node (confirmed, over
+   * a Sorter-style rule LIST) — for several conversions, place several
+   * Transform nodes. See transform.ts. */
+  | 'transform';
 
 /** Pure topology + static config for one node. No runtime state here. */
 export interface NodeDef {

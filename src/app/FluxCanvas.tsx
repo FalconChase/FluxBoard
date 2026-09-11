@@ -220,6 +220,13 @@ interface FluxCanvasProps {
    * leaves the canvas. Purely a display feed; doesn't affect any
    * interaction logic below. */
   onCursorWorldPositionChange?: (point: Point | null) => void;
+  /** VIEW tab toggle (Falcon, 2026-09-10: "toggle off option for path
+   * direction") -- when false, hides every path's direction arrowhead
+   * (both real paths' drawPathDirectionArrow and in-progress sketch
+   * legs' drawStraightDirectionArrow, the same visual language). Pure
+   * display preference, same App.tsx-owned pattern as snapToGrid;
+   * defaults to true so existing behavior is unchanged. */
+  showPathDirection?: boolean;
 }
 
 /** Imperative handle (App.tsx's Play/Pause button lives in the bottom
@@ -349,6 +356,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     rotateArmed,
     canvasBackground = 'white',
     onCursorWorldPositionChange,
+    showPathDirection = true,
   },
   ref,
 ) {
@@ -403,6 +411,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   canvasBackgroundRef.current = canvasBackground;
   const onCursorWorldPositionChangeRef = useRef(onCursorWorldPositionChange);
   onCursorWorldPositionChangeRef.current = onCursorWorldPositionChange;
+  const showPathDirectionRef = useRef(showPathDirection);
+  showPathDirectionRef.current = showPathDirection;
 
   function toggleRunning(): void {
     const driver = driverRef.current;
@@ -858,7 +868,9 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           // curved leg's own arrow is deferred (Falcon, 2026-09-05:
           // "just the curve alone for now", same scope boundary as
           // tangent continuity).
-          if (sketch.segments[s]!.bow === 0) drawStraightDirectionArrow(ctx!, from, to, camera, viewport);
+          if (showPathDirectionRef.current && sketch.segments[s]!.bow === 0) {
+            drawStraightDirectionArrow(ctx!, from, to, camera, viewport);
+          }
         }
         // Falcon, 2026-09-05 ("there is no way i can snap a sketch to
         // a node's port"): a pinned end used to draw NOTHING of its
@@ -1024,7 +1036,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         if (!curve) continue;
         const skin = skinConfig.getEdgeSkin(edge.id);
         drawPathOver(ctx!, curve, camera, viewport, skin);
-        drawPathDirectionArrow(ctx!, curve, camera, viewport);
+        if (showPathDirectionRef.current) drawPathDirectionArrow(ctx!, curve, camera, viewport);
         if (
           (sel?.type === 'edge' && sel.id === edge.id) ||
           (sel?.type === 'multi' && sel.edgeIds.includes(edge.id))
@@ -1114,7 +1126,21 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         const screen = camera.worldToScreen(pos, viewport);
         const r = NODE_RADIUS * camera.zoom;
         const state = engine.getNodeState(node.id) ?? {};
-        const isDimmedSource = node.kind === 'source' && node.config.active === false;
+        // 2026-09-10 follow-up (Falcon: "i want the source node to
+        // have a set or limited spawn feature like a switch"): once a
+        // limited Source has actually hit its ceiling, dim it the same
+        // way the manual `active` switch already does — same "dim
+        // color, not fade out" treatment (drawNode's own doc comment),
+        // just a second reason to apply it. SimEngine.
+        // sourceCanSpawnThisTick reads the exact same two fields to
+        // decide whether to actually spawn; this is purely the visual
+        // side of that same gate.
+        const spawnLimitReached =
+          node.kind === 'source' &&
+          node.config.spawnLimitEnabled === true &&
+          (typeof state.spawnedCount === 'number' ? state.spawnedCount : 0) >=
+            (typeof node.config.spawnLimit === 'number' ? node.config.spawnLimit : 0);
+        const isDimmedSource = node.kind === 'source' && (node.config.active === false || spawnLimitReached);
         drawNode(ctx!, node, state, screen, r, camera.zoom, skinConfig.getNodeIcon(node.id), isDimmedSource);
         if (skinConfig.getNodeLocked(node.id)) {
           drawNodeLockBadge(ctx!, screen, r, camera.zoom);

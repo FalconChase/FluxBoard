@@ -1,5 +1,6 @@
 import type { Item } from '../types';
-import type { NodeBehavior, NodeTickContext, OnItemArrival, PerTickHook } from './contract';
+import type { NodeBehavior, OnItemArrival, PerTickHook } from './contract';
+import { targetBufferIsFull } from './backpressure';
 
 /**
  * Buffer/overflow (design doc §4.2) — a capacity-limited queue with
@@ -45,45 +46,6 @@ const onItemArrival: OnItemArrival = (item, node, state, outputEdges) => {
 
   return { newState: state, actions: [], accepted: false };
 };
-
-/**
- * Peek at a candidate output edge's TARGET before tryDrain commits to
- * dequeuing (design doc §5.8, 2026-09-09 follow-up — Falcon, testing a
- * docked Silo chain: "only the last silo gets filled then the rest
- * never get filled no matter how many items already passed through").
- *
- * Root cause: tryDrain used to dequeue its head item and fire a
- * 'forward' action with NO idea whether the target could actually
- * accept it. For an ORDINARY (slow-flowRate) edge that's harmless —
- * a refused item just visibly parks at progress 1 right outside the
- * target (SimEngine's own backpressure convention), which reads as
- * normal, visible congestion. But a docked Silo->Silo edge has a huge
- * flowRate (App.tsx's DOCK_FLOW_RATE — refused or not, it's re-checked
- * on the very next tick) AND dock edges are deliberately excluded from
- * FluxCanvas's item-token render pass (a connector seam is drawn there
- * instead, not a travelling token) — so a refused item on a dock edge
- * became invisible forever: already gone from the draining Silo's own
- * queue, never reflected in the target Silo's queue either, just
- * silently parked forever in SimEngine's internal item map with no
- * on-screen trace. That's exactly why every Silo except the very last
- * one in a docked chain always read empty: each one kept eagerly
- * emptying itself into the next regardless of whether the next had
- * room, so nothing short of the chain's dead end ever visibly
- * accumulated.
- *
- * Only buffer targets are checked — a buffer/Silo is the one node kind
- * with a checkable "capacity" concept today; every other target kind
- * (sink, gate, mixer, ...) keeps the original eager-drain behavior
- * unchanged. Uncapped (`capacity` left as Infinity) never blocks.
- */
-function targetBufferIsFull(edge: { target: string }, ctx: NodeTickContext | undefined): boolean {
-  const targetNode = ctx?.getNode(edge.target);
-  if (targetNode?.kind !== 'buffer') return false;
-  const targetState = ctx?.getNodeState(edge.target);
-  const targetQueue = (targetState?.queue as Item[] | undefined) ?? [];
-  const targetCapacity = typeof targetNode.config.capacity === 'number' ? targetNode.config.capacity : Infinity;
-  return targetQueue.length >= targetCapacity;
-}
 
 const tryDrain: PerTickHook = (node, state, outputEdges, _dt, _makeItemId, ctx) => {
   const queue: Item[] = [...((state.queue as Item[] | undefined) ?? [])];

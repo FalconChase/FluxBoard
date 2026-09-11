@@ -67,6 +67,23 @@ export function octagonPortAnchor(center: Point, radius: number, portIndex: numb
 
 export const OCTAGON_PORT_COUNT = VERTEX_COUNT;
 
+/** Compass label for each anchor index, same clockwise order as
+ * `octagonPortAnchor`'s own doc comment (0=E,1=SE,2=S,3=SW,4=W,5=NW,
+ * 6=N,7=NE) — added 2026-09-10 (Falcon: "the ports are named
+ * according to compass like the N,NE,SE,S,SW,W,NW") once EdgeDef's
+ * sourcePort/targetPort were changed (App.tsx's edge-creation call
+ * sites, GraphModel.updateEdgePorts) to just BE this anchor index,
+ * ending the deliberate anchor/logical-port split FBP009 started.
+ * `PropertiesPanel.SingleOutputSidePicker` had its own local compass
+ * array for exactly this same mapping before this existed — kept here
+ * instead since the mapping is this module's own convention. */
+export const COMPASS_LABELS: readonly string[] = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
+
+export function compassLabel(portIndex: number): string {
+  const i = ((portIndex % VERTEX_COUNT) + VERTEX_COUNT) % VERTEX_COUNT;
+  return COMPASS_LABELS[i] ?? String(portIndex);
+}
+
 /** Point-in-convex-polygon test via the standard "same side of every
  * edge" check — exact for a convex shape like this octagon, and cheap
  * enough to run per click against every node (Milestone 5 selection

@@ -41,14 +41,22 @@ export interface AnchorHit {
  * anchors (skin/octagon.ts's existing octagonPortAnchor, already drawn
  * as the small dots on every node) and a path attaches to ONE specific
  * anchor at each end, max 8 paths per node. This is purely a FLOOR
- * concept — which anchor a path's curve starts/ends at — deliberately
- * kept separate from the LOGIC layer's sourcePort/targetPort integers
- * (GraphModel/EdgeDef), which remain plain routing indices a sorter/
- * distributor/mixer's config refers to and are untouched by this.
- * Conflating the two would tie every node's physical socket count to
- * its routing logic, which is a bigger decision than what was asked
- * for here — flagged to Falcon as a deliberate scoping choice, worth
- * revisiting only if he actually wants routing tied to physical sides.
+ * concept — which anchor a path's curve starts/ends at.
+ *
+ * Originally kept deliberately separate from the LOGIC layer's
+ * sourcePort/targetPort integers (GraphModel/EdgeDef) — conflating the
+ * two would have tied every node's physical socket count to its
+ * routing logic, a bigger decision than FBP009 asked for at the time.
+ * Falcon revisited that exact tradeoff 2026-09-10 ("the ports are
+ * named according to compass like the N,NE,SE,S,SW,W,NW", confirmed
+ * via AskUserQuestion: ports auto-derived from the physical anchor,
+ * across every port-based kind) — every edge-creation call site in
+ * App.tsx now sets sourcePort/targetPort to the SAME anchor index this
+ * module assigned it (see GraphModel.updateEdgePorts's own doc
+ * comment), and `reassignAnchor` below is kept in sync with it by
+ * every caller too (PropertiesPanel's EdgeSidePicker). The two are no
+ * longer independent concepts — an edge's logical port IS whichever
+ * physical anchor it's plugged into.
  *
  * Precise port snapping + sketch attachments (Falcon, 2026-09-05):
  * the 8 anchor slots per node are now a shared reservation pool — a

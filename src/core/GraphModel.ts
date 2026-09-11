@@ -145,10 +145,16 @@ export class GraphModel {
 
   /** Edge port numbers — the integers each node kind's own handler
    * matches against (sorter rules, mixer recipe ports, distributor
-   * round-robin order, ...). Renamed here to make clear this is NOT
-   * the octagon's 8 geometric port anchors (design doc §4.1) — that
-   * mapping doesn't exist yet (FBP009); this only changes which
-   * logical port number an existing edge is wired to. */
+   * round-robin order, ...). Originally NOT the octagon's 8 geometric
+   * port anchors (design doc §4.1, FBP009) — as of 2026-09-10 (Falcon:
+   * "the ports are named according to compass") these ARE that same
+   * anchor index; every caller that moves an edge's physical anchor
+   * (App.tsx's edge-creation sites, PropertiesPanel's EdgeSidePicker)
+   * calls this alongside FloorLayout.reassignAnchor/setEdgeCurve so
+   * the two never drift apart. Kept as a separate direct setter (not
+   * folded into FloorLayout itself) since GraphModel/EdgeDef is still
+   * the one place a node's own onItemArrival ever reads these from —
+   * SimEngine has no FloorLayout dependency at all (design doc §4.6). */
   updateEdgePorts(edgeId: EdgeId, patch: { sourcePort?: number; targetPort?: number }): void {
     const edge = this.edges.get(edgeId);
     if (!edge) throw new Error(`Edge "${edgeId}" does not exist`);

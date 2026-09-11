@@ -9,6 +9,9 @@ import { mixerBehavior } from './mixer';
 import { bufferBehavior } from './buffer';
 import { gateBehavior } from './gate';
 import { sensorBehavior } from './sensor';
+import { counterBehavior } from './counter';
+import { commandBehavior } from './command';
+import { transformBehavior } from './transform';
 
 export * from './contract';
 export { hasSignalInput } from './gate';
@@ -29,4 +32,7 @@ export const nodeHandlers: Partial<Record<NodeDef['kind'], NodeBehavior>> = {
   buffer: bufferBehavior,
   gate: gateBehavior,
   sensor: sensorBehavior,
+  counter: counterBehavior,
+  command: commandBehavior,
+  transform: transformBehavior,
 };
