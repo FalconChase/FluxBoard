@@ -12,10 +12,12 @@ import { sensorBehavior } from './sensor';
 import { counterBehavior } from './counter';
 import { commandBehavior } from './command';
 import { transformBehavior } from './transform';
+import { timeBehavior } from './time';
 
 export * from './contract';
 export { hasSignalInput } from './gate';
 export { watchedNodeIds } from './sensor';
+export { defaultVerbForTargetKind } from './command';
 
 /**
  * Node-kind behavior registry — SimEngine dispatches to this by
@@ -35,4 +37,5 @@ export const nodeHandlers: Partial<Record<NodeDef['kind'], NodeBehavior>> = {
   counter: counterBehavior,
   command: commandBehavior,
   transform: transformBehavior,
+  time: timeBehavior,
 };

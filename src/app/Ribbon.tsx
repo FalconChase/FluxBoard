@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { NodeKind } from '../core/types';
 import { nodeSkinDefaults } from '../skin/nodeSkin';
 import { octagonVertices, traceClosedPath } from '../skin/octagon';
-import type { EdgeStyle } from '../skin/pathSkin';
+import { COPPER_IDLE_COLOR, type EdgeStyle } from '../skin/pathSkin';
 import type { SketchStyle } from './FluxCanvas';
 import { hexWithAlpha } from '../skin/canvasUtil';
 import { annotationIcons, ANNOTATION_ICON_COLOR, ANNOTATION_ICON_LABEL, ANNOTATION_ICON_ORDER } from '../skin/annotationIcons';
@@ -65,6 +65,7 @@ export const BASIC_NODE_KINDS: NodeKind[] = [
   'sensor',
   'counter',
   'command',
+  'time',
 ];
 export const COMPOUND_NODE_KINDS: NodeKind[] = ['transform', 'mixer'];
 /** Full flat list, both categories concatenated -- kept for any future
@@ -78,11 +79,27 @@ export const NODE_KINDS: NodeKind[] = [...BASIC_NODE_KINDS, ...COMPOUND_NODE_KIN
  * itself -- NodesOverflowPanel below still lists all of NODE_KINDS
  * (7, then gate/sensor added the same day -- 9, then counter -- 10). */
 const KEPT_NODE_KINDS: NodeKind[] = ['source', 'distributor', 'buffer', 'sink'];
+/** 'copper'/"Wire" (2026-09-11 follow-up — Falcon: "why i still cant
+ * see a wire option in paths", confirmed via AskUserQuestion: "Add a
+ * manual Wire tool"): unlike the 4 plain styles above, arming this
+ * one doesn't just paint whatever you draw — App.tsx's handleCreateEdge
+ * (and its sketch-conversion/restyle siblings) still requires the two
+ * ends to actually be a wire-compatible pair (Sensor/Gate/Command/
+ * Counter/Time/Source) before it'll create or restyle anything as
+ * copper; an incompatible pair is rejected with a flash message, same
+ * as every other port-capacity/compatibility rule. This swatch exists
+ * so drawing a wire is a deliberate, discoverable choice from the
+ * Paths group instead of something that only ever happened as a side
+ * effect of which two nodes you happened to drag between — the
+ * automatic copper-on-compatible-pairs behavior itself is unchanged
+ * (arming Trace/Conveyor/etc. and dragging between a Sensor and a
+ * Gate still comes out copper too, exactly as before this existed). */
 export const EDGE_STYLES: { style: EdgeStyle; label: string; color: string }[] = [
   { style: 'transparent', label: 'Transparent', color: theme.text3 },
   { style: 'trace', label: 'Trace', color: '#9aa1ad' },
   { style: 'conveyor', label: 'Conveyor', color: '#3d7fff' },
   { style: 'glassTube', label: 'Glass tube', color: '#17b3a3' },
+  { style: 'copper', label: 'Wire', color: COPPER_IDLE_COLOR },
 ];
 
 const TABS: { tab: RibbonTab; label: string }[] = [
@@ -142,6 +159,17 @@ interface RibbonProps {
   onArmMove: (armed: boolean) => void;
   rotateArmed: boolean;
   onArmRotate: (armed: boolean) => void;
+  /** TOOLS tab (Falcon, 2026-09-14: "i want to develop first in the
+   * tool tab to measure the distance between node ... like a ruler",
+   * confirmed via AskUserQuestion: a transient tape-measure, snapping
+   * to ports/centers/the octagon body edge/grid, free otherwise) --
+   * mirrors sketchArmed's arm-then-drag flow: while armed, any drag
+   * on the canvas measures between its snapped start/end instead of
+   * doing anything else, and nothing is added to the graph on
+   * release. Mutually exclusive with every other arm state, same as
+   * the rest of this list. */
+  measureArmed: boolean;
+  onArmMeasure: (armed: boolean) => void;
 
   canDelete: boolean;
   onDeleteSelection: () => void;
@@ -219,10 +247,11 @@ interface RibbonProps {
  * library entry, not an arm-then-place kind). VIEW absorbs the
  * properties panel's old "Canvas & simulation" section (grid
  * spacing, sim tick interval, snap-to-grid) plus the new workspace-
- * background setting Falcon asked for. INSERT/MANAGE/LAYERS/TOOLS are
+ * background setting Falcon asked for. TOOLS got its first real group
+ * 2026-09-14 (the Measure/ruler tool). INSERT/MANAGE/LAYERS are still
  * inert placeholders — real content for those needs more spec first
- * (ICONS/LABEL overlay, LAYERS' z-axis floor stacking, TOOLS' measure
- * tool — see claude/build-log.md).
+ * (ICONS/LABEL overlay, LAYERS' z-axis floor stacking — see
+ * claude/build-log.md).
  */
 export function Ribbon({
   projectName,
@@ -247,6 +276,8 @@ export function Ribbon({
   onArmMove,
   rotateArmed,
   onArmRotate,
+  measureArmed,
+  onArmMeasure,
   canDelete,
   onDeleteSelection,
   canDuplicate,
@@ -484,9 +515,22 @@ export function Ribbon({
           </>
         )}
 
-        {(activeTab === 'manage' || activeTab === 'layers' || activeTab === 'tools') && (
-          <PlaceholderTabContent tab={activeTab} />
+        {activeTab === 'tools' && (
+          <RibbonGroup
+            title="Measure"
+            info="Drag between any two points to measure the distance — snaps to a port dot, a node's center, its real octagon body edge, or a grid intersection, whichever is nearest, or falls back to the exact cursor point if nothing's close enough. Nothing is added to the graph; the line disappears on release."
+          >
+            <RibbonIconButton
+              label="Measure"
+              title="Drag to measure a distance — snaps to ports, node centers, node body edges, or the grid"
+              active={measureArmed}
+              onClick={() => onArmMeasure(!measureArmed)}
+              icon={<MeasureIcon />}
+            />
+          </RibbonGroup>
         )}
+
+        {(activeTab === 'manage' || activeTab === 'layers') && <PlaceholderTabContent tab={activeTab} />}
       </div>
     </div>
   );
@@ -496,7 +540,6 @@ function PlaceholderTabContent({ tab }: { tab: RibbonTab }) {
   const copy: Record<string, string> = {
     manage: 'Manage — bulk project/graph operations. Not built yet.',
     layers: 'Layers — stacking floors along a z-axis. Not built yet.',
-    tools: 'Tools — measurement and guide tools. Not built yet.',
   };
   return (
     <RibbonGroup title={TABS.find((t) => t.tab === tab)?.label ?? ''} info={copy[tab]}>
@@ -798,7 +841,11 @@ export function PathsOverflowPanel({
           key={style}
           preview={<PathIconPreview edgeStyle={style} color={color} size={24} />}
           label={label}
-          title={`Apply the ${label} style`}
+          title={
+            style === 'copper'
+              ? 'Draw a wire — only lands between compatible nodes (Sensor, Gate, Command, Counter, Time, Source)'
+              : `Apply the ${label} style`
+          }
           active={armedEdgeStyle === style}
           onClick={() => onArmEdgeStyle(armedEdgeStyle === style ? null : style)}
         />
@@ -1327,6 +1374,32 @@ export function PathIconPreview({ edgeStyle, color, size = 28 }: { edgeStyle: Ed
       ctx.lineTo(w - 9, midY + 3);
       ctx.closePath();
       ctx.fill();
+    } else if (edgeStyle === 'copper') {
+      // "Wire" (2026-09-11 follow-up) -- a soft idle glow (same
+      // grey-orange COPPER_IDLE_COLOR the real signal-edge render
+      // uses, design doc §5.5) under a solid core line, so this
+      // swatch reads as its own distinct thing at a glance rather
+      // than just a thin gray line like 'trace'.
+      ctx.strokeStyle = hexWithAlpha(color, 0.35);
+      ctx.lineWidth = 6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(4, midY);
+      ctx.lineTo(w - 4, midY);
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(4, midY);
+      ctx.lineTo(w - 7, midY);
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(w - 4, midY);
+      ctx.lineTo(w - 9, midY - 3);
+      ctx.lineTo(w - 9, midY + 3);
+      ctx.closePath();
+      ctx.fill();
     } else {
       ctx.strokeStyle = theme.borderStrong;
       ctx.lineWidth = 1.3;
@@ -1355,8 +1428,12 @@ export function PathSwatchButton({
   armed: boolean;
   onClick: () => void;
 }) {
+  const title =
+    edgeStyle === 'copper'
+      ? 'Draw a wire — only lands between compatible nodes (Sensor, Gate, Command, Counter, Time, Source)'
+      : `Apply the ${label} style`;
   return (
-    <button type="button" onClick={onClick} title={`Apply the ${label} style`} style={swatchButtonStyle(armed)}>
+    <button type="button" onClick={onClick} title={title} style={swatchButtonStyle(armed)}>
       <PathIconPreview edgeStyle={edgeStyle} color={color} />
       <span style={swatchLabelStyle}>{label}</span>
     </button>
@@ -1620,6 +1697,18 @@ export function RotateIcon() {
     <svg {...iconProps()}>
       <path d="M12.5 8A4.5 4.5 0 1 1 10.7 4.4" />
       <path d="M12.8 2.6 12.5 5.6 9.6 5.1" />
+    </svg>
+  );
+}
+/** Falcon, 2026-09-14 (TOOLS tab's Measure tool): a small ruler
+ * glyph — a diagonal bar with a few cross-tick "graduations", reading
+ * as "measure" the same way the built-in icon set's other tool icons
+ * (Move's arrows, Rotate's arc) read as their own action at a glance. */
+export function MeasureIcon() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M3 13 13 3" />
+      <path d="M4.6 11.4 6 10M7.4 8.6 8.8 7.2M10.2 5.8 11.6 4.4" />
     </svg>
   );
 }

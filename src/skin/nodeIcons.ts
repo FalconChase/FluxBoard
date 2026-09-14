@@ -221,6 +221,32 @@ const transform: IconDrawFn = (ctx, cx, cy, size) => {
   ctx.stroke();
 };
 
+/** Time (design doc trigger-system finalization, 2026-09-11) — a
+ * classic clock face: a stroked circle with two hands (short/hour,
+ * long/minute) reading a few minutes past the hour, the universal
+ * "clock/timer" glyph. Distinct from Counter's tally-mark read
+ * (Counter counts discrete arrivals; Time reads continuous elapsed
+ * seconds) and from Command's power-button read (Time is watchable,
+ * never actuating on its own). */
+const time: IconDrawFn = (ctx, cx, cy, size) => {
+  const r = size * 0.46;
+  ctx.lineWidth = Math.max(1.5, size * 0.12);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
+  // Hour hand: short, pointing up-right.
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + r * 0.42, cy - r * 0.32);
+  ctx.stroke();
+  // Minute hand: long, pointing straight up.
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx, cy - r * 0.68);
+  ctx.stroke();
+};
+
 export const nodeIcons = {
   source,
   sink,
@@ -234,4 +260,5 @@ export const nodeIcons = {
   counter,
   command,
   transform,
+  time,
 } as const;

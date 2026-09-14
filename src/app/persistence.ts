@@ -252,6 +252,100 @@ export function syncEdgePortsToAnchors(graph: GraphModel, floorLayout: FloorLayo
   }
 }
 
+/** Migrates every live Sensor→Gate `edgeKind: 'signal'` wire to the
+ * new Command-mediated shape (design doc trigger-system finalization,
+ * 2026-09-11 — Falcon: "surface this to me before assuming how to
+ * migrate it", confirmed via AskUserQuestion: "Auto-insert a Command
+ * node (Recommended)"). Before this, a Sensor wired straight into a
+ * Gate drove that Gate's `open` state directly (sensor.ts's
+ * evaluateSignals → gate.ts's hasSignalInput default of 'sensor');
+ * Gate now only ever listens to a Command (hasSignalInput's default
+ * flipped to 'command' — see gate.ts), so an un-migrated old wire
+ * would silently stop doing anything the moment this ships.
+ *
+ * For every such wire this splices in a brand-new Command node
+ * (`config: { verb: 'open', duration: 'latch' }` — Latch mode with
+ * the 'open' verb is the exact behavioral equivalent of the old
+ * direct level-mirror: the Gate opens whenever, and for exactly as
+ * long as, the Sensor's condition holds true) at the wire's old
+ * midpoint, replacing the single old edge with two new ones —
+ * Sensor→Command and Command→Gate, both `edgeKind: 'signal'` and
+ * styled copper, same as any other hand-drawn Sensor/Command wire
+ * (App.tsx's handleCreateEdge). Deterministic child ids
+ * (`${edge.id}__command` etc.) rather than coordinating with
+ * App.tsx's nextIdRef, which this module has no access to — fine
+ * since GraphModel.addNode/addEdge only need uniqueness, not any
+ * particular id shape.
+ *
+ * Idempotent by construction: once run, no Sensor→Gate signal edge
+ * exists any more for a second pass to find, same as
+ * syncEdgePortsToAnchors above. A no-op on any project with no such
+ * wire (the overwhelming majority, and every project saved after
+ * this ships in the first place). */
+export function migrateSensorGateToCommand(graph: GraphModel, floorLayout: FloorLayout, skinConfig: SkinConfig): void {
+  const toMigrate = graph.getAllEdges().filter((edge) => {
+    if (!edge.active || edge.edgeKind !== 'signal') return false;
+    const source = graph.getNode(edge.source);
+    const target = graph.getNode(edge.target);
+    return source?.kind === 'sensor' && target?.kind === 'gate';
+  });
+
+  for (const edge of toMigrate) {
+    const sensorId = edge.source;
+    const gateId = edge.target;
+    const commandId = `${edge.id}__command`;
+
+    const sensorPos = floorLayout.getNodePosition(sensorId);
+    const gatePos = floorLayout.getNodePosition(gateId);
+    const midpoint: Point =
+      sensorPos && gatePos
+        ? { x: (sensorPos.x + gatePos.x) / 2, y: (sensorPos.y + gatePos.y) / 2 }
+        : (sensorPos ?? gatePos ?? { x: 0, y: 0 });
+
+    graph.addNode({ id: commandId, kind: 'command', config: { verb: 'open', duration: 'latch' } });
+    floorLayout.setNodePosition(commandId, midpoint);
+
+    // Drop the old direct wire first so its anchor bookings free up
+    // before the two replacement wires claim their own (setEdgeCurve
+    // auto-picks nearest-free, so an anchor the old edge was still
+    // holding could otherwise get skipped over unnecessarily).
+    graph.removeEdge(edge.id);
+    floorLayout.removeEdgeCurve(edge.id);
+    skinConfig.removeEdge(edge.id);
+
+    const sensorCommandEdgeId = `${edge.id}__sensor-command`;
+    const commandGateEdgeId = `${edge.id}__command-gate`;
+
+    floorLayout.setEdgeCurve(sensorCommandEdgeId, sensorId, commandId);
+    const sensorCommandAnchors = floorLayout.getEdgeAnchors(sensorCommandEdgeId);
+    graph.addEdge({
+      id: sensorCommandEdgeId,
+      source: sensorId,
+      target: commandId,
+      sourcePort: sensorCommandAnchors?.sourceAnchor ?? 0,
+      targetPort: sensorCommandAnchors?.targetAnchor ?? 0,
+      flowRate: 0.15,
+      active: true,
+      edgeKind: 'signal',
+    });
+    skinConfig.setEdgeSkin(sensorCommandEdgeId, { style: 'copper' });
+
+    floorLayout.setEdgeCurve(commandGateEdgeId, commandId, gateId);
+    const commandGateAnchors = floorLayout.getEdgeAnchors(commandGateEdgeId);
+    graph.addEdge({
+      id: commandGateEdgeId,
+      source: commandId,
+      target: gateId,
+      sourcePort: commandGateAnchors?.sourceAnchor ?? 0,
+      targetPort: commandGateAnchors?.targetAnchor ?? 0,
+      flowRate: 0.15,
+      active: true,
+      edgeKind: 'signal',
+    });
+    skinConfig.setEdgeSkin(commandGateEdgeId, { style: 'copper' });
+  }
+}
+
 /** Populates the given (already-constructed, already-empty) stores
  * from a saved snapshot — mutates them in place rather than building
  * fresh instances, so callers can pass the SAME singleton instances
@@ -323,6 +417,14 @@ export function populateState(
   // reconciles them, one time, on load. See syncEdgePortsToAnchors's
   // own doc comment below for why this exists at all.
   syncEdgePortsToAnchors(graph, floorLayout);
+
+  // 2026-09-11 (Command role-split finalization): a save from before
+  // Gate stopped listening to Sensor directly still has the old wire
+  // — splice in a Command node so it keeps behaving exactly as it
+  // did. See migrateSensorGateToCommand's own doc comment above for
+  // why this exists at all; idempotent, so this is safe to run on
+  // every load regardless of whether the save actually needs it.
+  migrateSensorGateToCommand(graph, floorLayout, skinConfig);
 
   for (const sketch of saved.sketches) {
     sketchLayer.add(sketch);

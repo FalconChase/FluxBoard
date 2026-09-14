@@ -42,6 +42,12 @@ export const nodeSkinDefaults: Record<NodeKind, NodeSkinDefaults> = {
   // Transform (2026-09-10, "now i want to introduce the transform
   // node") — rose pink, distinct from every kind above.
   transform: { fill: '#ec4899', stroke: '#be185d', icon: nodeIcons.transform },
+  // Time (design doc trigger-system finalization, 2026-09-11) — lime
+  // green, the one genuinely free gap on the hue wheel between gate's
+  // amber and counter's green, so it never gets mistaken for either
+  // of the two kinds it most often sits near (Command mediates both
+  // Gate and Time, and a Sensor can watch either).
+  time: { fill: '#84cc16', stroke: '#4d7c0f', icon: nodeIcons.time },
 };
 
 /**
@@ -99,6 +105,17 @@ export function getBadgeCount(node: NodeDef, state: RuntimeState): number | stri
     const spawnedCount = typeof state.spawnedCount === 'number' ? state.spawnedCount : 0;
     const limit = typeof node.config.spawnLimit === 'number' ? node.config.spawnLimit : 0;
     return Math.max(0, limit - spawnedCount);
+  }
+  // Time (design doc trigger-system finalization, 2026-09-11) — a 3rd
+  // deliberate exception alongside Counter/limited-Source: its live
+  // clock reading (`state.value`, time.ts's onTick) IS the point of
+  // watching this node at all, same "this badge is its only UI
+  // surface" reasoning Counter's tally already has. One decimal place
+  // (unlike Counter's bare integer tally) since this is a continuous
+  // real-world-seconds read, not a discrete arrival count.
+  if (node.kind === 'time') {
+    const value = typeof state.value === 'number' ? state.value : 0;
+    return value.toFixed(1);
   }
   return undefined;
 }

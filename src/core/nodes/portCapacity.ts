@@ -1,4 +1,4 @@
-import type { NodeKind } from '../types';
+import type { NodeKind, EdgeDef } from '../types';
 
 /**
  * Per-kind "nature" wiring limits (Falcon, 2026-09-03: "the source node
@@ -40,6 +40,29 @@ import type { NodeKind } from '../types';
 export interface PortCapacity {
   maxInputs?: number;
   maxOutputs?: number;
+  /** Wire-only OUTPUT slots (2026-09-11 follow-up — Falcon: "1 output
+   * path port and a port for docking compatible node... 2 wire port
+   * and 1 output port for the source"): counted in a bucket SEPARATE
+   * from `maxOutputs` above, for a kind whose real item output would
+   * otherwise have to compete with a copper/signal output for the
+   * same numeric cap. Source is the first (so far only) kind that
+   * needs this — its one real product-path output (`maxOutputs: 1`,
+   * unchanged) and its new Sensor-watch signal output both come off
+   * the SAME physical node but serve completely different roles, so
+   * they get their own independent slot instead of fighting over one.
+   * When a kind leaves this undefined (every kind except Source right
+   * now), nothing changes: every outgoing edge — wire or real item
+   * alike — still counts against the single `maxOutputs` bucket, the
+   * exact behavior every other kind already had before this field
+   * existed. See `applicableOutputCap`/`relevantOutputEdges` below for
+   * how a caller actually applies this split; there's no equivalent
+   * `maxWireInputs` yet because no kind has hit the same conflict on
+   * its INPUT side — every kind whose input side already mixes wire
+   * and physical concerns (Gate/Counter/Time's Command-reset slot)
+   * only ever has ONE of the two competing for that slot at a time by
+   * construction, not two live simultaneous needs the way Source's
+   * output side now does. */
+  maxWireOutputs?: number;
 }
 
 /**
@@ -122,9 +145,55 @@ export interface PortCapacity {
  *    of the Sensor/Gate/Command trigger system, so it gets no dock
  *    compatibility below either (place a wire, same as Distributor/
  *    Sorter/Mixer).
+ *  - time (2026-09-11, Command/Counter/Time extension): zero physical
+ *    ports at all — time.ts has no onItemArrival, same conservation
+ *    rationale as Sensor's/Command's own fully-copper ports. 1 input
+ *    (a Command's reset signal, one-to-one — same "one-to-one, like
+ *    Gate" shape Command itself already has with its own Sensor), 1
+ *    output (the copper "watch" edge to a Sensor reading its live
+ *    clock value — see sensor.ts's readMetric 'timeValue').
+ *  - source (2026-09-11 follow-up — Falcon hit the wall this was
+ *    always going to hit: docking a Counter onto a Source, or just
+ *    drawing an ordinary product-path wire out of one, both consumed
+ *    the SAME single `maxOutputs: 1` slot, so having one blocked the
+ *    other outright. Falcon: "2 wire port and 1 output port for the
+ *    source... command and sensor is a wire compatible nodes" —
+ *    confirmed via AskUserQuestion that the 2nd wire port is a NEW
+ *    capability, Sensor watching Source directly, same "watched"
+ *    pattern Buffer/Counter/Time already have (see sensor.ts's
+ *    readMetric 'spawnedCount' and isDockCompatible's source<->sensor
+ *    pair below)): `maxOutputs` stays 1 — still purely the real
+ *    product-path output, exactly as before — and `maxWireOutputs: 1`
+ *    is added as its own independent slot for the new Sensor-watch
+ *    signal edge. Together with the existing `maxInputs: 1` (still
+ *    unambiguously Command's own signal-in — Source never had a real
+ *    physical input to compete with it, so no `maxWireInputs` split
+ *    was needed there), that's "2 wire ports [Command-in + Sensor-
+ *    out] and 1 output port [the real product path]," matching
+ *    Falcon's own count exactly.
+ *  - source, bumped again same-session (2026-09-11 later follow-up —
+ *    Falcon: "why does the source can never get reused like once it
+ *    deactivated when limited spawn count all spawned ... even i
+ *    tried to activate it back manually", confirmed via
+ *    AskUserQuestion: "Manual button + Command-driven reset"):
+ *    `maxInputs` bumped again, 1 -> 2. The original 1 stays exactly
+ *    what it was — one Command wired for the ongoing activate/
+ *    deactivate gate (command.ts's `verb`). The 2nd slot is room for a
+ *    SEPARATE, independent Command wired purely to reset
+ *    `spawnedCount` (command.ts's new 'reset' verb, contract.ts's new
+ *    'resetSignal' action) — kept on its own input slot, and its own
+ *    `resetSignal` runtime field, rather than reusing the first
+ *    Command's `open` field, specifically so the two can coexist
+ *    without one stepping on the other (see contract.ts's own doc
+ *    comment for why `open` alone can't safely carry both meanings).
+ *    Both slots are still Command-only signal-in — App.tsx's
+ *    `isCommandOnlyTarget` doesn't distinguish between them any more
+ *    than it needed to distinguish Counter's own two Command-fillable
+ *    slots; which one a given Command edge actually means is decided
+ *    entirely by that Command's own `verb`, not by edge position.
  */
 export const NATURAL_PORT_CAPACITY: Record<NodeKind, PortCapacity> = {
-  source: { maxInputs: 1, maxOutputs: 1 },
+  source: { maxInputs: 2, maxOutputs: 1, maxWireOutputs: 1 },
   sink: { maxOutputs: 0 },
   distributor: {},
   merger: { maxOutputs: 1 },
@@ -136,10 +205,34 @@ export const NATURAL_PORT_CAPACITY: Record<NodeKind, PortCapacity> = {
   counter: { maxInputs: 2, maxOutputs: 2 },
   command: { maxInputs: 1, maxOutputs: 1 },
   transform: { maxInputs: 1, maxOutputs: 1 },
+  time: { maxInputs: 1, maxOutputs: 1 },
 };
 
 export function getPortCapacity(kind: NodeKind): PortCapacity {
   return NATURAL_PORT_CAPACITY[kind];
+}
+
+/** Which numeric cap actually applies to an OUTGOING edge of the
+ * given wire-ness, for a kind that may or may not split its output
+ * capacity via `maxWireOutputs` (see that field's own doc comment
+ * above). A kind that never sets `maxWireOutputs` (every kind except
+ * Source, so far) returns plain `maxOutputs` regardless of `isWire` —
+ * unchanged behavior, wire and path edges still share one bucket. */
+export function applicableOutputCap(kind: NodeKind, isWire: boolean): number | undefined {
+  const cap = getPortCapacity(kind);
+  return isWire && cap.maxWireOutputs !== undefined ? cap.maxWireOutputs : cap.maxOutputs;
+}
+
+/** Narrows a node's already-fetched outgoing edges down to the ones
+ * that actually count against `applicableOutputCap`'s bucket for the
+ * given wire-ness — a no-op (returns every edge unfiltered) unless
+ * the kind defines `maxWireOutputs`, in which case wire edges
+ * (edgeKind: 'signal') and path edges (everything else) are counted
+ * separately so one never eats into the other's slot. */
+export function relevantOutputEdges(kind: NodeKind, outputEdges: EdgeDef[], isWire: boolean): EdgeDef[] {
+  const cap = getPortCapacity(kind);
+  if (cap.maxWireOutputs === undefined) return outputEdges;
+  return isWire ? outputEdges.filter((e) => e.edgeKind === 'signal') : outputEdges.filter((e) => e.edgeKind !== 'signal');
 }
 
 /**
@@ -201,13 +294,51 @@ export function getPortCapacity(kind: NodeKind): PortCapacity {
  *    source, Counter always the target — no physical-side ambiguity to
  *    read the way gate<->buffer/counter<->buffer need, since this dock
  *    never touches Counter's real item ports at all.
+ * Extended 2026-09-11 (Command/Counter/Time extension — "full dock
+ * support" confirmed via AskUserQuestion, mirroring Buffer's existing
+ * dock precedent): Gate and Time both join Command's list of dockable
+ * partners, and Time joins Sensor's "watched" list the same way Buffer
+ * and Counter already did:
+ *  - command <-> gate — not an item edge (Gate must now be driven only
+ *    by a Command — see gate.ts's own breaking-change doc comment).
+ *    Same fixed direction as command <-> source/counter: Command is
+ *    always the edge source, Gate always the target. Deliberately kept
+ *    OUT of the gate<->buffer real-item-dock heuristic in App.tsx's
+ *    handleDockNodes (that branch now checks the OTHER side is
+ *    actually kind 'buffer' before applying its physical in/out
+ *    heuristic, rather than assuming it by position) — a Command
+ *    docked onto a Gate is never mistaken for a Silo docked onto it.
+ *  - command <-> time — also not an item edge, same fixed direction
+ *    (Command source, Time target) as command <-> counter, filling
+ *    Time's one signal-only input slot.
+ *  - time <-> sensor — a "watched" pair, generalizing for free through
+ *    App.tsx's existing generic Sensor-dock direction logic (Time is
+ *    always the edge source, Sensor always the target — same as
+ *    buffer/counter <-> sensor above), no new code needed there.
+ * Extended 2026-09-11, same-session follow-up (Falcon: "2 wire port
+ * and 1 output port for the source... command and sensor is a wire
+ * compatible nodes", confirmed via AskUserQuestion — Sensor watching
+ * Source directly is the new capability the 2nd wire port is for):
+ *  - source <-> sensor — a "watched" pair, same shape as buffer/
+ *    counter/time <-> sensor above (Source is always the edge source,
+ *    Sensor always the target) and generalizes for free through
+ *    App.tsx's existing generic Sensor-dock direction logic the exact
+ *    same way time <-> sensor did — no new App.tsx code needed for
+ *    the dock itself, only the new `maxWireOutputs` capacity slot
+ *    above and sensor.ts's new 'spawnedCount' metric make it usable.
+ *    Note this is a NEW addition to isCopperCompatible in App.tsx too
+ *    (a hand-drawn Source->Sensor wire goes through that check first,
+ *    same as every other Sensor pairing) — 'source' was deliberately
+ *    left OUT of that list until now, back when Source's only copper
+ *    role was being a Command's TARGET, never anything a Sensor could
+ *    watch.
  * Every other pairing is explicitly left for a later discussion, same
  * "closed, easy-to-extend list" deferral the copper-path rule already
- * used for anything beyond Sensor/Gate/Buffer/Counter/Source/Command —
- * see isCopperCompatible in App.tsx for that sibling rule. Lives here
- * (not App.tsx) because FluxCanvas.tsx also needs it, to know which
- * nearby node counts as a valid drag-to-snap target while a node is
- * mid-drag, not just at the moment a dock is created. */
+ * used for anything beyond Sensor/Gate/Buffer/Counter/Source/Command/
+ * Time — see isCopperCompatible in App.tsx for that sibling rule.
+ * Lives here (not App.tsx) because FluxCanvas.tsx also needs it, to
+ * know which nearby node counts as a valid drag-to-snap target while a
+ * node is mid-drag, not just at the moment a dock is created. */
 export function isDockCompatible(kindA: NodeKind, kindB: NodeKind): boolean {
   if (kindA === 'gate' && kindB === 'buffer') return true;
   if (kindA === 'buffer' && kindB === 'gate') return true;
@@ -226,5 +357,13 @@ export function isDockCompatible(kindA: NodeKind, kindB: NodeKind): boolean {
   if (kindA === 'source' && kindB === 'command') return true;
   if (kindA === 'command' && kindB === 'counter') return true;
   if (kindA === 'counter' && kindB === 'command') return true;
+  if (kindA === 'command' && kindB === 'gate') return true;
+  if (kindA === 'gate' && kindB === 'command') return true;
+  if (kindA === 'command' && kindB === 'time') return true;
+  if (kindA === 'time' && kindB === 'command') return true;
+  if (kindA === 'time' && kindB === 'sensor') return true;
+  if (kindA === 'sensor' && kindB === 'time') return true;
+  if (kindA === 'source' && kindB === 'sensor') return true;
+  if (kindA === 'sensor' && kindB === 'source') return true;
   return false;
 }

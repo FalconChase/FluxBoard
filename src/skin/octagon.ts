@@ -67,6 +67,53 @@ export function octagonPortAnchor(center: Point, radius: number, portIndex: numb
 
 export const OCTAGON_PORT_COUNT = VERTEX_COUNT;
 
+/**
+ * Falcon, 2026-09-14 (docking-seam-threshold discussion, then "i want
+ * to develop first in the tool tab to measure the distance between
+ * node"): the exact distance from a node's own center to its octagon
+ * BOUNDARY along an absolute world-space direction `angle` — not just
+ * the two special cases already named elsewhere (`apothem` at the 8
+ * face-normal/compass directions `octagonPortAnchor` uses, `radius`
+ * itself at the 8 vertex directions), but every angle in between,
+ * exact rather than approximated.
+ *
+ * A regular octagon's boundary at an angle `delta` off a face's own
+ * normal sits at perpendicular distance `apothem` from center, so the
+ * distance straight OUT to that face along the deflected ray is
+ * `apothem / cos(delta)` (basic right-triangle projection) — this
+ * holds for any `delta` within a face's own ±22.5° span, which is
+ * exactly what `Math.round(angle / faceStep) * faceStep` finds:
+ * the nearest face-normal direction, and how far `angle` sits from it.
+ *
+ * This is the real body-edge math the docking-seam-threshold decision
+ * was reasoning about by hand (44-unit forced center distance minus
+ * two apothems ≈ 3.3, one radius ≈ 22, etc.) — generalized to every
+ * angle, not just the compass-aligned case dockedPosition() forces
+ * today. floorLayout.ts's `bodyGap` and `getBoundaryPointTowards` are
+ * both built on this one function so every "how close are these two
+ * node bodies, really" question in the app answers the same way.
+ */
+export function octagonBoundaryDistance(radius: number, angle: number): number {
+  const apothem = radius * Math.cos(VERTEX_ANGLE_OFFSET);
+  const faceStep = Math.PI / 4;
+  const delta = angle - Math.round(angle / faceStep) * faceStep; // in [-π/8, π/8]
+  return apothem / Math.cos(delta);
+}
+
+/** The exact point on a node's own octagon boundary in the direction
+ * of `towardPoint` — the real body edge, distinct from
+ * `octagonPortAnchor`'s 8 fixed face-midpoint dots. Built on
+ * `octagonBoundaryDistance` above. Falcon, 2026-09-14 ("a measure or
+ * distance tool ... snappable to the nodes ports and even other ways
+ * for measuring", confirmed snap targets: ports, centers, "node body
+ * edge (octagon boundary)", grid) — this is what the measure tool's
+ * body-edge snap target (FluxCanvas.tsx) resolves to. */
+export function octagonBoundaryPointTowards(center: Point, radius: number, towardPoint: Point): Point {
+  const angle = Math.atan2(towardPoint.y - center.y, towardPoint.x - center.x);
+  const dist = octagonBoundaryDistance(radius, angle);
+  return { x: center.x + dist * Math.cos(angle), y: center.y + dist * Math.sin(angle) };
+}
+
 /** Compass label for each anchor index, same clockwise order as
  * `octagonPortAnchor`'s own doc comment (0=E,1=SE,2=S,3=SW,4=W,5=NW,
  * 6=N,7=NE) — added 2026-09-10 (Falcon: "the ports are named

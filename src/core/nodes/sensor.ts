@@ -19,7 +19,15 @@ import type { NodeBehavior, PerTickHook, Action } from './contract';
  *    buffer/silo's live `queue.length`) was the only v1 metric;
  *    'count' (a Counter's live running tally, `state.count` —
  *    counter.ts) was added 2026-09-10 alongside the Counter node
- *    itself. Unrecognized or missing reads as 0.
+ *    itself; 'timeValue' (a Time node's live clock reading,
+ *    `state.value` — time.ts) added 2026-09-11 alongside Time;
+ *    'spawnedCount' (a Source's own live running tally of everything
+ *    it has spawned so far, `state.spawnedCount` — source.ts) added
+ *    2026-09-11 same-session follow-up, the "2nd wire port" that lets
+ *    a Sensor watch a Source directly (Falcon: "2 wire port and 1
+ *    output port for the source... command and sensor is a wire
+ *    compatible nodes", confirmed via AskUserQuestion). Unrecognized
+ *    or missing reads as 0.
  *  - comparator + threshold: how the read value is compared. Defaults
  *    to 'gte' / 0 (always true) so a freshly-placed, unconfigured
  *    Sensor doesn't silently do nothing — see defaultConfigFor in
@@ -73,6 +81,14 @@ function readMetric(metric: unknown, watchedState: Record<string, unknown> | und
   if (metric === 'count') {
     const count = watchedState?.count;
     return typeof count === 'number' ? count : 0;
+  }
+  if (metric === 'timeValue') {
+    const value = watchedState?.value;
+    return typeof value === 'number' ? value : 0;
+  }
+  if (metric === 'spawnedCount') {
+    const spawnedCount = watchedState?.spawnedCount;
+    return typeof spawnedCount === 'number' ? spawnedCount : 0;
   }
   return 0;
 }

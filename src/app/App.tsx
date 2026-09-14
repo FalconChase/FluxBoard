@@ -5,7 +5,7 @@ import { GraphModel } from '../core/GraphModel';
 import type { EdgeId, NodeId, NodeKind } from '../core/types';
 import { shapeCenter, flipPoints, type Point } from '../floor/bezier';
 import { SkinConfig } from '../skin/SkinConfig';
-import { getPortCapacity, isDockCompatible } from '../core/nodes/portCapacity';
+import { getPortCapacity, isDockCompatible, applicableOutputCap, relevantOutputEdges } from '../core/nodes/portCapacity';
 import type { EdgeStyle } from '../skin/pathSkin';
 import { LeftPanel } from './LeftPanel';
 import { Ribbon, type RibbonTab } from './Ribbon';
@@ -27,6 +27,7 @@ import {
   loadManifest,
   loadProjectFile,
   makeBlankProjectData,
+  migrateSensorGateToCommand,
   newProjectId,
   populateState,
   saveCustomIconLibraryFile,
@@ -195,11 +196,20 @@ function defaultConfigFor(kind: NodeKind): Record<string, unknown> {
     // implicitly at 0 the same way it's read everywhere else (counter.ts).
     case 'counter':
       return {};
-    // Command (2026-09-10 follow-up): also nothing of its own to
-    // configure -- it just relays whatever its Sensor last told it
-    // (command.ts), no threshold/comparator/anything to pre-fill.
+    // Command (2026-09-10 follow-up; upgraded 2026-09-11 with real
+    // verb/duration config): nothing pre-filled here either -- verb
+    // defaults per-target-kind (defaultVerbForTargetKind) and duration
+    // defaults to 'latch', both computed on read in command.ts itself,
+    // the same "handler already falls back, nothing to pre-fill"
+    // convention every other kind on this list already follows.
     case 'command':
       return {};
+    // Time (2026-09-11, Command/Counter/Time extension): a 10-second
+    // countdown by default -- long enough to actually watch tick down
+    // before immediately hitting 0, short enough not to need a long
+    // wait to see it work.
+    case 'time':
+      return { mode: 'countdown', duration: 10 };
     // Transform (2026-09-10 follow-up, "now i want to introduce the
     // transform node"): identity conversion by default (in === out,
     // both 'widget' -- same default item type Source itself starts
@@ -248,57 +258,102 @@ function defaultConfigFor(kind: NodeKind): Record<string, unknown> {
  * 'command' ADDED -- a Command's ports are copper-path-only exactly
  * like Sensor's own (command.ts has no onItemArrival either), and it's
  * the only kind now allowed to actually target a Source -- see
- * isSourceSignalTarget below. */
+ * isCommandOnlyTarget below.
+ *
+ * Extended 2026-09-11 (Command/Counter/Time extension): 'time' ADDED —
+ * a Sensor can watch a Time node's live clock reading (`state.value`,
+ * sensor.ts's new 'timeValue' metric) the same way it already watches
+ * a Buffer's queue or a Counter's count. 'gate' STAYS in this list
+ * even though a Sensor may no longer target a Gate directly any more
+ * (see isCommandOnlyTarget below, and gate.ts's own breaking-change
+ * doc comment) — Gate<->Command wiring still needs to pass this check
+ * too (Command's own ports are copper-path-only, same as Sensor's), so
+ * narrowing this list would incorrectly block that legitimate pairing.
+ *
+ * Extended again 2026-09-11, same-session follow-up: 'source' ADDED
+ * BACK — but this is NOT a reversal of the "Sensor should never
+ * command a Source" correction two paragraphs up. That correction was
+ * about ACTUATION (a Sensor driving Source's activate/deactivate the
+ * way it once drove a Gate directly) — Command is still, and only
+ * ever, the one thing that can actually change what a Source does
+ * (isCommandOnlyTarget below). This re-addition is about WATCHING
+ * instead: a Sensor may now read a Source's own live `spawnedCount`
+ * (sensor.ts's new 'spawnedCount' metric) purely to react elsewhere,
+ * the same passive "watched" relationship it already has with Buffer/
+ * Counter/Time — see portCapacity.ts's `maxWireOutputs` doc comment
+ * and isDockCompatible's source<->sensor pair for the fuller story
+ * (Falcon: "2 wire port and 1 output port for the source... command
+ * and sensor is a wire compatible nodes", confirmed via
+ * AskUserQuestion). isCommandOnlyTarget's direction check (below)
+ * still makes sure only Source→Sensor (Source watched, never
+ * commanded by the Sensor) actually succeeds. */
 function isCopperCompatible(kind: NodeKind): boolean {
-  return kind === 'sensor' || kind === 'gate' || kind === 'buffer' || kind === 'counter' || kind === 'command';
+  return (
+    kind === 'sensor' ||
+    kind === 'gate' ||
+    kind === 'buffer' ||
+    kind === 'counter' ||
+    kind === 'command' ||
+    kind === 'time' ||
+    kind === 'source'
+  );
 }
 
-/** Source's signal-only input port (2026-09-10 — Falcon: "i want to
- * add additional feature to source node like it will deactivate by
- * using sensor nodes condition", revised same session: "sensor node
- * only senses and triggers signal[,] the command node is the one has
- * command on it"): unlike every other node's real physical input,
- * Source's one input slot (portCapacity.ts's NATURAL_PORT_CAPACITY,
- * bumped 0 -> 1 for this) may ONLY ever be filled by a Command node's
- * signal -- never a Sensor's directly, even though a Sensor is
- * ultimately what drives that Command. Source still has no
- * onItemArrival at all (source.ts), so a real item wired in here would
- * simply vanish, the same conservation gap isCopperCompatible/
- * touchesSensor already guards Sensor's own ports against. One-
- * directional on purpose: a Source may still freely SOURCE an edge to
- * anything its normal 1-output cap already allows (an ordinary
- * Source -> Distributor wire is completely untouched by this) -- it
- * only restricts what may TARGET it. Checked as its own rule at every
- * edge/sketch-convert call site rather than folded into that site's
- * `touchesSensor` check, since this one is asymmetric where that one
- * is symmetric (and doesn't require a Sensor be involved at all --
- * Command -> Source never touches a Sensor directly). */
-function isSourceSignalTarget(targetKind: NodeKind): boolean {
-  return targetKind === 'source';
+/** Command-only actuation targets (2026-09-10 — Falcon: "i want to add
+ * additional feature to source node like it will deactivate by using
+ * sensor nodes condition", revised same session: "sensor node only
+ * senses and triggers signal[,] the command node is the one has
+ * command on it"; generalized 2026-09-11 for the Command/Counter/Time
+ * extension's role split — "Command is the ONLY actuator... nothing
+ * else applies an effect to another node"): unlike every other node's
+ * real physical input, each of these kinds' one signal-only input slot
+ * (portCapacity.ts's NATURAL_PORT_CAPACITY) may ONLY ever be filled by
+ * a Command node's signal -- never a Sensor's directly, even though a
+ * Sensor is ultimately what drives that Command. None of these four
+ * has an onItemArrival that reads this slot as a physical item either,
+ * so a real item wired in here would simply vanish, the same
+ * conservation gap isCopperCompatible/touchesSensor already guards
+ * Sensor's own ports against. 'gate' is the newest addition — the
+ * breaking change: Gate's OWN Sensor connection (built 2026-09-09) is
+ * superseded, and any pre-existing live Sensor->Gate wire is spliced
+ * through an auto-inserted Command at load time instead (see
+ * persistence.ts's migrateSensorGateToCommand) rather than silently
+ * breaking. One-directional on purpose: every one of these kinds may
+ * still freely SOURCE an edge to anything its normal output cap
+ * already allows -- this only restricts what may TARGET it. Checked as
+ * its own rule at every edge/sketch-convert call site rather than
+ * folded into that site's `touchesSensor` check, since this one is
+ * asymmetric where that one is symmetric (and doesn't require a Sensor
+ * be involved at all -- Command -> Source/Gate/Counter/Time never
+ * touches a Sensor directly). */
+function isCommandOnlyTarget(targetKind: NodeKind): boolean {
+  return targetKind === 'source' || targetKind === 'gate' || targetKind === 'counter' || targetKind === 'time';
 }
 
 /** Command's own connectivity rule (2026-09-10, same-day follow-up —
  * generalizing the original "wire/dockable only to Source and Sensor"
  * restriction to also cover the new Command<->Counter reset pairing,
  * Falcon: "i want it to count only role and can manually be resetable
- * or by a command when docked with command"): whichever of the two
+ * or by a command when docked with command"; extended 2026-09-11 for
+ * Gate and Time — "full dock support" confirmed via AskUserQuestion,
+ * mirroring Buffer's existing dock precedent): whichever of the two
  * endpoints is a Command node, the OTHER endpoint must be one of
- * exactly these 3 kinds. This is a separate, source-agnostic
- * complement to `isSourceSignalTarget` above (which protects SOURCE's
- * own single signal-only input port from any non-Command sender) --
- * this one protects COMMAND's own two ports instead, from the other
- * direction, and closes a gap the original Command build actually left
- * open: before this, a Command -> Sink (or -> Gate, -> Distributor,
- * anything not 'sensor'/'source') edge was never actually rejected --
- * `touchesSensor` only fires for a literal Sensor endpoint, and
- * `isSourceSignalTarget` only fires for a literal Source target, so
- * neither check ever looked at Command's OWN allowed-partner list. Not
- * folded into `isCopperCompatible` because that list is Sensor's own
- * (and deliberately excludes 'source' -- see that function's own doc
- * comment), so it can't answer "is this a valid Command partner" on
- * its own either. */
+ * exactly these 5 kinds. This is a separate, source-agnostic
+ * complement to `isCommandOnlyTarget` above (which protects each
+ * target's own single signal-only input port from any non-Command
+ * sender) -- this one protects COMMAND's own two ports instead, from
+ * the other direction, and closes a gap the original Command build
+ * actually left open: before this, a Command -> Sink (or ->
+ * Distributor, anything not one of these 5) edge was never actually
+ * rejected -- `touchesSensor` only fires for a literal Sensor endpoint,
+ * and `isCommandOnlyTarget` only fires for a literal target kind match,
+ * so neither check ever looked at Command's OWN allowed-partner list.
+ * Not folded into `isCopperCompatible` because that list is Sensor's
+ * own (and deliberately excludes 'source' -- see that function's own
+ * doc comment), so it can't answer "is this a valid Command partner"
+ * on its own either. */
 function isCommandCompatible(kind: NodeKind): boolean {
-  return kind === 'sensor' || kind === 'source' || kind === 'counter';
+  return kind === 'sensor' || kind === 'source' || kind === 'counter' || kind === 'gate' || kind === 'time';
 }
 
 /** Docking (design doc §5.6, 2026-09-09 — "attaching the node without
@@ -345,6 +400,12 @@ export function App() {
   // singleton, mutated directly" convention as every store here.
   useMemo(() => syncEdgePortsToAnchors(graph, floorLayout), [graph, floorLayout]);
   const skinConfig = useMemo(() => buildDemoSkinConfig(), []);
+  // 2026-09-11 (Command role-split finalization): same one-time
+  // reconciliation as syncEdgePortsToAnchors above, for the demo
+  // graph's own edges — a no-op today (the demo graph has no Sensor/
+  // Gate nodes at all), kept for safety/consistency with populateState
+  // so the demo graph is never a special case that skips this pass.
+  useMemo(() => migrateSensorGateToCommand(graph, floorLayout, skinConfig), [graph, floorLayout, skinConfig]);
   const sketchLayer = useMemo(() => new SketchLayer(), []);
   // Canvas annotations (INSERT tab, 2026-09-09) — same "stable
   // singleton, mutated directly, single source of truth" convention
@@ -435,6 +496,15 @@ export function App() {
   // (Falcon: "remove the redundant pan/hand on modify section").
   const [moveArmed, setMoveArmed] = useState(false);
   const [rotateArmed, setRotateArmed] = useState(false);
+  // TOOLS tab's Measure/ruler tool (Falcon, 2026-09-14: "i want to
+  // develop first in the tool tab to measure the distance between
+  // node ... like a ruler"), confirmed via AskUserQuestion: a
+  // transient tape-measure -- mirrors sketchArmed's arm-then-drag
+  // flow, mutually exclusive with every other arm state (see the
+  // handleArm* functions below). FluxCanvas owns the actual drag/
+  // snap/readout logic; nothing here is ever written back to the
+  // graph.
+  const [measureArmed, setMeasureArmed] = useState(false);
   const [gridSpacing, setGridSpacing] = useState(8);
   const [tickIntervalMs, setTickIntervalMs] = useState(400);
   // Falcon, 2026-09-04: "I WANT THE BOARD OR THE WORKSPACE BE SET TO
@@ -1341,23 +1411,48 @@ export function App() {
       flashMessage('A Sensor only connects via a copper path, to another Sensor or a Gate.');
       return;
     }
-    if (isSourceSignalTarget(targetNode.kind) && sourceNode.kind !== 'command') {
-      flashMessage('A Source only accepts an incoming connection from a Command node.');
+    if (isCommandOnlyTarget(targetNode.kind) && sourceNode.kind !== 'command') {
+      flashMessage(`A ${targetNode.kind} only accepts an incoming connection from a Command node.`);
       return;
     }
     const touchesCommand = sourceNode.kind === 'command' || targetNode.kind === 'command';
     if (touchesCommand) {
       const other = sourceNode.kind === 'command' ? targetNode : sourceNode;
       if (!isCommandCompatible(other.kind)) {
-        flashMessage('A Command node only connects to a Sensor, a Source, or a Counter.');
+        flashMessage('A Command node only connects to a Sensor, a Source, a Gate, a Counter, or a Time node.');
         return;
       }
     }
 
-    const sourceCap = getPortCapacity(sourceNode.kind);
+    // Wire-vs-path output capacity (2026-09-11, Source's split slot —
+    // see portCapacity.ts's `maxWireOutputs` doc comment): the same
+    // touchesSensor/isCommandOnlyTarget/touchesCommand booleans that
+    // decide edgeKind further down also decide which output bucket
+    // this NEW edge would actually count against.
+    const willBeWireEdge = touchesSensor || isCommandOnlyTarget(targetNode.kind) || touchesCommand;
+
+    // Manual "Wire" arm (2026-09-11 follow-up — Falcon: "why i still
+    // cant see a wire option in paths", confirmed via AskUserQuestion:
+    // "Add a manual Wire tool"): armedEdgeStyle can now be 'copper'
+    // itself, drawn straight from the Ribbon's Paths group just like
+    // Trace/Conveyor/etc. — but copper is still only ever a REAL
+    // signal edge, never a cosmetic paint job (see EdgeSkinFields'
+    // own "Copper isn't offered as a free pick" comment). If the pair
+    // being dragged isn't actually wire-eligible, reject here instead
+    // of falling through to the generic `style` branch below, which
+    // would otherwise silently create a plain item edge wearing the
+    // copper skin.
+    if (style === 'copper' && !willBeWireEdge) {
+      flashMessage('A wire can only connect a Sensor, Gate, Command, Counter, Time, or Source to a compatible node.');
+      return;
+    }
+
     const targetCap = getPortCapacity(targetNode.kind);
-    if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
-      flashMessage(`A ${sourceNode.kind} can only have ${sourceCap.maxOutputs} output${sourceCap.maxOutputs === 1 ? '' : 's'}.`);
+    const outCap = applicableOutputCap(sourceNode.kind, willBeWireEdge);
+    if (outCap !== undefined && relevantOutputEdges(sourceNode.kind, graph.outputEdges(sourceNodeId), willBeWireEdge).length >= outCap) {
+      flashMessage(
+        `A ${sourceNode.kind} can only have ${outCap}${willBeWireEdge ? ' wire' : ''} output${outCap === 1 ? '' : 's'}.`,
+      );
       return;
     }
     if (targetCap.maxInputs !== undefined && graph.inputEdges(targetNodeId).length >= targetCap.maxInputs) {
@@ -1386,9 +1481,9 @@ export function App() {
       flowRate: 0.15,
       active: true,
     });
-    if (touchesSensor || isSourceSignalTarget(targetNode.kind) || touchesCommand) {
+    if (touchesSensor || isCommandOnlyTarget(targetNode.kind) || touchesCommand) {
       // Copper-path wiring rule (design doc §5.5), extended 2026-09-10
-      // to a Sensor->Source edge too (isSourceSignalTarget), and again
+      // to a Sensor->Source/Gate/Counter/Time edge too (isCommandOnlyTarget), and again
       // the same day to any edge touching a Command node (Command's
       // own ports are copper-path-only, same as Sensor's): not a
       // style choice — every Sensor connection IS a signal edge,
@@ -1485,7 +1580,18 @@ export function App() {
     if (!isDockCompatible(movingNode.kind, targetNode.kind)) return; // defensive -- FluxCanvas already filtered this
 
     const gateId = movingNode.kind === 'gate' ? movingNodeId : targetNode.kind === 'gate' ? targetNodeId : undefined;
-    const bufferId = gateId === movingNodeId ? targetNodeId : gateId === targetNodeId ? movingNodeId : undefined;
+    // Kind-checked (2026-09-11 fix, found while adding Command<->Gate
+    // docking): this used to be purely positional — "whichever side
+    // ISN'T the gate" — which was harmless back when Gate could only
+    // ever dock with a Buffer, but would have mis-classified a
+    // Command<->Gate dock as a Gate<->Buffer one (running the physical
+    // in/out heuristic below against a Command, which has no physical
+    // ports at all) now that Command is also a valid Gate dock partner.
+    // Same "compute the other side, then check its ACTUAL kind" pattern
+    // counterOtherKind/commandOtherKind below already use.
+    const gateOtherId = gateId === movingNodeId ? targetNodeId : gateId === targetNodeId ? movingNodeId : undefined;
+    const gateOtherKind = gateOtherId !== undefined ? graph.getNode(gateOtherId)?.kind : undefined;
+    const bufferId = gateId !== undefined && gateOtherKind === 'buffer' ? gateOtherId : undefined;
     const sensorId = movingNode.kind === 'sensor' ? movingNodeId : targetNode.kind === 'sensor' ? targetNodeId : undefined;
     // Named `siloId` from the original Silo<->Sensor-only pair, kept
     // as-is (2026-09-10 follow-up: Counter<->Sensor is now ALSO a
@@ -1525,8 +1631,13 @@ export function App() {
     const isCommandSensorDock = commandId !== undefined && commandOtherKind === 'sensor';
     // Command is always the edge source, Source always the target — no
     // ambiguity to read either way, same as Counter<->Source above
-    // (Source can never be an edge TARGET for a real item; its one
-    // signal-input slot is exactly what this dock fills).
+    // (Source can never be an edge TARGET for a real item; one of its
+    // two signal-input slots — portCapacity.ts's maxInputs bumped
+    // again 1 -> 2, 2026-09-11 follow-up, for a second, independently
+    // wireable reset-purposed Command — is what this dock fills; which
+    // of the two slots doesn't matter structurally, since it's the
+    // docked Command's own `verb` that decides what it does, not
+    // which physical anchor it lands on).
     const isCommandSourceDock = commandId !== undefined && commandOtherKind === 'source';
     // Command<->Counter (2026-09-10, same-day follow-up — Falcon,
     // after asking why a Sensor+Command pair stopped a Source: "i want
@@ -1538,7 +1649,17 @@ export function App() {
     // real item one, so there's nothing to disambiguate the way
     // Counter<->Buffer's already-wired-side heuristic needs.
     const isCommandCounterDock = commandId !== undefined && commandOtherKind === 'counter';
-    const isCommandDock = isCommandSensorDock || isCommandSourceDock || isCommandCounterDock;
+    // Command<->Gate / Command<->Time (2026-09-11, Command role-split
+    // finalization — "full dock support" so Command mirrors Buffer's
+    // existing dock precedent for every target kind it can actuate).
+    // Same direction as Command<->Source/Counter above: Command is
+    // always the edge source, the target kind always the edge target
+    // (Gate/Time can never legitimately be an edge SOURCE for a signal
+    // — their whole role is receiving Command's verb/duration).
+    const isCommandGateDock = commandId !== undefined && commandOtherKind === 'gate';
+    const isCommandTimeDock = commandId !== undefined && commandOtherKind === 'time';
+    const isCommandDock =
+      isCommandSensorDock || isCommandSourceDock || isCommandCounterDock || isCommandGateDock || isCommandTimeDock;
 
     let edgeSourceId = targetNodeId;
     let edgeTargetId = movingNodeId;
@@ -1560,7 +1681,7 @@ export function App() {
     } else if (isCounterSourceDock) {
       // Source can never be an edge TARGET (0 real physical inputs by
       // construction — its one input slot is signal-only, see
-      // isSourceSignalTarget) so there's no ambiguity to read at all,
+      // isCommandOnlyTarget) so there's no ambiguity to read at all,
       // unlike Gate<->Buffer above: it's always the dock's source
       // side, Counter always its target, regardless of which node was
       // physically dragged.
@@ -1590,7 +1711,7 @@ export function App() {
     } else if (isCommandSensorDock) {
       edgeSourceId = commandOtherId!;
       edgeTargetId = commandId!;
-    } else if (isCommandSourceDock || isCommandCounterDock) {
+    } else if (isCommandSourceDock || isCommandCounterDock || isCommandGateDock || isCommandTimeDock) {
       edgeSourceId = commandId!;
       edgeTargetId = commandOtherId!;
     }
@@ -1599,11 +1720,19 @@ export function App() {
     const edgeSourceNode = graph.getNode(edgeSourceId)!;
     const edgeTargetNode = graph.getNode(edgeTargetId)!;
 
-    const sourceCap = getPortCapacity(edgeSourceNode.kind);
+    // Same wire-vs-path split as handleCreateEdge above — a dock
+    // resolves to edgeKind 'signal' exactly when isSiloSensorDock or
+    // isCommandDock fired (see this function's own edgeKind line
+    // further down), so that's the wire-ness to check capacity with.
+    const dockWillBeWireEdge = isSiloSensorDock || isCommandDock;
     const targetCap = getPortCapacity(edgeTargetNode.kind);
-    if (sourceCap.maxOutputs !== undefined && graph.outputEdges(edgeSourceId).length >= sourceCap.maxOutputs) {
+    const dockOutCap = applicableOutputCap(edgeSourceNode.kind, dockWillBeWireEdge);
+    if (
+      dockOutCap !== undefined &&
+      relevantOutputEdges(edgeSourceNode.kind, graph.outputEdges(edgeSourceId), dockWillBeWireEdge).length >= dockOutCap
+    ) {
       flashMessage(
-        `Can't dock — a ${edgeSourceNode.kind} can only have ${sourceCap.maxOutputs} output${sourceCap.maxOutputs === 1 ? '' : 's'}.`,
+        `Can't dock — a ${edgeSourceNode.kind} can only have ${dockOutCap}${dockWillBeWireEdge ? ' wire' : ''} output${dockOutCap === 1 ? '' : 's'}.`,
       );
       return;
     }
@@ -1614,25 +1743,21 @@ export function App() {
       return;
     }
 
-    // Same 2×NODE_RADIUS boundary wouldOverlap already treats as "not
-    // overlapping" (FloorLayout.dockedPosition's own doc comment) —
-    // this defensive re-check only ever matters in the rare case of
-    // three nodes clustered tightly enough that the tiny compass-snap
-    // adjustment (from wherever the drag actually released to the
-    // exact docked slot) crosses into a THIRD node.
-    const position = floorLayout.dockedPosition(targetNodeId, dir);
-    if (!position || floorLayout.wouldOverlap(position, movingNodeId)) {
-      flashMessage("Can't dock — not enough room there.");
-      return;
-    }
-
-    floorLayout.setNodePosition(movingNodeId, position);
-    for (const edge of graph.getAllEdges()) {
-      if (edge.source === movingNodeId || edge.target === movingNodeId) {
-        floorLayout.recomputeEdgeCurve(edge.id, edge.source, edge.target);
-      }
-    }
-
+    // Position (design doc §5.6, revised 2026-09-14 — Falcon: "i want
+    // it to get or removed but still dock without having to snap to
+    // its edge that close just enough to maintain the positioning or
+    // normal positioning"): docking no longer force-relocates the
+    // node onto dockedPosition's exact 2×NODE_RADIUS slot. The node
+    // stays exactly where the drag released it — FluxCanvas's
+    // onPointerUp already validated that spot against wouldOverlap
+    // before ever proposing a dock (see its own comment there), so
+    // there's nothing left to re-check or move here. `dockedPosition`
+    // is still used by FloorLayout.nearestDockSlot purely to MEASURE
+    // proximity (is the drop close enough to count as a dock at all),
+    // never to relocate anything — that's the "normal positioning"
+    // Falcon asked for: the anti-overlap floor is the only thing that
+    // still constrains where a docked node can sit, same as any two
+    // manually-placed nodes.
     const oppositeDir = (dir + 4) % 8; // octagon's 8 compass anchors, the far side facing back
     // `dir` is always the compass direction ON targetNodeId (the
     // stationary node FluxCanvas measured the slot from), regardless
@@ -1702,6 +1827,7 @@ export function App() {
     setMultiSelectArmed(false);
     setMoveArmed(false);
     setRotateArmed(false);
+    setMeasureArmed(false);
     setPlacementKind(kind);
   }
 
@@ -1711,6 +1837,7 @@ export function App() {
     setMultiSelectArmed(false);
     setMoveArmed(false);
     setRotateArmed(false);
+    setMeasureArmed(false);
     setArmedEdgeStyle(style);
   }
 
@@ -1720,6 +1847,7 @@ export function App() {
     setMultiSelectArmed(false);
     setMoveArmed(false);
     setRotateArmed(false);
+    setMeasureArmed(false);
     setSketchArmed(armed);
   }
 
@@ -1729,6 +1857,7 @@ export function App() {
     setSketchArmed(false);
     setMoveArmed(false);
     setRotateArmed(false);
+    setMeasureArmed(false);
     setMultiSelectArmed(armed);
     setQuickSelectFilter('nodes');
   }
@@ -1742,6 +1871,7 @@ export function App() {
     setSketchArmed(false);
     setMultiSelectArmed(false);
     setRotateArmed(false);
+    setMeasureArmed(false);
     setMoveArmed(armed);
   }
 
@@ -1751,7 +1881,20 @@ export function App() {
     setSketchArmed(false);
     setMultiSelectArmed(false);
     setMoveArmed(false);
+    setMeasureArmed(false);
     setRotateArmed(armed);
+  }
+
+  /** TOOLS tab's Measure tool (Falcon, 2026-09-14) -- same mutual-
+   * exclusion pattern as every arm-then-act tool above. */
+  function handleArmMeasure(armed: boolean): void {
+    setPlacementKind(null);
+    setArmedEdgeStyle(null);
+    setSketchArmed(false);
+    setMultiSelectArmed(false);
+    setMoveArmed(false);
+    setRotateArmed(false);
+    setMeasureArmed(armed);
   }
 
   /** Multi-select's hover flyout (2026-09-05, Falcon: "when i hover
@@ -1773,6 +1916,16 @@ export function App() {
   }
 
   function handleApplyEdgeStyle(edgeId: EdgeId, style: EdgeStyle): void {
+    // Manual-"Wire"-arm guard (2026-09-11 follow-up), restyle side:
+    // clicking an EXISTING path while 'copper' is armed must not
+    // repaint a plain item edge to look like a signal edge — only an
+    // edge that's actually `edgeKind: 'signal'` may wear copper. Every
+    // other style stays freely applicable to any edge, same as ever.
+    if (style === 'copper' && graph.getEdge(edgeId)?.edgeKind !== 'signal') {
+      flashMessage("Can't restyle — Wire only applies to an actual signal connection, not a real item path.");
+      setArmedEdgeStyle(null);
+      return;
+    }
     skinConfig.setEdgeSkin(edgeId, { style });
     setArmedEdgeStyle(null);
   }
@@ -1933,23 +2086,35 @@ export function App() {
       flashMessage("Can't convert \u2014 a Sensor only connects via a copper path, to another Sensor or a Gate.");
       return;
     }
-    if (isSourceSignalTarget(targetNode.kind) && sourceNode.kind !== 'command') {
-      flashMessage("Can't convert \u2014 a Source only accepts an incoming connection from a Command node.");
+    if (isCommandOnlyTarget(targetNode.kind) && sourceNode.kind !== 'command') {
+      flashMessage(`Can't convert \u2014 a ${targetNode.kind} only accepts an incoming connection from a Command node.`);
       return;
     }
     const touchesCommand = sourceNode.kind === 'command' || targetNode.kind === 'command';
     if (touchesCommand) {
       const other = sourceNode.kind === 'command' ? targetNode : sourceNode;
       if (!isCommandCompatible(other.kind)) {
-        flashMessage("Can't convert \u2014 a Command node only connects to a Sensor, a Source, or a Counter.");
+        flashMessage("Can't convert \u2014 a Command node only connects to a Sensor, a Source, a Gate, a Counter, or a Time node.");
         return;
       }
     }
 
-    const sourceCap = getPortCapacity(sourceNode.kind);
+    // Same wire-vs-path split as handleCreateEdge above.
+    const willBeWireEdge = touchesSensor || isCommandOnlyTarget(targetNode.kind) || touchesCommand;
+
+    // Same manual-"Wire"-arm guard as handleCreateEdge above (2026-09-11
+    // follow-up) \u2014 a sketch converted while 'copper' is armed still
+    // needs an actually wire-eligible pair, or it's rejected here
+    // rather than converting into a plain item edge wearing copper.
+    if (style === 'copper' && !willBeWireEdge) {
+      flashMessage("Can't convert \u2014 a wire can only connect a Sensor, Gate, Command, Counter, Time, or Source to a compatible node.");
+      return;
+    }
+
     const targetCap = getPortCapacity(targetNode.kind);
-    if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
-      flashMessage(`Can't convert \u2014 a ${sourceNode.kind} can only have ${sourceCap.maxOutputs} output${sourceCap.maxOutputs === 1 ? '' : 's'}.`);
+    const outCap = applicableOutputCap(sourceNode.kind, willBeWireEdge);
+    if (outCap !== undefined && relevantOutputEdges(sourceNode.kind, graph.outputEdges(sourceNodeId), willBeWireEdge).length >= outCap) {
+      flashMessage(`Can't convert \u2014 a ${sourceNode.kind} can only have ${outCap}${willBeWireEdge ? ' wire' : ''} output${outCap === 1 ? '' : 's'}.`);
       return;
     }
     if (targetCap.maxInputs !== undefined && graph.inputEdges(targetNodeId).length >= targetCap.maxInputs) {
@@ -1994,7 +2159,7 @@ export function App() {
         sketch.segments.map((seg) => seg.bow),
       );
     }
-    if (touchesSensor || isSourceSignalTarget(targetNode.kind) || touchesCommand) {
+    if (touchesSensor || isCommandOnlyTarget(targetNode.kind) || touchesCommand) {
       // Copper-path wiring rule (design doc §5.5), extended 2026-09-10
       // to Sensor->Source too, and to any Command-touching edge —
       // overrides whatever style the sketch was converting with, same
@@ -2047,7 +2212,7 @@ export function App() {
         skippedIncompatible++;
         continue;
       }
-      if (isSourceSignalTarget(targetNode.kind) && sourceNode.kind !== 'command') {
+      if (isCommandOnlyTarget(targetNode.kind) && sourceNode.kind !== 'command') {
         skippedIncompatible++;
         continue;
       }
@@ -2059,9 +2224,19 @@ export function App() {
           continue;
         }
       }
-      const sourceCap = getPortCapacity(sourceNode.kind);
+      // Same wire-vs-path split as handleCreateEdge above.
+      const willBeWireEdge = touchesSensor || isCommandOnlyTarget(targetNode.kind) || touchesCommand;
+      // Same manual-"Wire"-arm guard as handleCreateEdge/
+      // handleConvertSketchToPath above (2026-09-11 follow-up) — a
+      // batch-converted sketch armed with 'copper' still needs an
+      // actually wire-eligible pair.
+      if (style === 'copper' && !willBeWireEdge) {
+        skippedIncompatible++;
+        continue;
+      }
       const targetCap = getPortCapacity(targetNode.kind);
-      if (sourceCap.maxOutputs !== undefined && graph.outputEdges(sourceNodeId).length >= sourceCap.maxOutputs) {
+      const outCap = applicableOutputCap(sourceNode.kind, willBeWireEdge);
+      if (outCap !== undefined && relevantOutputEdges(sourceNode.kind, graph.outputEdges(sourceNodeId), willBeWireEdge).length >= outCap) {
         skippedPortFull++;
         continue;
       }
@@ -2094,7 +2269,7 @@ export function App() {
           sketch.segments.map((seg) => seg.bow),
         );
       }
-      if (touchesSensor || isSourceSignalTarget(targetNode.kind) || touchesCommand) {
+      if (touchesSensor || isCommandOnlyTarget(targetNode.kind) || touchesCommand) {
         graph.setEdgeKind(id, 'signal');
         skinConfig.setEdgeSkin(id, { style: 'copper' });
       } else {
@@ -2121,10 +2296,27 @@ export function App() {
    * restyles every selected path to one chosen style in one go,
    * mirroring the single-edge style picker in EdgeSkinFields. */
   function handleBatchRestyleEdges(edgeIds: string[], style: EdgeStyle): void {
+    // Same manual-"Wire"-arm guard as handleApplyEdgeStyle above
+    // (2026-09-11 follow-up) — a batch restyle to 'copper' only
+    // touches edges that are actually `edgeKind: 'signal'`; any real
+    // item path in the selection is silently skipped rather than
+    // repainted, same "skip and report" convention batch conversion
+    // already uses for an incompatible sketch.
+    let restyled = 0;
+    let skippedNotWire = 0;
     for (const edgeId of edgeIds) {
+      if (style === 'copper' && graph.getEdge(edgeId)?.edgeKind !== 'signal') {
+        skippedNotWire++;
+        continue;
+      }
       skinConfig.setEdgeSkin(edgeId, { style });
+      restyled++;
     }
-    flashMessage(`Restyled ${edgeIds.length} path${edgeIds.length === 1 ? '' : 's'}.`);
+    if (skippedNotWire === 0) {
+      flashMessage(`Restyled ${restyled} path${restyled === 1 ? '' : 's'}.`);
+    } else {
+      flashMessage(`Restyled ${restyled}, skipped ${skippedNotWire} — Wire only applies to a real signal connection.`);
+    }
   }
 
   function handlePlayPauseClick(): void {
@@ -2139,7 +2331,9 @@ export function App() {
       ? `Click a path to restyle it, or drag to draw a new ${armedEdgeStyle} path — falls back to a sketch if it doesn't land on a port.`
       : sketchArmed
         ? 'Drag to sketch a planning path — starting or ending near a port dot pins that end to it.'
-        : multiSelectArmed
+        : measureArmed
+          ? 'Drag between two points to measure — snaps to ports, node centers, node body edges, or the grid.'
+          : multiSelectArmed
           ? quickSelectFilter === 'paths'
             ? 'Drag over the canvas — only the paths inside the box will be selected.'
             : quickSelectFilter === 'sketches'
@@ -2205,6 +2399,8 @@ export function App() {
         onArmMove={handleArmMove}
         rotateArmed={rotateArmed}
         onArmRotate={handleArmRotate}
+        measureArmed={measureArmed}
+        onArmMeasure={handleArmMeasure}
         canDelete={selection !== null}
         onDeleteSelection={handleDeleteSelection}
         canDuplicate={selection?.type === 'node' || (selection?.type === 'multi' && selection.nodeIds.length > 0)}
@@ -2310,6 +2506,7 @@ export function App() {
             quickSelectFilter={quickSelectFilter}
             moveArmed={moveArmed}
             rotateArmed={rotateArmed}
+            measureArmed={measureArmed}
             canvasBackground={canvasBackground}
             onCursorWorldPositionChange={setCursorWorldPosition}
             showPathDirection={showPathDirection}

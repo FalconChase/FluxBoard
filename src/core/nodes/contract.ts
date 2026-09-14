@@ -24,19 +24,65 @@ import type { RuntimeState } from '../NodeRuntimeState';
  *                inFlight [+ buffered]) isn't double-counted.
  *
  * A third action kind, 'signal' (design doc §5.5, §4.8, 2026-09-09),
- * is unrelated to item movement — it's how a Sensor's per-tick
- * `evaluateSignals` hook (below) drives a connected Gate. `edgeId`
- * must reference a `edgeKind: 'signal'` edge; SimEngine resolves it to
- * that edge's TARGET node and writes `value` straight into the
- * target's own runtime state as `open` — no in-flight item, no
- * progress, no `delivered`/`onItemArrival` call on the target at all.
+ * is unrelated to item movement — originally how a Sensor's per-tick
+ * `evaluateSignals` hook (below) drove a connected Gate directly;
+ * as of 2026-09-11's Command/Counter/Time extension, Gate may no
+ * longer be a signal edge's target at all except from a Command node
+ * (Command is now the sole actuator — see command.ts) — a Sensor still
+ * uses this same action to drive a Command, and Command uses it
+ * onward for its own Latch duration mode. `edgeId` must reference a
+ * `edgeKind: 'signal'` edge; SimEngine resolves it to that edge's
+ * TARGET node and writes `value` straight into the target's own
+ * runtime state as `open` — no in-flight item, no progress, no
+ * `delivered`/`onItemArrival` call on the target at all.
+ *
+ * A fourth action kind, 'pulse' (2026-09-11, Command's Pulse duration
+ * mode), is the one-shot sibling of 'signal': it carries no boolean
+ * value at all, just "something happened, once." SimEngine resolves it
+ * to the target's runtime state by bumping a `pulseSeq` counter (never
+ * writing `open`) — the target's own handler (gate.ts's onItemArrival,
+ * source.ts's trySpawn) compares `pulseSeq` against its own
+ * `lastConsumedPulseSeq` to detect a still-pending pulse and decide for
+ * itself what "consuming" it means (Gate: let exactly one item through
+ * before consuming it; Source: force one immediate spawn bypassing
+ * cooldown). Never used for a Counter/Time reset target — those still
+ * reset off a `'signal'` action's rising edge, unchanged from before
+ * this existed (see command.ts's own doc comment for why duration mode
+ * doesn't matter for a momentary reset).
+ *
+ * A fifth action kind, 'resetSignal' (2026-09-11 same-session follow-up
+ * — Falcon, after finding a spawn-limited Source could never be reused:
+ * "why does the source can never get reused like once it deactivated
+ * when limited spawn count all spawned ... even i tried to activate it
+ * back manually", confirmed via AskUserQuestion: "Manual button +
+ * Command-driven reset"): structurally identical to 'signal' — a level
+ * relay, no item, resolved by SimEngine the exact same way — but
+ * written into the target's `resetSignal` runtime field instead of
+ * `open`. Source is the one existing kind whose `open` field is
+ * already spoken for (its own Command-driven activate/deactivate gate,
+ * portCapacity.ts's maxInputs note) — reusing 'signal'/`open` for a
+ * SECOND, unrelated purpose (resetting `spawnedCount`) on the same
+ * field would mean a routine activate/deactivate toggle could also
+ * silently reset the spawn tally, and vice versa. A dedicated action
+ * kind writing a dedicated field keeps the two fully independent, so a
+ * Source can have one Command wired for ongoing activate/deactivate
+ * and a SECOND, separate Command (portCapacity.ts's maxInputs bump 1
+ * -> 2) wired purely to reset the count, with neither able to step on
+ * the other. Only ever emitted by command.ts, only for a Source target
+ * whose own `verb` is explicitly set to 'reset' (see its own doc
+ * comment) — source.ts's new `onTick` does the rising-edge detection
+ * on `resetSignal`, exactly mirroring counter.ts's onTick doing the
+ * same thing on `open` (Counter has no competing use for that field,
+ * so it never needed this split).
  */
 
 export type Action =
   | { type: 'send'; edgeId: string; item: Item }
   | { type: 'forward'; edgeId: string; item: Item }
   | { type: 'consume'; item: Item }
-  | { type: 'signal'; edgeId: string; value: boolean };
+  | { type: 'signal'; edgeId: string; value: boolean }
+  | { type: 'pulse'; edgeId: string }
+  | { type: 'resetSignal'; edgeId: string; value: boolean };
 
 export interface OnItemArrivalResult {
   newState: RuntimeState;

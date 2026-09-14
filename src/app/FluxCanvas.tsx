@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { Camera, type Viewport } from '../floor/camera';
-import { NODE_RADIUS, type AnchorHit, type FloorLayout } from '../floor/floorLayout';
+import { NODE_RADIUS, bodyGap, type AnchorHit, type FloorLayout } from '../floor/floorLayout';
 import { InterpolatedSimDriver } from '../floor/interpolatedSim';
 import { GraphModel } from '../core/GraphModel';
 import { SimEngine } from '../core/SimEngine';
@@ -42,6 +42,18 @@ import { CANVAS_THEMES, type CanvasBackground } from './theme';
  * proposed alongside these but explicitly deferred by Falcon as the
  * challenging one -- not implemented here. */
 export type SketchStyle = 'single' | 'polypath';
+
+/** TOOLS tab's Measure tool (Falcon, 2026-09-14): which kind of
+ * reference point one end of a measurement actually landed on --
+ * purely descriptive, shown in the live readout so the user can tell
+ * "port to grid" from "center to center" at a glance. 'free' means
+ * nothing was close enough to snap to; the raw cursor point was used
+ * as-is. */
+type MeasureSnapKind = 'port' | 'center' | 'boundary' | 'grid' | 'free';
+interface MeasureSnap {
+  point: Point;
+  kind: MeasureSnapKind;
+}
 
 interface FluxCanvasProps {
   graph: GraphModel;
@@ -104,10 +116,11 @@ interface FluxCanvasProps {
    * App.tsx owns the real GraphModel mutation + rejection checks"
    * split every other gesture here already follows). `dir` is the
    * compass direction (skin/octagon.ts's convention) FROM
-   * targetNodeId TOWARD movingNodeId — App.tsx derives the exact
-   * snapped position from it via floorLayout.dockedPosition, the same
-   * function this component used to find the slot in the first
-   * place, so the two never disagree on where "docked" means. */
+   * targetNodeId TOWARD movingNodeId, worked out from wherever the
+   * node actually landed — App.tsx no longer moves the node to
+   * dockedPosition's exact slot (2026-09-14, "normal positioning"),
+   * `dir` now only decides which anchor the resulting edge/seam
+   * attaches to on each side. */
   onDockNodes?: (movingNodeId: NodeId, targetNodeId: NodeId, dir: number) => void;
   /** Move/delete/snap feature set: when true, a dragged node's
    * position is rounded to the nearest grid line as it moves (App.tsx
@@ -210,6 +223,20 @@ interface FluxCanvasProps {
   moveArmed: boolean;
   rotateArmed: boolean;
 
+  /** TOOLS tab's Measure tool (Falcon, 2026-09-14: "i want to develop
+   * first in the tool tab to measure the distance between node ...
+   * like a ruler to measure or make accurate references", confirmed
+   * via AskUserQuestion): a transient tape-measure -- mirrors
+   * sketchArmed's arm-then-drag flow exactly (ANY drag start is
+   * accepted, snapping the touched end onto the nearest port/node-
+   * center/node-body-edge/grid-point within a screen-pixel radius, or
+   * the raw cursor point if nothing's close enough), except nothing
+   * is ever created: the line and its live readout (distance, dx/dy,
+   * angle, screen px) are drawn purely as an overlay and vanish on
+   * release. Mutually exclusive with every other arm state
+   * (App.tsx). */
+  measureArmed: boolean;
+
   /** Falcon, 2026-09-04: "settings on VIEW for workspace theme or
    * background color" -- which preset paints the canvas background +
    * grid lines. App.tsx owns the state (persisted per-project via
@@ -253,11 +280,37 @@ const PORT_SNAP_RADIUS_PX = 14;
 const SKETCH_PORT_SNAP_RADIUS_PX = 22;
 /** Docking (design doc §5.6, 2026-09-09): screen-space radius within
  * which releasing a plain single-node drag near a compatible node's
- * dockedPosition snaps into it, same "screen space so it feels the
+ * dockedPosition counts as a dock, same "screen space so it feels the
  * same at any zoom" reasoning as the port-snap radii above. Bigger
  * than a port dot's own snap radius since the target here is a whole
- * node-sized slot, not a small dot. */
+ * node-sized slot, not a small dot.
+ *
+ * Revised 2026-09-14 ("normal positioning" docking change): this is
+ * now purely a PROXIMITY test — is the drop close enough to
+ * dockedPosition's slot to register as a dock at all — not a snap
+ * distance the node actually gets moved by. The node stays wherever
+ * it was dropped; see App.tsx's handleDockNodes. */
 const DOCK_SNAP_RADIUS_PX = 30;
+/** Falcon, 2026-09-14 ("still dock ... just enough to maintain the
+ * positioning or normal positioning"): the real body-to-body gap
+ * (bodyGap) beyond which a docked pair's connector seam stops being
+ * drawn — one full NODE_RADIUS, chosen because it's an existing,
+ * already-meaningful distance (not a fresh arbitrary number) and
+ * comfortably smaller than DOCK_SNAP_RADIUS_PX's own world-space
+ * catch radius at ordinary zoom levels, so a pair right at the edge
+ * of counting as "docked" at all doesn't get a seam plate stretched
+ * across visible dead space. Docking's other effects — group-move,
+ * wiring — never depended on the seam and are unaffected either way. */
+const DOCK_SEAM_MAX_GAP = NODE_RADIUS;
+/** Falcon, 2026-09-14 (TOOLS tab's Measure tool): screen-space radius
+ * within which each end of a measure drag snaps onto the nearest
+ * candidate reference point — a port dot, a node's own center, its
+ * real octagon body edge, or a grid intersection, whichever of those
+ * four is actually closest, mirroring PORT_SNAP_RADIUS_PX's own
+ * "screen space so it feels the same at any zoom" reasoning. Falls
+ * back to the raw cursor point ("Free (no snap)", confirmed via
+ * AskUserQuestion) once nothing qualifies. */
+const MEASURE_SNAP_RADIUS_PX = 18;
 /** Falcon, 2026-09-09 (INSERT tab): screen-space click/drag radius
  * around an annotation's icon -- kept in screen space, like
  * PORT_SNAP_RADIUS_PX, so it feels the same size at any zoom level. */
@@ -354,6 +407,7 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     quickSelectFilter,
     moveArmed,
     rotateArmed,
+    measureArmed,
     canvasBackground = 'white',
     onCursorWorldPositionChange,
     showPathDirection = true,
@@ -407,6 +461,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
   moveArmedRef.current = moveArmed;
   const rotateArmedRef = useRef(rotateArmed);
   rotateArmedRef.current = rotateArmed;
+  const measureArmedRef = useRef(measureArmed);
+  measureArmedRef.current = measureArmed;
   const canvasBackgroundRef = useRef(canvasBackground);
   canvasBackgroundRef.current = canvasBackground;
   const onCursorWorldPositionChangeRef = useRef(onCursorWorldPositionChange);
@@ -687,6 +743,71 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       return best;
     }
 
+    /** Falcon, 2026-09-14 ("a measure or distance tool ... snappable
+     * to the nodes ports and even other ways for measuring"),
+     * confirmed via AskUserQuestion which snap kinds to search: a port
+     * dot, a node's own center, its real octagon body edge, or a grid
+     * intersection. Every candidate across all four kinds is checked;
+     * whichever is nearest the cursor wins, within
+     * MEASURE_SNAP_RADIUS_PX -- there's no fixed priority between the
+     * kinds themselves (a very close grid point beats a distant port,
+     * same as a very close port beats a distant grid point), which
+     * keeps this simple and keeps the tool always snapping to
+     * whatever the user's eye would actually call "closest." Falls
+     * back to the raw cursor point ("Free") once nothing qualifies. */
+    function findMeasureSnap(worldPoint: Point): MeasureSnap {
+      const maxDist = MEASURE_SNAP_RADIUS_PX / camera.zoom;
+      let best: MeasureSnap | undefined;
+      let bestDist = maxDist;
+
+      const anchorHit = floorLayout.findNearestAnchor(worldPoint, bestDist);
+      if (anchorHit) {
+        const d = Math.hypot(anchorHit.point.x - worldPoint.x, anchorHit.point.y - worldPoint.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { point: anchorHit.point, kind: 'port' };
+        }
+      }
+
+      for (const [nodeId, center] of floorLayout.getAllNodePositions()) {
+        const dCenter = Math.hypot(center.x - worldPoint.x, center.y - worldPoint.y);
+        if (dCenter < bestDist) {
+          bestDist = dCenter;
+          best = { point: center, kind: 'center' };
+        }
+        // Body-edge distance is only ever worth computing when the
+        // cursor is already roughly near this particular node --
+        // cheap early-out (using the node's own known max extent)
+        // before the angle/boundary math runs for every node on the
+        // floor every frame of the drag.
+        if (dCenter <= maxDist + NODE_RADIUS) {
+          const boundaryPoint = floorLayout.getBoundaryPointTowards(nodeId, worldPoint);
+          if (boundaryPoint) {
+            const dBoundary = Math.hypot(boundaryPoint.x - worldPoint.x, boundaryPoint.y - worldPoint.y);
+            if (dBoundary < bestDist) {
+              bestDist = dBoundary;
+              best = { point: boundaryPoint, kind: 'boundary' };
+            }
+          }
+        }
+      }
+
+      const spacing = gridSpacingRef.current;
+      if (spacing > 0) {
+        const gridPoint = {
+          x: Math.round(worldPoint.x / spacing) * spacing,
+          y: Math.round(worldPoint.y / spacing) * spacing,
+        };
+        const dGrid = Math.hypot(gridPoint.x - worldPoint.x, gridPoint.y - worldPoint.y);
+        if (dGrid < bestDist) {
+          bestDist = dGrid;
+          best = { point: gridPoint, kind: 'grid' };
+        }
+      }
+
+      return best ?? { point: worldPoint, kind: 'free' };
+    }
+
     /** Falcon, 2026-09-05 ("Escape" or losing focus): discards an
      * in-progress multi-segment sketch chain outright -- nothing gets
      * created. Also the shared "end of gesture" step finalize calls
@@ -783,7 +904,11 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       const elapsedMs = animElapsedMs;
 
       canvas!.style.cursor =
-        placementKindRef.current || armedEdgeStyleRef.current || sketchArmedRef.current || multiSelectArmedRef.current
+        placementKindRef.current ||
+        armedEdgeStyleRef.current ||
+        sketchArmedRef.current ||
+        multiSelectArmedRef.current ||
+        measureArmedRef.current
           ? 'crosshair'
           : pointerMode === 'move' || pointerMode === 'pan'
             ? 'grabbing'
@@ -814,6 +939,17 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         sketchChainAttachments = [];
         sketchLastCommitScreen = undefined;
       }
+      // Falcon, 2026-09-14: same safety net as the sketch-chain
+      // abandon above -- disarming the Measure tool mid-drag (a tab
+      // switch, some other tool getting armed) drops the in-progress
+      // line rather than leaving a stale one drawn on top of whatever
+      // comes next.
+      if (!measureArmedRef.current && pointerMode === 'measure-draw') {
+        pointerMode = 'idle';
+        measureOrigin = undefined;
+        measureCurrent = undefined;
+      }
+      if (pointerMode !== 'move') dockGapHud = undefined;
       if (sketchStyleRef.current !== lastSketchStyle) {
         lastSketchStyle = sketchStyleRef.current;
         if (sketchChainPoints.length > 0) {
@@ -965,7 +1101,25 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // stack (no belt phase, no copper check, none of that applies
         // to a joint that's meant to read as "one unit").
         if (edge.edgeKind === 'dock') {
-          drawDockSeam(ctx!, curve, camera, viewport);
+          // Seam visibility (Falcon, 2026-09-14, follow-up to the
+          // "normal positioning" docking change): now that a docked
+          // node isn't force-relocated to a fixed gap, the real
+          // body-to-body distance can vary drag to drag. Only draw
+          // the seam plate when that real gap (bodyGap, the same
+          // primitive the Measure tool's "Edge → Edge" snap uses) is
+          // small enough to actually read as a connector bridging the
+          // two bodies -- a docked pair sitting farther apart than
+          // DOCK_SEAM_MAX_GAP still moves/wires together, it just
+          // renders with no seam mark, rather than a stub plate
+          // floating in visible dead space.
+          const sourcePos = floorLayout.getNodePosition(edge.source);
+          const targetPos = floorLayout.getNodePosition(edge.target);
+          if (sourcePos && targetPos) {
+            const gapWorld = bodyGap(sourcePos, targetPos);
+            if (gapWorld <= DOCK_SEAM_MAX_GAP) {
+              drawDockSeam(ctx!, curve, camera, viewport, gapWorld);
+            }
+          }
           continue;
         }
         const skin = skinConfig.getEdgeSkin(edge.id);
@@ -1337,6 +1491,25 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         ctx!.restore();
       }
 
+      // TOOLS tab's Measure tool (Falcon, 2026-09-14) -- drawn last,
+      // same "reads on top of everything while live" reasoning as the
+      // marquee above. The live drag (pointerMode === 'measure-draw')
+      // draws the full line + readout; otherwise, while just armed and
+      // idle, only a small hover marker shows where the next click
+      // would land (mirrors sketch-draw's own hover preview).
+      if (pointerMode === 'measure-draw' && measureOrigin && measureCurrent) {
+        drawMeasureLine(ctx!, camera, viewport, measureOrigin, measureCurrent);
+      } else if (measureArmedRef.current && measureHoverSnap) {
+        drawMeasureSnapMarker(ctx!, camera.worldToScreen(measureHoverSnap.point, viewport), camera.zoom, measureHoverSnap.kind);
+      }
+
+      // Live dock-gap readout (Falcon, 2026-09-14) -- a small floating
+      // label near the dragged node, independent of whether the
+      // measure tool is armed at all.
+      if (dockGapHud) {
+        drawDockGapHud(ctx!, dockGapHud.screenPoint, dockGapHud.gapWorld);
+      }
+
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
@@ -1362,7 +1535,8 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       | 'placement'
       | 'sketch-draw'
       | 'marquee'
-      | 'reshape';
+      | 'reshape'
+      | 'measure-draw';
     let pointerMode: PointerMode = 'idle';
     let dragOriginScreen: { x: number; y: number } | null = null;
     let dragLastScreen: { x: number; y: number } | null = null;
@@ -1466,6 +1640,25 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
     let reshapeCenter: Point | undefined;
     let reshapeOriginWorld: Point | undefined;
     let reshapeStartAngle = 0;
+    // TOOLS tab's Measure tool (Falcon, 2026-09-14): the drag's two
+    // snapped ends -- origin captured on pointerdown, current updated
+    // every pointermove (and on plain hover before a drag even
+    // starts, mirroring sketchArmed's own hover preview), both cleared
+    // back to undefined on release since nothing here is ever
+    // persisted (a transient tape-measure, confirmed via
+    // AskUserQuestion, not a graph object).
+    let measureOrigin: MeasureSnap | undefined;
+    let measureCurrent: MeasureSnap | undefined;
+    let measureHoverSnap: MeasureSnap | undefined;
+    // Live dock-gap readout (Falcon, 2026-09-14, alongside the measure
+    // tool: "show it automatically during a drag near a dock
+    // candidate"): set every frame a solo node drag's CURRENT position
+    // is within DOCK_SNAP_RADIUS_PX of a compatible node's free dock
+    // slot -- the real body-to-body gap (floorLayout.ts's bodyGap) at
+    // that live position, before any of dockedPosition's forced
+    // repositioning would apply on release. Purely a display overlay,
+    // same "propose, never mutate" split as everything else here.
+    let dockGapHud: { screenPoint: Point; gapWorld: number } | undefined;
 
     function onPointerDown(e: PointerEvent): void {
       dragOriginScreen = { x: e.clientX, y: e.clientY };
@@ -1573,6 +1766,18 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // anything here -- it just keeps this gesture alive long
         // enough for onPointerUp to tell a click from a drag and
         // commit wherever the release lands.
+        return;
+      }
+
+      if (measureArmedRef.current) {
+        // TOOLS tab's Measure tool (Falcon, 2026-09-14): mirrors
+        // sketch-draw's permissiveness -- ANY drag start is accepted,
+        // snapping onto the nearest candidate reference point if one's
+        // close enough. Nothing is created; onPointerUp just resets
+        // this back to idle.
+        pointerMode = 'measure-draw';
+        measureOrigin = findMeasureSnap(worldPoint);
+        measureCurrent = measureOrigin;
         return;
       }
 
@@ -1796,6 +2001,10 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
           : nearestPointOnAnyPath(sketchDrawCurrent, SKETCH_PORT_SNAP_RADIUS_PX / camera.zoom);
       }
 
+      if (pointerMode === 'measure-draw') {
+        measureCurrent = findMeasureSnap(toWorld(e.clientX, e.clientY));
+      }
+
       if (pointerMode === 'move' && groupMoveActive && groupOriginalPositions && pendingNodeHitId && moveGrabOffset) {
         // FBP014 (2026-09-05): group move -- every member translates
         // by the SAME delta the grabbed node does (computed from its
@@ -1852,6 +2061,44 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         // Falcon, 2026-09-05: a "planned connection" should track the
         // node it's pinned to.
         syncSketchEndpointsToNode(pendingNodeHitId);
+
+        // Live dock-gap readout (Falcon, 2026-09-14, alongside the
+        // measure tool: "show it automatically during a drag near a
+        // dock candidate"): the exact same nearest-slot search
+        // onPointerUp's dock check runs, just every frame instead of
+        // only on release, and reporting rather than acting -- the
+        // real body-to-body gap (bodyGap) at the node's CURRENT
+        // position, which is what the docking-seam-threshold decision
+        // actually needs to see live. Scoped to a solo drag only, same
+        // as the real dock check below (a group move has no single
+        // "the dragged node" to dock).
+        dockGapHud = undefined;
+        if (!groupMoveActive) {
+          const movingNode = graph.getNode(pendingNodeHitId);
+          if (movingNode) {
+            let nearestGap: { targetPos: Point; dist: number } | undefined;
+            for (const other of graph.getAllNodes()) {
+              if (other.id === pendingNodeHitId) continue;
+              if (!isDockCompatible(movingNode.kind, other.kind)) continue;
+              const slot = floorLayout.nearestDockSlot(
+                other.id,
+                pendingNodeHitId,
+                snappedPos,
+                DOCK_SNAP_RADIUS_PX / camera.zoom,
+              );
+              if (!slot) continue;
+              const otherPos = floorLayout.getNodePosition(other.id);
+              if (!otherPos) continue;
+              const dist = Math.hypot(slot.position.x - snappedPos.x, slot.position.y - snappedPos.y);
+              if (!nearestGap || dist < nearestGap.dist) nearestGap = { targetPos: otherPos, dist };
+            }
+            if (nearestGap) {
+              const gapWorld = bodyGap(nearestGap.targetPos, snappedPos);
+              const screenPoint = camera.worldToScreen(snappedPos, currentViewport());
+              dockGapHud = { screenPoint, gapWorld };
+            }
+          }
+        }
       }
     }
 
@@ -2219,6 +2466,9 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
       reshapeCenter = undefined;
       reshapeOriginWorld = undefined;
       reshapeStartAngle = 0;
+      measureOrigin = undefined;
+      measureCurrent = undefined;
+      dockGapHud = undefined;
 
       try {
         canvas!.releasePointerCapture(e.pointerId);
@@ -2256,6 +2506,16 @@ export const FluxCanvas = forwardRef<FluxCanvasHandle, FluxCanvasProps>(function
         hoveredPathSnapPoint = hoveredAnchor
           ? undefined
           : nearestPointOnAnyPath(sketchDrawCurrent, SKETCH_PORT_SNAP_RADIUS_PX / camera.zoom);
+      }
+      // TOOLS tab's Measure tool (Falcon, 2026-09-14): shows where the
+      // FIRST click would land before it's even made, same "track on
+      // plain hover" reasoning as sketch-draw above -- only while
+      // idle, so it doesn't fight with the live drag's own
+      // measureCurrent once one is actually in progress.
+      if (measureArmedRef.current && pointerMode === 'idle') {
+        measureHoverSnap = findMeasureSnap(toWorld(e.clientX, e.clientY));
+      } else if (!measureArmedRef.current) {
+        measureHoverSnap = undefined;
       }
     }
     function onHoverLeave(): void {
@@ -2491,4 +2751,172 @@ function drawPathSnapMarker(ctx: CanvasRenderingContext2D, screenPoint: Point, z
   ctx.lineWidth = Math.max(1.5, 2 * zoom);
   ctx.strokeRect(-size / 2, -size / 2, size, size);
   ctx.restore();
+}
+
+/** Falcon, 2026-09-14 (TOOLS tab's Measure tool): which color each
+ * snap kind draws in, shared between the end markers and the
+ * readout's border accent so the two visually agree. */
+const MEASURE_SNAP_COLOR: Record<MeasureSnapKind, string> = {
+  port: 'rgba(37, 99, 235, 0.95)',
+  center: 'rgba(124, 58, 237, 0.95)',
+  boundary: 'rgba(245, 158, 11, 0.95)',
+  grid: 'rgba(107, 114, 128, 0.95)',
+  free: 'rgba(58, 58, 66, 0.8)',
+};
+
+function measureSnapLabel(kind: MeasureSnapKind): string {
+  switch (kind) {
+    case 'port':
+      return 'Port';
+    case 'center':
+      return 'Center';
+    case 'boundary':
+      return 'Edge';
+    case 'grid':
+      return 'Grid';
+    default:
+      return 'Free';
+  }
+}
+
+/** A small marker at one end of a measurement, shaped AND colored by
+ * which kind of reference point it actually snapped to — legible at a
+ * glance without reading the readout text: a ring for a port dot
+ * (matches drawAnchorRing's own shape language), a filled dot for a
+ * node's true center, a rotated square for the real octagon body edge
+ * (matches drawPathSnapMarker's diamond for "aligned but not
+ * attached" — same shape family, different meaning here), a small
+ * cross for a grid intersection, and a plain hollow ring for a free
+ * (unsnapped) point. */
+function drawMeasureSnapMarker(ctx: CanvasRenderingContext2D, screenPoint: Point, zoom: number, kind: MeasureSnapKind): void {
+  const color = MEASURE_SNAP_COLOR[kind];
+  const r = Math.max(4, 5 * zoom);
+  ctx.save();
+  ctx.translate(screenPoint.x, screenPoint.y);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(1.5, 2 * zoom);
+  if (kind === 'port') {
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (kind === 'center') {
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (kind === 'boundary') {
+    ctx.rotate(Math.PI / 4);
+    ctx.strokeRect(-r * 0.7, -r * 0.7, r * 1.4, r * 1.4);
+  } else if (kind === 'grid') {
+    ctx.beginPath();
+    ctx.moveTo(-r, 0);
+    ctx.lineTo(r, 0);
+    ctx.moveTo(0, -r);
+    ctx.lineTo(0, r);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Small floating multi-line label with a translucent rounded
+ * background — shared by the measure tool's readout and the live
+ * dock-gap HUD (both Falcon, 2026-09-14), a generalization of the
+ * single-line style annotation labels already use elsewhere in this
+ * file. Anchored by its bottom-center point so callers can place it
+ * just above whatever it's annotating. */
+function drawFloatingLabel(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+  screenY: number,
+  lines: string[],
+  accentColor: string,
+): void {
+  ctx.save();
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const lineHeight = 14;
+  const padX = 8;
+  const padY = 6;
+  const width = Math.max(...lines.map((l) => ctx.measureText(l).width)) + padX * 2;
+  const height = lines.length * lineHeight + padY * 2 - 2;
+  const boxX = screenX - width / 2;
+  const boxY = screenY - height;
+  const radius = 5;
+  ctx.fillStyle = 'rgba(20, 22, 28, 0.85)';
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(boxX + radius, boxY);
+  ctx.arcTo(boxX + width, boxY, boxX + width, boxY + height, radius);
+  ctx.arcTo(boxX + width, boxY + height, boxX, boxY + height, radius);
+  ctx.arcTo(boxX, boxY + height, boxX, boxY, radius);
+  ctx.arcTo(boxX, boxY, boxX + width, boxY, radius);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#f4f4f5';
+  lines.forEach((line, i) => {
+    ctx.fillText(line, screenX, boxY + padY + (i + 1) * lineHeight - 3);
+  });
+  ctx.restore();
+}
+
+/** The full live measure-drag overlay: dashed line between the two
+ * snapped ends, a shape/color-coded marker at each (drawMeasureSnapMarker),
+ * and a small floating readout — world-unit distance, screen px,
+ * dx/dy, angle, and which two snap kinds the ends landed on, exactly
+ * the content confirmed via AskUserQuestion. Nothing here touches the
+ * graph; this is pure display, called only while pointerMode ===
+ * 'measure-draw'. */
+function drawMeasureLine(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  viewport: Viewport,
+  origin: MeasureSnap,
+  current: MeasureSnap,
+): void {
+  const a = camera.worldToScreen(origin.point, viewport);
+  const b = camera.worldToScreen(current.point, viewport);
+
+  ctx.save();
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.9)';
+  ctx.lineWidth = Math.max(1.5, 2 * camera.zoom);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+
+  drawMeasureSnapMarker(ctx, a, camera.zoom, origin.kind);
+  drawMeasureSnapMarker(ctx, b, camera.zoom, current.kind);
+
+  const dxWorld = current.point.x - origin.point.x;
+  const dyWorld = current.point.y - origin.point.y;
+  const distWorld = Math.hypot(dxWorld, dyWorld);
+  const distPx = Math.hypot(b.x - a.x, b.y - a.y);
+  const angleDeg = (Math.atan2(dyWorld, dxWorld) * 180) / Math.PI;
+
+  const lines = [
+    `${distWorld.toFixed(1)} units · ${Math.round(distPx)} px`,
+    `dx ${dxWorld.toFixed(1)}  dy ${dyWorld.toFixed(1)}  ∠ ${angleDeg.toFixed(1)}°`,
+    `${measureSnapLabel(origin.kind)} → ${measureSnapLabel(current.kind)}`,
+  ];
+  drawFloatingLabel(ctx, (a.x + b.x) / 2, Math.min(a.y, b.y) - 12, lines, 'rgba(245, 158, 11, 0.95)');
+}
+
+/** Live dock-gap readout (Falcon, 2026-09-14, alongside the measure
+ * tool: "show it automatically during a drag near a dock candidate")
+ * — a one-line floating label above the dragged node showing the real
+ * body-to-body gap (floorLayout.ts's bodyGap) at its CURRENT
+ * position, shown whenever that position is within dock-trigger range
+ * of a compatible neighbor — the exact tool the docking-seam-
+ * threshold decision needs to finalize the number by eye. */
+function drawDockGapHud(ctx: CanvasRenderingContext2D, screenPoint: Point, gapWorld: number): void {
+  drawFloatingLabel(ctx, screenPoint.x, screenPoint.y - 30, [`Dock gap: ${gapWorld.toFixed(1)} units`], 'rgba(46, 204, 113, 0.95)');
 }

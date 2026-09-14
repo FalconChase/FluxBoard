@@ -261,22 +261,37 @@ export function drawPathDirectionArrow(
 /** Docking's visual "something in between" (design doc §5.6,
  * 2026-09-09 — Falcon: "there will be something in between the node
  * to indicate that they are docked"): a small connector plate at a
- * dock edge's midpoint, filling the few-world-unit gap
- * FloorLayout.dockedPosition deliberately leaves between the two
- * touching octagons (their own edges meet at the smaller apothem
- * distance; docking uses the same 2×NODE_RADIUS boundary
- * wouldOverlap treats as "not overlapping," which sits slightly
- * farther out). Drawn instead of the normal conveyor/glass-tube
- * render stack for a `edgeKind: 'dock'` edge — FluxCanvas's render
- * loop skips drawPathUnder/drawPathOver/the direction arrow for
- * those entirely, since a dock isn't a path the user drew, it's a
- * structural joint between two nodes acting "like a single unit." */
-export function drawDockSeam(ctx: CanvasRenderingContext2D, curve: EdgePath, camera: Camera, viewport: Viewport): void {
+ * dock edge's midpoint, filling the gap between the two node bodies.
+ *
+ * Revised 2026-09-14 alongside the "normal positioning" docking
+ * change (Falcon: "still dock without having to snap to its edge
+ * that close ... just enough to maintain the positioning") — docking
+ * no longer force-relocates a node onto a fixed ~3.3-unit compass gap,
+ * so this plate can no longer assume that fixed size either. `gapWorld`
+ * is the REAL measured body-to-body distance for this pair right now
+ * (FloorLayout's `bodyGap`, the same primitive the Measure tool's
+ * "Edge → Edge" snap uses) — the plate's along-the-dock thickness
+ * scales to it, so it always visually bridges the two bodies rather
+ * than floating with dead space on either side, or (the old fixed-size
+ * behavior) looking like a stub jammed flush against both. The
+ * caller (FluxCanvas) is what decides whether to call this at all —
+ * this function has no opinion on "too far to look like a seam,"
+ * it just draws whatever gap it's given. */
+export function drawDockSeam(
+  ctx: CanvasRenderingContext2D,
+  curve: EdgePath,
+  camera: Camera,
+  viewport: Viewport,
+  gapWorld: number,
+): void {
   const worldPoint = curve.getPointAtProgress(0.5);
   const angle = curve.totalLength > 0 ? curve.getTangentAngleAtProgress(0.5) : 0;
   const screen = camera.worldToScreen(worldPoint, viewport);
   const halfLength = Math.max(4, 6 * camera.zoom);
-  const halfWidth = Math.max(2, 3 * camera.zoom);
+  // Along-the-dock thickness now tracks the real gap instead of a
+  // fixed cosmetic constant (floored so a near-zero, vertex-aligned
+  // gap still renders a visible sliver rather than vanishing).
+  const halfWidth = Math.max(1.5, (gapWorld / 2) * camera.zoom);
 
   ctx.save();
   ctx.translate(screen.x, screen.y);

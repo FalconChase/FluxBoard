@@ -24,14 +24,17 @@ interface InFlightItem {
 }
 
 export interface SimEvent {
-  kind: 'spawned' | 'forwarded' | 'delivered' | 'consumed' | 'signaled';
-  /** Empty for 'signaled' -- a signal pulse carries no item (design
-   * doc §5.5). */
+  kind: 'spawned' | 'forwarded' | 'delivered' | 'consumed' | 'signaled' | 'pulsed';
+  /** Empty for 'signaled'/'pulsed' -- neither carries an item (design
+   * doc §5.5; 'pulsed' is the 2026-09-11 Command Pulse-mode addition). */
   itemId: string;
   nodeId?: string;
   edgeId?: string;
-  /** 'signaled' only -- the value written into the target Gate's
-   * `open` runtime state. */
+  /** 'signaled' only -- the value written into the target's `open`
+   * runtime state (or, for a Source's 'resetSignal' action, its
+   * `resetSignal` field instead — see contract.ts's own doc comment;
+   * reuses this same 'signaled' event kind rather than adding a new
+   * one, since it's the same "level written into target state" shape). */
   value?: boolean;
 }
 
@@ -425,12 +428,42 @@ export class SimEngine {
       } else if (action.type === 'signal') {
         // Design doc §5.5 -- a signal never becomes an in-flight item;
         // it's written straight into the TARGET node's runtime state
-        // (not the emitting Sensor's), bypassing progress/arrival
-        // entirely.
+        // (not the emitting Sensor's/Command's), bypassing progress/
+        // arrival entirely.
         const edge = this.graph.getEdge(action.edgeId);
         if (!edge) continue;
         const targetState = this.runtime.get(edge.target) ?? {};
         this.runtime.set(edge.target, { ...targetState, open: action.value });
+        this.events.push({
+          kind: 'signaled',
+          itemId: '',
+          nodeId: edge.target,
+          edgeId: action.edgeId,
+          value: action.value,
+        });
+      } else if (action.type === 'pulse') {
+        // 2026-09-11 (Command's Pulse duration mode) -- the one-shot
+        // sibling of 'signal': bumps a counter instead of writing a
+        // level, so the target (gate.ts/source.ts) can detect "a fresh
+        // pulse arrived" independent of whatever `open` currently
+        // holds, and decide for itself what consuming it means.
+        const edge = this.graph.getEdge(action.edgeId);
+        if (!edge) continue;
+        const targetState = this.runtime.get(edge.target) ?? {};
+        const pulseSeq = typeof targetState.pulseSeq === 'number' ? targetState.pulseSeq : 0;
+        this.runtime.set(edge.target, { ...targetState, pulseSeq: pulseSeq + 1 });
+        this.events.push({ kind: 'pulsed', itemId: '', nodeId: edge.target, edgeId: action.edgeId });
+      } else if (action.type === 'resetSignal') {
+        // 2026-09-11 follow-up (contract.ts's own doc comment has the
+        // full rationale) -- structurally identical to 'signal' above,
+        // just written into a separate `resetSignal` field instead of
+        // `open` so a Command wired to reset a Source's spawn count
+        // never collides with a DIFFERENT Command wired to that same
+        // Source's ordinary activate/deactivate gate.
+        const edge = this.graph.getEdge(action.edgeId);
+        if (!edge) continue;
+        const targetState = this.runtime.get(edge.target) ?? {};
+        this.runtime.set(edge.target, { ...targetState, resetSignal: action.value });
         this.events.push({
           kind: 'signaled',
           itemId: '',

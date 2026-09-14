@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { GraphModel } from '../core/GraphModel';
 import type { EdgeDef, NodeDef } from '../core/types';
 import { getPortCapacity } from '../core/nodes/portCapacity';
-import { hasSignalInput, watchedNodeIds } from '../core/nodes/index';
+import { hasSignalInput, watchedNodeIds, defaultVerbForTargetKind } from '../core/nodes/index';
 import { compassLabel } from '../skin/octagon';
 import type { FloorLayout } from '../floor/floorLayout';
 import type { SkinConfig } from '../skin/SkinConfig';
@@ -304,7 +304,8 @@ function NodeProperties({
       {node.kind === 'gate' && <GateFields nodeId={nodeId} graph={graph} />}
       {node.kind === 'sensor' && <SensorFields node={node} graph={graph} onChange={patch} />}
       {node.kind === 'counter' && <CounterFields node={node} graph={graph} onChange={patch} />}
-      {node.kind === 'command' && <CommandFields nodeId={nodeId} graph={graph} />}
+      {node.kind === 'command' && <CommandFields node={node} graph={graph} onChange={patch} />}
+      {node.kind === 'time' && <TimeFields node={node} graph={graph} onChange={patch} />}
       {node.kind === 'transform' && <TransformFields node={node} onChange={patch} objectRegistry={objectRegistry} />}
 
       <SingleOutputSidePicker nodeId={nodeId} kind={node.kind} graph={graph} floorLayout={floorLayout} />
@@ -1062,7 +1063,21 @@ function SourceFields({
   // node id and the required source kind. A Sensor may no longer target
   // a Source directly — only a Command node can, see App.tsx's
   // isSourceSignalTarget.
-  const signalGated = hasSignalInput(node.id, graph.getAllEdges(), graph.getAllNodes(), 'command');
+  //
+  // Bumped to verb-aware (2026-09-11 follow-up, alongside the new
+  // reset-Command slot below): `hasSignalInput` alone can't tell a
+  // gate-purposed Command from a reset-purposed one any more, since a
+  // Source can now have TWO incoming Command edges (portCapacity.ts's
+  // maxInputs 1 -> 2) — so this reads the actual incoming Command
+  // edges directly and splits them by that Command's own `verb`
+  // (unset/anything-but-'reset' = gate, 'reset' = the new button's
+  // Command-driven twin below).
+  const incomingCommandEdges = graph
+    .getAllEdges()
+    .filter((e) => e.target === node.id && e.active && e.edgeKind === 'signal' && graph.getNode(e.source)?.kind === 'command');
+  const signalGated = incomingCommandEdges.some((e) => graph.getNode(e.source)?.config.verb !== 'reset');
+  const resetCommandWired = incomingCommandEdges.some((e) => graph.getNode(e.source)?.config.verb === 'reset');
+  const resetSeq = typeof node.config.resetSeq === 'number' ? node.config.resetSeq : 0;
 
   return (
     <>
@@ -1164,9 +1179,23 @@ function SourceFields({
       </div>
       <p style={{ fontSize: 10, color: theme.text3, marginTop: -6, marginBottom: 10 }}>
         {spawnLimitEnabled
-          ? `Stops spawning for good once it has produced ${spawnLimit} item${spawnLimit === 1 ? '' : 's'} — the node's badge counts down from ${spawnLimit} to 0 as spawns remain, and dims the same way the switch above does.`
+          ? `Stops spawning once it has produced ${spawnLimit} item${spawnLimit === 1 ? '' : 's'} — the node's badge counts down from ${spawnLimit} to 0 as spawns remain, and dims the same way the switch above does. Use "Reset spawn count" below to start it over.`
           : 'Off — spawns without limit for as long as the switch above stays on.'}
       </p>
+      {resetCommandWired && (
+        <p style={{ fontSize: 11, color: theme.text2, lineHeight: 1.5, marginTop: 0, marginBottom: 8 }}>
+          Also wired to a Command node set to "Reset spawn count" — it resets this tally on its own, independent of
+          the button below.
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={() => onChange({ resetSeq: resetSeq + 1 })}
+        style={{ ...smallButtonStyle, width: '100%' }}
+        title="Zeroes spawnedCount — resumes spawning immediately if Active and (when a limit is on) back under it."
+      >
+        Reset spawn count
+      </button>
     </>
   );
 }
@@ -1664,73 +1693,178 @@ function BufferFields({ node, onChange, graph }: { node: NodeDef; onChange: (fie
  * just re-used here to warn a person building the graph rather than
  * to change behavior. */
 function GateFields({ nodeId, graph }: { nodeId: string; graph: GraphModel }) {
-  const connected = hasSignalInput(nodeId, graph.getAllEdges(), graph.getAllNodes());
+  // Explicit 'command' (2026-09-11, Command role-split finalization):
+  // matches hasSignalInput's own default now, but named explicitly
+  // here so this call reads correctly on its own regardless of what
+  // that default happens to be — a Gate only ever listens to a
+  // Command node now, never a Sensor directly (see gate.ts's own doc
+  // comment and command.ts's evaluateSignals).
+  const connected = hasSignalInput(nodeId, graph.getAllEdges(), graph.getAllNodes(), 'command');
   return (
     <div>
       <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
         Gate has nothing of its own to configure. It forwards an arriving item immediately while open, and refuses
-        it while closed — only a Sensor wired to this Gate with an "Edge kind: Signal" connection can open it (see
-        that edge's own Logic section).
+        it while closed — only a Command wired to this Gate with an "Edge kind: Signal" connection can open it (see
+        that edge's own Logic section, and that Command node's own properties for its Verb/Duration).
       </p>
       {connected ? (
-        <p style={{ fontSize: 11, color: theme.success }}>✓ A Sensor is wired in — this Gate can open.</p>
+        <p style={{ fontSize: 11, color: theme.success }}>✓ A Command is wired in — this Gate can open.</p>
       ) : (
         <p style={{ fontSize: 11, color: theme.danger }}>
-          ⚠ No active Sensor connected via a Signal edge — this Gate can never open.
+          ⚠ No active Command connected via a Signal edge — this Gate can never open.
         </p>
       )}
     </div>
   );
 }
 
+/** Verb choices per attachable target kind (2026-09-11, Command
+ * role-split finalization) — only Gate and Source have a real
+ * open/close-shaped action with two directions; Counter and Time
+ * always just reset on the rising edge, nothing to pick. Source's
+ * third option, "Reset spawn count" (2026-09-11 same-session
+ * follow-up — Falcon, after finding a spawn-limited Source could
+ * never be reused: "why does the source can never get reused ... even
+ * i tried to activate it back manually"), is its own separate
+ * momentary action, not a third polarity of activate/deactivate — see
+ * command.ts's own doc comment for why it needs a dedicated Command
+ * (a second one, on Source's now-2-slot input) rather than sharing the
+ * activate/deactivate one. */
+const COMMAND_VERB_OPTIONS: Partial<Record<NodeDef['kind'], { value: string; label: string }[]>> = {
+  gate: [
+    { value: 'open', label: 'Open' },
+    { value: 'close', label: 'Close' },
+  ],
+  source: [
+    { value: 'activate', label: 'Activate' },
+    { value: 'deactivate', label: 'Deactivate' },
+    { value: 'reset', label: 'Reset spawn count' },
+  ],
+};
+
 /** Command (2026-09-10 follow-up — Falcon: "sensor node only senses
  * and triggers signal[,] the command node is the one has command on
  * it ... it is compatible only with wire and dockable to source node
  * and sensor node"; extended the same day to a 3rd target — "i want
  * [the Counter] to count only role and can manually be resetable or
- * by a command when docked with command"): also nothing of its own to
- * configure — it just relays whatever its one Sensor last told it onto
- * whatever it's attached to (command.ts): activate/deactivate for a
- * Source, or a reset pulse for a Counter (counter.ts's own onTick).
- * Two independent read-only status lines, mirroring GateFields' single
- * one: one for the INPUT side (is a Sensor actually wired in — reuses
- * `hasSignalInput` with its default `'sensor'` kind, same as
- * GateFields), one for the OUTPUT side (is it actually attached to a
- * Source OR a Counter at all — a Command with nothing downstream has a
- * signal with nowhere to go). Docking to a Sensor does nothing TO the
- * Sensor (Falcon: "although command can be docked to a sensor node but
- * it wont do anything to sensor node unlike other node it attach to")
- * — that's simply a natural consequence of this being Command's input
- * side, not something this panel needs to call out specially. */
-function CommandFields({ nodeId, graph }: { nodeId: string; graph: GraphModel }) {
-  const sensorConnected = hasSignalInput(nodeId, graph.getAllEdges(), graph.getAllNodes());
-  const attachedOutputs = graph
-    .outputEdges(nodeId)
-    .filter((e) => e.active && e.edgeKind === 'signal')
-    .map((e) => graph.getNode(e.target)?.kind);
-  const sourceAttached = attachedOutputs.includes('source');
-  const counterAttached = attachedOutputs.includes('counter');
+ * by a command when docked with command"; upgraded 2026-09-11 from a
+ * dumb always-mirror-Sensor relay to a real actuator with its own
+ * VERB + DURATION config — design doc trigger-system finalization,
+ * Falcon: "toggle latch/pulse mode"):
+ *
+ *  - VERB: which direction the Sensor's condition maps to. Only shown
+ *    for a Gate or Source target — Counter/Time have no verb, they
+ *    always just reset (command.ts's evaluateSignals routes those two
+ *    kinds straight through to the old signal-based reset regardless
+ *    of this node's own config, same as before this upgrade).
+ *    Defaults to `defaultVerbForTargetKind(targetKind)` the moment a
+ *    target is first attached (open for Gate, activate for Source) —
+ *    same "sensible default the instant it can be inferred" pattern
+ *    SensorFields' watch-node picker already uses for its Metric
+ *    field.
+ *  - DURATION: Latch (hold until the Sensor's condition reverses —
+ *    the exact old always-mirror behavior, just now named and
+ *    reversible via verb) or Pulse (fire once on every rising edge,
+ *    then auto-revert — "let exactly one item through" for a Gate,
+ *    "force one spawn + reset cooldown" for a Source).
+ *
+ * A pre-existing Command node from before this upgrade has no
+ * `verb`/`duration` in its config at all — command.ts's own defaults
+ * (defaultVerbForTargetKind + 'latch') reproduce its old always-mirror
+ * behavior exactly, so nothing changes for it until Falcon actually
+ * opens this panel and picks something different. */
+function CommandFields({
+  node,
+  graph,
+  onChange,
+}: {
+  node: NodeDef;
+  graph: GraphModel;
+  onChange: (fields: Record<string, unknown>) => void;
+}) {
+  const sensorConnected = hasSignalInput(node.id, graph.getAllEdges(), graph.getAllNodes(), 'sensor');
+  const attachedEdge = graph.outputEdges(node.id).find((e) => e.active && e.edgeKind === 'signal');
+  const targetNode = attachedEdge ? graph.getNode(attachedEdge.target) : undefined;
+  const targetKind = targetNode?.kind;
+
+  const verb = typeof node.config.verb === 'string' ? node.config.verb : defaultVerbForTargetKind(targetKind);
+  const duration = node.config.duration === 'pulse' ? 'pulse' : 'latch';
+  const inverted = verb === 'close' || verb === 'deactivate';
+  const verbOptions = targetKind ? COMMAND_VERB_OPTIONS[targetKind] : undefined;
+  // Source's "Reset spawn count" verb (2026-09-11 follow-up): a
+  // separate momentary action, same "duration doesn't apply" shape as
+  // Counter/Time below — no Duration dropdown to show for it.
+  const isSourceReset = targetKind === 'source' && verb === 'reset';
+
   return (
     <div>
       <p style={{ fontSize: 12, color: theme.text3, lineHeight: 1.5 }}>
-        Command has nothing of its own to configure. It relays whatever its Sensor last told it, every tick — onto a
-        Source that means activate/deactivate; onto a Counter it means "reset the count" instead.
+        Command relays whatever its Sensor last told it, every tick, onto whatever it's attached to. A Gate or
+        Source target gets a configurable Verb + Duration below; a Counter or Time target always just resets on the
+        signal's rising edge — nothing to configure for those two.
       </p>
       {sensorConnected ? (
-        <p style={{ fontSize: 11, color: theme.success, marginBottom: 2 }}>✓ A Sensor is wired in — this Command has something to relay.</p>
+        <p style={{ fontSize: 11, color: theme.success, marginBottom: 2 }}>
+          ✓ A Sensor is wired in — this Command has something to relay.
+        </p>
       ) : (
         <p style={{ fontSize: 11, color: theme.danger, marginBottom: 2 }}>
           ⚠ No active Sensor connected via a Signal edge — this Command has nothing to relay yet.
         </p>
       )}
-      {sourceAttached && (
-        <p style={{ fontSize: 11, color: theme.success }}>✓ Attached to a Source — it can be activated/deactivated from here.</p>
+      {targetNode ? (
+        <p style={{ fontSize: 11, color: theme.success, marginBottom: 8 }}>
+          ✓ Attached to {targetNode.id} ({targetKind}).
+        </p>
+      ) : (
+        <p style={{ fontSize: 11, color: theme.danger, marginBottom: 8 }}>
+          ⚠ Not attached to a Gate, Source, Counter, or Time node — this Command has nothing to act on.
+        </p>
       )}
-      {counterAttached && (
-        <p style={{ fontSize: 11, color: theme.success }}>✓ Attached to a Counter — it can reset its count from here.</p>
-      )}
-      {!sourceAttached && !counterAttached && (
-        <p style={{ fontSize: 11, color: theme.danger }}>⚠ Not attached to a Source or Counter — this Command has nothing to act on.</p>
+      {verbOptions ? (
+        <>
+          <div style={rowStyle}>
+            <label style={labelStyle}>Verb</label>
+            <select value={verb} style={inputStyle} onChange={(e) => onChange({ verb: e.target.value })}>
+              {verbOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {isSourceReset ? (
+            <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: -4 }}>
+              Resets this Source's spawn count to 0 on every rising edge of the Sensor's condition — a separate,
+              momentary action, same as Counter/Time's reset. No Duration to configure. Wire this Command to its own
+              input slot, independent of any OTHER Command already wired for Activate/Deactivate on this same
+              Source.
+            </p>
+          ) : (
+            <>
+              <div style={rowStyle}>
+                <label style={labelStyle}>Duration</label>
+                <select value={duration} style={inputStyle} onChange={(e) => onChange({ duration: e.target.value })}>
+                  <option value="latch">Latch (hold until reversed)</option>
+                  <option value="pulse">Pulse (apply once, then auto-revert)</option>
+                </select>
+              </div>
+              <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: -4 }}>
+                {duration === 'latch'
+                  ? `Mirrors the Sensor's condition level: ${verb} while true, ${inverted ? 'the opposite' : 'reversed'} while false.`
+                  : targetKind === 'gate'
+                    ? 'Fires once on every rising edge of the Sensor’s condition — lets exactly one item through, then closes again.'
+                    : 'Fires once on every rising edge of the Sensor’s condition — forces one spawn, resetting the cooldown from that point.'}
+              </p>
+            </>
+          )}
+        </>
+      ) : (
+        (targetKind === 'counter' || targetKind === 'time') && (
+          <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5 }}>
+            Resets on every rising edge of the Sensor's condition — no Verb or Duration to configure.
+          </p>
+        )
       )}
     </div>
   );
@@ -1751,6 +1885,8 @@ const SENSOR_COMPARATOR_LABEL: Record<string, string> = {
 const SENSOR_METRIC_LABEL: Record<string, string> = {
   queueLength: 'Queue length',
   count: 'Count (items passed)',
+  timeValue: 'Time value (clock reading)',
+  spawnedCount: 'Spawned count (Source)',
 };
 
 /** Sensor (design doc §4.8; auto-watch extended §5.7, 2026-09-09
@@ -1832,9 +1968,19 @@ function SensorFields({
               // picked Counter defaults the metric to 'count' rather
               // than the old blanket 'queueLength' -- still just a
               // convenience default, the dropdown below can always
-              // override it either way.
+              // override it either way. Extended 2026-09-11 for Time
+              // ('timeValue') and, same-session follow-up, Source
+              // ('spawnedCount' -- Sensor watching a Source directly,
+              // the "2nd wire port" addition), same reasoning both times.
               const picked = candidates.find((n) => n.id === id);
-              const nextMetric = picked?.kind === 'counter' ? 'count' : 'queueLength';
+              const nextMetric =
+                picked?.kind === 'counter'
+                  ? 'count'
+                  : picked?.kind === 'time'
+                    ? 'timeValue'
+                    : picked?.kind === 'source'
+                      ? 'spawnedCount'
+                      : 'queueLength';
               setMetric(nextMetric);
               onChange({ watchNodeId: id || undefined, metric: nextMetric });
             }}
@@ -2000,6 +2146,66 @@ function CounterFields({
       >
         Reset count
       </button>
+    </div>
+  );
+}
+
+/** Time (design doc trigger-system finalization, 2026-09-11) — a
+ * clock/timer node: counts down from `duration` seconds to zero, or
+ * up from zero indefinitely, purely for something else to watch
+ * (time.ts's onTick has no evaluateSignals at all — see NodeKind's
+ * own doc comment in types.ts). Reset is Command-only, same
+ * "no UI control here, it's wiring" treatment CounterFields already
+ * gives its Command-driven reset — the status line just reports
+ * whether one is actually wired in. */
+function TimeFields({
+  node,
+  graph,
+  onChange,
+}: {
+  node: NodeDef;
+  graph: GraphModel;
+  onChange: (fields: Record<string, unknown>) => void;
+}) {
+  const mode = node.config.mode === 'countup' ? 'countup' : 'countdown';
+  const duration = typeof node.config.duration === 'number' && node.config.duration > 0 ? node.config.duration : 10;
+  const commandWired = hasSignalInput(node.id, graph.getAllEdges(), graph.getAllNodes(), 'command');
+
+  return (
+    <div>
+      <div style={rowStyle}>
+        <label style={labelStyle}>Mode</label>
+        <select value={mode} style={inputStyle} onChange={(e) => onChange({ mode: e.target.value })}>
+          <option value="countdown">Countdown (to zero)</option>
+          <option value="countup">Count up (from zero)</option>
+        </select>
+      </div>
+      {mode === 'countdown' && (
+        <div style={rowStyle}>
+          <label style={labelStyle}>Duration (seconds)</label>
+          <input
+            type="number"
+            min={0.1}
+            step={1}
+            value={duration}
+            style={inputStyle}
+            onChange={(e) => onChange({ duration: Number(e.target.value) })}
+          />
+        </div>
+      )}
+      <p style={{ fontSize: 11, color: theme.text3, lineHeight: 1.5, marginTop: -4 }}>
+        {mode === 'countdown'
+          ? `Starts at ${duration}s and ticks down to 0, then holds.`
+          : 'Starts at 0 and ticks up indefinitely.'}{' '}
+        Watched, not emitting — wire a Sensor to it ("Metric: Time value") to act on its reading elsewhere.
+      </p>
+      {commandWired ? (
+        <p style={{ fontSize: 11, color: theme.success }}>✓ A Command is wired in — it can reset this clock.</p>
+      ) : (
+        <p style={{ fontSize: 11, color: theme.danger }}>
+          ⚠ No active Command connected via a Signal edge — this clock can only be reset by wiring one in.
+        </p>
+      )}
     </div>
   );
 }

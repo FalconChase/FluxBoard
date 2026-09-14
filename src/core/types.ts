@@ -79,7 +79,21 @@ export type NodeKind =
    * processing delay). One fixed A -> B rule per node (confirmed, over
    * a Sorter-style rule LIST) — for several conversions, place several
    * Transform nodes. See transform.ts. */
-  | 'transform';
+  | 'transform'
+  /** Time (2026-09-11, Command/Counter/Time trigger-system extension)
+   * — a clock, zero physical ports of its own (same "pure state node"
+   * shape as Sensor/Command — no onItemArrival). Runs its own internal
+   * clock every tick, unconditionally, advancing `state.value` per
+   * `config.mode` ('countdown' — counts down from `config.duration` to
+   * 0 and holds there, or 'countup' — counts up from 0 with no
+   * ceiling). Does NOT emit a signal on its own — it's watched the
+   * exact same way a Buffer/Counter is (a Sensor's `readMetric` reads
+   * `state.value` directly off its runtime state), never an emitter
+   * itself. Resettable ONLY by a Command node (confirmed: Command
+   * only, not any Sensor directly — see command.ts) wired/docked to its
+   * one signal-only input slot, which snaps `value` back to its mode's
+   * starting point. See time.ts. */
+  | 'time';
 
 /** Pure topology + static config for one node. No runtime state here. */
 export interface NodeDef {

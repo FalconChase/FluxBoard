@@ -1,6 +1,6 @@
 import type { EdgeId, NodeId } from '../core/types';
 import { BezierPath, MultiSegmentPath, curveBetween, bendPoint, type EdgePath, type Point } from './bezier';
-import { octagonPortAnchor, OCTAGON_PORT_COUNT } from '../skin/octagon';
+import { octagonPortAnchor, octagonBoundaryDistance, octagonBoundaryPointTowards, OCTAGON_PORT_COUNT } from '../skin/octagon';
 
 /** World-space node radius, shared by every layer that needs to know
  * a node's physical size: FloorLayout uses it to place the 8 octagon
@@ -28,6 +28,30 @@ export interface AnchorHit {
   anchorIndex: number;
   point: Point;
   occupied: boolean;
+}
+
+/** The real body-to-body gap between two node centers — total center
+ * distance minus each node's own boundary distance facing the other
+ * (octagon.ts's `octagonBoundaryDistance`, not the compass-only
+ * apothem case `dockedPosition` forces today). A regular octagon has
+ * central (180°) symmetry, so both ends read off the exact same
+ * angle-vs-boundary curve — no need to know either node's "own"
+ * orientation separately, both share the same fixed one.
+ *
+ * Falcon, 2026-09-14: this is the exact number behind the whole
+ * docking-seam-threshold discussion ("before i decide what is the gap
+ * between normal distance...") — `dockedPosition`'s forced 44-unit
+ * center distance plugged into this same formula along a compass
+ * direction is where the "≈3.3 units" figure came from. Exported
+ * standalone (not just a FloorLayout method) so it works on any two
+ * points, not only two already-placed nodes — the measure tool's live
+ * dock-gap readout (FluxCanvas.tsx) calls it on a node's CURRENT
+ * (not-yet-docked) drag position, before any repositioning would
+ * happen. */
+export function bodyGap(centerA: Point, centerB: Point): number {
+  const dist = Math.hypot(centerB.x - centerA.x, centerB.y - centerA.y);
+  const angle = Math.atan2(centerB.y - centerA.y, centerB.x - centerA.x);
+  return dist - 2 * octagonBoundaryDistance(NODE_RADIUS, angle);
 }
 
 /**
@@ -182,6 +206,31 @@ export class FloorLayout {
     const center = this.nodePositions.get(nodeId);
     if (!center) return undefined;
     return octagonPortAnchor(center, NODE_RADIUS, anchorIndex);
+  }
+
+  /** The exact point on `nodeId`'s own octagon BODY (not one of the 8
+   * fixed port-anchor dots) in the direction of `towardPoint` —
+   * Falcon, 2026-09-14 ("a measure or distance tool ... snappable to
+   * the nodes ports and even other ways for measuring", confirmed
+   * snap targets: ports, centers, "node body edge (octagon
+   * boundary)", grid): this is the measure tool's body-edge snap
+   * target (FluxCanvas.tsx), giving the real physical edge rather
+   * than the nearer-but-different port dot. Undefined if the node has
+   * no recorded position. */
+  getBoundaryPointTowards(nodeId: NodeId, towardPoint: Point): Point | undefined {
+    const center = this.nodePositions.get(nodeId);
+    if (!center) return undefined;
+    return octagonBoundaryPointTowards(center, NODE_RADIUS, towardPoint);
+  }
+
+  /** Read-only snapshot of every node's current position — Falcon,
+   * 2026-09-14: the measure tool (FluxCanvas.tsx) needs to search
+   * every node's center/body-edge as a candidate snap target, without
+   * this class handing out anything that lets a caller mutate
+   * positions through it directly (every real mutation still goes
+   * through setNodePosition). */
+  getAllNodePositions(): ReadonlyMap<NodeId, Point> {
+    return this.nodePositions;
   }
 
   /** The single nearest anchor dot to `point` ON ONE SPECIFIC node,
@@ -625,19 +674,25 @@ export class FloorLayout {
   }
 
   /** Docking (design doc §5.6, 2026-09-09 — "attaching the node
-   * without needing to add a path in between"): the exact world
-   * position a node would sit at if docked onto `targetNodeId` from
-   * compass direction `dir` (skin/octagon.ts's port-index convention,
-   * same one octagonPortAnchor uses). Deliberately the same
-   * `2 * NODE_RADIUS` boundary wouldOverlap already treats as "not
-   * overlapping" — docking never needs a wouldOverlap exception, it
-   * just always lands EXACTLY on that boundary. That's slightly
-   * farther apart than the two octagons' own edges (which meet at the
-   * smaller apothem distance), leaving a few world-units' gap between
-   * the bodies — deliberate, not a rounding slip: pathSkin.ts's
-   * drawDockSeam renders a small connector plate filling exactly that
-   * gap, which is the visual Falcon asked for ("something in between
-   * the node to indicate that they are docked"). */
+   * without needing to add a path in between"): the reference world
+   * position `targetNodeId`'s compass direction `dir` (skin/octagon.ts's
+   * port-index convention, same one octagonPortAnchor uses) points to
+   * — the exact same `2 * NODE_RADIUS` boundary wouldOverlap already
+   * treats as "not overlapping."
+   *
+   * Revised 2026-09-14 ("normal positioning" docking change, Falcon:
+   * "still dock without having to snap to its edge that close ...
+   * just enough to maintain the positioning"): a docked node is no
+   * longer relocated here — App.tsx's handleDockNodes leaves it
+   * exactly where the drag released it. This function's only
+   * remaining job is as the reference point `nearestDockSlot` measures
+   * distance against, to decide whether a drop counts as a dock at
+   * all. The actual body-to-body gap for a real docked pair is
+   * whatever `bodyGap` measures at their real (unmoved) positions, not
+   * this function's fixed boundary distance — pathSkin.ts's
+   * drawDockSeam sizes its connector plate to that real gap, and skips
+   * drawing it altogether once the gap gets too large to read as a
+   * seam (FluxCanvas.tsx's DOCK_SEAM_MAX_GAP). */
   dockedPosition(targetNodeId: NodeId, dir: number): Point | undefined {
     const center = this.nodePositions.get(targetNodeId);
     if (!center) return undefined;
